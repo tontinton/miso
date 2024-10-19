@@ -12,7 +12,9 @@ inherits = "release"
 lto = "thin"
 
 [dependencies]
+axum = "0.7.7"
 clap = { version = "4.5.20", features = ["derive"] }
 color-eyre = { version = "0.6.3", default-features = false }
+tokio = { version = "1.40.0", features = ["full"] }
 tracing = "0.1.40"
 tracing-subscriber = "0.3.18"
