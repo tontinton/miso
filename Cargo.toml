@@ -3,4 +3,12 @@ name = "miso"
 version = "0.1.0"
 edition = "2021"
 
+[profile.release]
+strip = true
+lto = true
+
+[profile.release-thin-lto]
+inherits = "release"
+lto = "thin"
+
 [dependencies]
