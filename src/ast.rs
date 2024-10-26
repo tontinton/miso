@@ -33,10 +33,8 @@ pub fn predicate_pushdown(ast: &mut QueryAst, connector: &dyn Connector) {
     };
 
     filter.and.retain(|item| !connector.apply_filter_and(item));
-    if !filter.or.is_empty() {
-        if connector.apply_filter_or(&filter.or) {
-            filter.or.clear();
-        }
+    if !filter.or.is_empty() && connector.apply_filter_or(&filter.or) {
+        filter.or.clear();
     }
 }
 
@@ -52,18 +50,18 @@ fn filter_tree_to_vrl(filter: &FilterTree) -> String {
 
     let wrap_parentheses = !filter.and.is_empty() && !filter.or.is_empty();
     if wrap_parentheses {
-        script.push_str("(");
+        script.push('(');
     }
 
     if !filter.and.is_empty() {
-        script.push_str("(");
+        script.push('(');
         for (i, item) in filter.and.iter().enumerate() {
             script.push_str(&filter_item_to_vrl(item));
             if i != filter.and.len() - 1 {
                 script.push_str(" && ");
             }
         }
-        script.push_str(")");
+        script.push(')');
     }
 
     if !filter.or.is_empty() {
@@ -71,18 +69,18 @@ fn filter_tree_to_vrl(filter: &FilterTree) -> String {
             script.push_str(" && ");
         }
 
-        script.push_str("(");
+        script.push('(');
         for (i, item) in filter.or.iter().enumerate() {
             script.push_str(&filter_item_to_vrl(item));
             if i != filter.or.len() - 1 {
                 script.push_str(" || ");
             }
         }
-        script.push_str(")");
+        script.push(')');
     }
 
     if wrap_parentheses {
-        script.push_str(")");
+        script.push(')');
     }
 
     script

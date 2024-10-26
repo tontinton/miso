@@ -182,7 +182,7 @@ struct QueryResponse {
 async fn post_query_handler(
     Json(mut req): Json<PostQueryRequest>,
 ) -> (StatusCode, Json<QueryResponse>) {
-    let query_id = req.query_id.unwrap_or_else(|| Uuid::now_v7());
+    let query_id = req.query_id.unwrap_or_else(Uuid::now_v7);
     info!(?req.query, "Starting to run a new query");
     let connector = ElasticsearchConnector {};
     let workflow = to_workflow(&mut req.query, &connector);
@@ -190,7 +190,6 @@ async fn post_query_handler(
     (StatusCode::OK, Json(QueryResponse { query_id }))
 }
 
-#[must_use]
 pub fn create_axum_app() -> Router {
     Router::new().route("/query", post(post_query_handler))
 }
