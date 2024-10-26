@@ -42,7 +42,7 @@ pub fn predicate_pushdown(ast: &mut QueryAst, connector: &dyn Connector) {
 
 fn filter_item_to_vrl(item: &FilterItem) -> String {
     match item {
-        FilterItem::Term(field, word) => format!(".{field}={word}"),
+        FilterItem::Term(field, word) => format!(".{field} == {word}"),
         FilterItem::Filter(filter) => filter_tree_to_vrl(filter),
     }
 }
@@ -121,7 +121,7 @@ mod tests {
             }
         }"#;
         let result = ast_to_vrl(&serde_json::from_str(ast_raw)?);
-        assert_eq!(result, "((.a=1 && (.b=2)) && (.c=3 || .d=4))");
+        assert_eq!(result, "((.a==1 && (.b==2)) && (.c==3 || .d==4))");
         Ok(())
     }
 }

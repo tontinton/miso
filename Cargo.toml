@@ -13,13 +13,20 @@ lto = "thin"
 
 [dependencies]
 async-stream = "0.3.6"
-axum = "0.7.7"
+axum = { version = "0.7.7", features = ["macros"] }
 clap = { version = "4.5.20", features = ["derive"] }
 color-eyre = { version = "0.6.3", default-features = false }
 futures-core = "0.3.31"
+futures-util = "0.3.31"
 serde = { version = "1.0.210", features = ["derive"] }
 serde_json = "1.0.132"
 tokio = { version = "1.40.0", features = ["full"] }
 tracing = "0.1.40"
 tracing-subscriber = "0.3.18"
 uuid = { version = "1.11.0", features = ["v7", "serde"] }
+vrl = { version = "0.19.0", default-features = false, features = [
+  "compiler",
+  "diagnostic",
+  "stdlib",
+  "value",
+]}

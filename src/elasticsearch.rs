@@ -1,3 +1,5 @@
+use std::pin::Pin;
+
 use async_stream::stream;
 use futures_core::Stream;
 use serde::{Deserialize, Serialize};
@@ -21,11 +23,10 @@ impl Connector for ElasticsearchConnector {
         })];
     }
 
-    fn query(&self, split: &Split) -> Box<dyn Stream<Item = Log>> {
-        dbg!(split);
-        Box::new(stream! {
+    fn query(&self, _split: &Split) -> Pin<Box<dyn Stream<Item = Log> + Send>> {
+        Box::pin(stream! {
             for i in 0..3 {
-                yield i.to_string()
+                yield format!(r#"{{ "test": "{}" }}"#, i);
             }
         })
     }
