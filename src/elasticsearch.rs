@@ -18,9 +18,9 @@ pub struct ElasticsearchConnector {}
 
 impl Connector for ElasticsearchConnector {
     fn get_splits(&self) -> Vec<Split> {
-        return vec![Split::Elasticsearch(ElasticsearchSplit {
+        vec![Split::Elasticsearch(ElasticsearchSplit {
             query: "".to_string(),
-        })];
+        })]
     }
 
     fn query(&self, _split: &Split) -> Pin<Box<dyn Stream<Item = Log> + Send>> {
