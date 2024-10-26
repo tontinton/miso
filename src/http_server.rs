@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use tracing::info;
 use uuid::Uuid;
 
-use crate::ast::QueryAst;
+use crate::ast::{ast_to_vrl, predicate_pushdown, QueryAst};
 use crate::{
     connector::{Connector, Split},
     elasticsearch::ElasticsearchConnector,
@@ -29,32 +29,23 @@ struct Workflow {
     activities: Vec<Activity>,
 }
 
-fn predicate_pushdown(ast: &mut QueryAst, connector: &dyn Connector) {
-    if let Some(filter) = &mut ast.filter {
-        if let Some(and) = &mut filter.and {
-            and.retain(|item| !connector.apply_filter_and(item));
-        }
-        if let Some(or) = &filter.or {
-            if connector.apply_filter_or(or) {
-                filter.or = None;
-            }
-        }
-    }
-}
-
 fn to_workflow(ast: &mut QueryAst, connector: &dyn Connector) -> Workflow {
-    let mut activities = Vec::new();
     predicate_pushdown(ast, connector);
 
-    let splits = connector.get_splits();
-    for split in splits {
-        activities.push(Activity {
-            item: ActivityItem::Scan(split),
-            post_script: None,
-        });
-    }
+    // Whatever is left in the AST, the connector wasn't able to predicate pushdown.
+    // We are responsible to execute the AST now.
+    let script = ast_to_vrl(ast);
 
-    Workflow { activities }
+    Workflow {
+        activities: connector
+            .get_splits()
+            .into_iter()
+            .map(|split| Activity {
+                item: ActivityItem::Scan(split),
+                post_script: Some(script.clone()),
+            })
+            .collect(),
+    }
 }
 
 #[derive(Deserialize)]
