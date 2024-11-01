@@ -1,26 +1,26 @@
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
-use axum::Extension;
-use axum::{http::StatusCode, routing::post, Json, Router};
+use axum::{http::StatusCode, routing::post, Extension, Json, Router};
 use color_eyre::{
     eyre::{bail, Context},
     Result,
 };
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
+use serde_json::to_string;
 use tokio::sync::RwLock;
 use tracing::info;
 use uuid::Uuid;
 use vrl::{
     compiler::{compile, state::RuntimeState, Program, TargetValue, TimeZone},
     diagnostic::{DiagnosticList, Severity},
-    value::{Secrets, Value},
+    value::{KeyString, Secrets, Value},
 };
 
 use crate::{
     ast::{ast_to_vrl, filter_predicate_pushdown, FilterAst},
-    connector::{Connector, Split},
+    connector::{Connector, Log, Split},
     quickwit_connector::QuickwitConnector,
 };
 
@@ -113,9 +113,17 @@ fn compile_pretty_print_errors(script: &str) -> Result<Program> {
     }
 }
 
-fn run_vrl_filter(program: &Program, log: &str) -> Result<bool> {
+fn log_to_vrl(log: &Log) -> Value {
+    Value::Object(
+        log.iter()
+            .map(|(k, v)| (KeyString::from(k.clone()), Value::from(v.clone())))
+            .collect(),
+    )
+}
+
+fn run_vrl_filter(program: &Program, log: &Log) -> Result<bool> {
     let mut target = TargetValue {
-        value: serde_json::from_slice::<Value>(log.as_bytes())?,
+        value: log_to_vrl(log),
         metadata: Value::Object(BTreeMap::new()),
         secrets: Secrets::default(),
     };
@@ -130,7 +138,7 @@ fn run_vrl_filter(program: &Program, log: &str) -> Result<bool> {
 }
 
 impl Workflow {
-    async fn execute(&self, connector: &dyn Connector) -> Result<()> {
+    async fn execute(&self, connector: &dyn Connector, collection: &str) -> Result<()> {
         // This is where each activity will be coordinated to a worker to be executed in parallel.
         // Right now as an example, we run everything sequentially here.
         let mut logs = Vec::new();
@@ -146,8 +154,9 @@ impl Workflow {
                     };
 
                     for split in splits {
-                        let mut query_stream = connector.query(split);
+                        let mut query_stream = connector.query(collection, split);
                         while let Some(log) = query_stream.next().await {
+                            let log = log?;
                             if let Some(ref program) = program {
                                 if !run_vrl_filter(program, &log)
                                     .context("scan fake predicate pushdown")?
@@ -177,7 +186,7 @@ impl Workflow {
         }
 
         for log in logs {
-            println!("{log}");
+            println!("{}", to_string(&log)?);
         }
 
         Ok(())
@@ -243,6 +252,9 @@ struct PostQueryRequest {
     /// The connector to query from.
     connector: String,
 
+    /// The collection inside the connector to query from (index in quickwit).
+    collection: String,
+
     /// The query id to set. If not set, the server will randomly generate an id.
     query_id: Option<Uuid>,
 
@@ -265,12 +277,22 @@ async fn post_query_handler(
     let Some(connector) = state.read().await.connectors.get(&req.connector).cloned() else {
         return (StatusCode::NOT_FOUND, Json(QueryResponse { query_id }));
     };
+
+    info!(?req.collection, "Checking whether collection exists");
+    if !connector.does_collection_exist(&req.collection).await {
+        info!(?req.collection, "Collection doesn't exist");
+        return (StatusCode::NOT_FOUND, Json(QueryResponse { query_id }));
+    }
+
     let connector_ref = &*connector;
 
     info!(?req.query, "Starting to run a new query");
     let workflow = to_workflow(req.query, connector_ref);
     info!(?workflow, "Executing workflow");
-    workflow.execute(connector_ref).await.unwrap();
+    workflow
+        .execute(connector_ref, &req.collection)
+        .await
+        .unwrap();
     (StatusCode::OK, Json(QueryResponse { query_id }))
 }
 
