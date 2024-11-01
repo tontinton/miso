@@ -1,97 +1,69 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::connector::Connector;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "snake_case")]
-pub enum FilterItem {
-    /// Filter items that contain the input word (2nd arg) in the input field (1st arg).
+pub enum FilterAst {
+    Or(Vec<FilterAst>),
+    And(Vec<FilterAst>),
     Term(/*field=*/ String, /*word=*/ String),
-    Filter(FilterTree),
 }
 
-#[derive(Debug, Deserialize)]
-pub struct FilterTree {
-    /// All filters must apply. Similar to ES must.
-    #[serde(default)]
-    and: Vec<FilterItem>,
-
-    /// One of the filters must apply. Similar to ES should.
-    #[serde(default)]
-    or: Vec<FilterItem>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct QueryAst {
-    /// Similar to ES bool.
-    filter: Option<FilterTree>,
-}
-
-pub fn predicate_pushdown(ast: &mut QueryAst, connector: &dyn Connector) {
-    let Some(filter) = &mut ast.filter else {
-        return;
-    };
-
-    filter.and.retain(|item| !connector.apply_filter_and(item));
-    if !filter.or.is_empty() && connector.apply_filter_or(&filter.or) {
-        filter.or.clear();
-    }
-}
-
-fn filter_item_to_vrl(item: &FilterItem) -> String {
-    match item {
-        FilterItem::Term(field, word) => format!(".{field} == {word}"),
-        FilterItem::Filter(filter) => filter_tree_to_vrl(filter),
-    }
-}
-
-fn filter_tree_to_vrl(filter: &FilterTree) -> String {
-    let mut script = String::new();
-
-    let wrap_parentheses = !filter.and.is_empty() && !filter.or.is_empty();
-    if wrap_parentheses {
-        script.push('(');
-    }
-
-    if !filter.and.is_empty() {
-        script.push('(');
-        for (i, item) in filter.and.iter().enumerate() {
-            script.push_str(&filter_item_to_vrl(item));
-            if i != filter.and.len() - 1 {
-                script.push_str(" && ");
+/// Tries to predicate pushdown the provided AST to the connector.
+/// Returns the (leftovers - stuff that the connector can't predicate, predicated).
+/// None means the expression was either kept as is (leftover) or taken fully (predicated).
+pub fn filter_predicate_pushdown(
+    ast: FilterAst,
+    connector: &dyn Connector,
+) -> (Option<FilterAst>, Option<FilterAst>) {
+    match ast {
+        FilterAst::And(exprs) => {
+            let mut leftovers = Vec::new();
+            let mut predicated = Vec::new();
+            for expr in exprs {
+                let (maybe_leftover, maybe_predicated) = filter_predicate_pushdown(expr, connector);
+                if let Some(expr) = maybe_leftover {
+                    leftovers.push(expr);
+                }
+                if let Some(expr) = maybe_predicated {
+                    predicated.push(expr);
+                }
             }
+
+            (
+                (!leftovers.is_empty()).then_some(FilterAst::And(leftovers)),
+                (!predicated.is_empty()).then_some(FilterAst::And(predicated)),
+            )
         }
-        script.push(')');
+        _ if connector.can_filter(&ast) => (None, Some(ast)),
+        _ => (Some(ast), None),
     }
-
-    if !filter.or.is_empty() {
-        if !script.is_empty() {
-            script.push_str(" && ");
-        }
-
-        script.push('(');
-        for (i, item) in filter.or.iter().enumerate() {
-            script.push_str(&filter_item_to_vrl(item));
-            if i != filter.or.len() - 1 {
-                script.push_str(" || ");
-            }
-        }
-        script.push(')');
-    }
-
-    if wrap_parentheses {
-        script.push(')');
-    }
-
-    script
 }
 
-pub fn ast_to_vrl(ast: &QueryAst) -> String {
-    let mut script = String::new();
-    if let Some(filter) = &ast.filter {
-        script.push_str(&filter_tree_to_vrl(filter));
+fn binop_to_vrl(exprs: &[FilterAst], join: &str) -> String {
+    let mut result = String::new();
+    if exprs.is_empty() {
+        return result;
     }
-    script
+
+    result.push('(');
+    for (i, expr) in exprs.iter().enumerate() {
+        result.push_str(&ast_to_vrl(expr));
+        if i != exprs.len() - 1 {
+            result.push_str(join);
+        }
+    }
+    result.push(')');
+    result
+}
+
+pub fn ast_to_vrl(ast: &FilterAst) -> String {
+    match ast {
+        FilterAst::And(exprs) => binop_to_vrl(exprs, " && "),
+        FilterAst::Or(exprs) => binop_to_vrl(exprs, " || "),
+        FilterAst::Term(field, word) => format!(".{field} == {word}"),
+    }
 }
 
 #[cfg(test)]
@@ -101,25 +73,27 @@ mod tests {
     #[test]
     fn ast_to_vrl_sanity() -> std::io::Result<()> {
         let ast_raw = r#"{
-            "filter": {
-                "and": [
-                    { "term": ["a", "1"] },
-                    {
-                        "filter": {
+            "and": [
+                {
+                    "and": [
+                        { "term": ["a", "1"] },
+                        {
                             "and": [
                                 { "term": ["b", "2"] }
                             ]
                         }
-                    }
-                ],
-                "or": [
-                    { "term": ["c", "3"] },
-                    { "term": ["d", "4"] }
-                ]
-            }
+                    ]
+                },
+                {
+                    "or": [
+                        { "term": ["c", "3"] },
+                        { "term": ["d", "4"] }
+                    ]
+                }
+            ]
         }"#;
         let result = ast_to_vrl(&serde_json::from_str(ast_raw)?);
-        assert_eq!(result, "((.a==1 && (.b==2)) && (.c==3 || .d==4))");
+        assert_eq!(result, "((.a == 1 && (.b == 2)) && (.c == 3 || .d == 4))");
         Ok(())
     }
 }
