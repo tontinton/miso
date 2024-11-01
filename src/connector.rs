@@ -1,7 +1,8 @@
-use std::fmt::Debug;
 use std::pin::Pin;
+use std::{collections::BTreeMap, fmt::Debug};
 
 use axum::async_trait;
+use color_eyre::eyre::Result;
 use futures_core::Stream;
 use serde::{Deserialize, Serialize};
 
@@ -12,12 +13,17 @@ pub enum Split {
     Quickwit(QuickwitSplit),
 }
 
-pub type Log = String;
+pub type Log = BTreeMap<String, serde_json::Value>;
 
 #[async_trait]
 pub trait Connector: Debug + Send + Sync {
+    async fn does_collection_exist(&self, collection: &str) -> bool;
     fn get_splits(&self) -> Vec<Split>;
-    fn query(&self, split: &Split) -> Pin<Box<dyn Stream<Item = Log> + Send>>;
+    fn query(
+        &self,
+        collection: &str,
+        split: &Split,
+    ) -> Pin<Box<dyn Stream<Item = Result<Log>> + Send>>;
 
     /// Returns whether the connector is able to predicate pushdown the entire filter AST.
     fn can_filter(&self, _filter: &FilterAst) -> bool {
