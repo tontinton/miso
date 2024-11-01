@@ -1,18 +1,21 @@
+use std::fmt::Debug;
 use std::pin::Pin;
 
+use axum::async_trait;
 use futures_core::Stream;
 use serde::{Deserialize, Serialize};
 
-use crate::{ast::FilterAst, elasticsearch::ElasticsearchSplit};
+use crate::{ast::FilterAst, quickwit_connector::QuickwitSplit};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum Split {
-    Elasticsearch(ElasticsearchSplit),
+    Quickwit(QuickwitSplit),
 }
 
 pub type Log = String;
 
-pub trait Connector: Send + Sync {
+#[async_trait]
+pub trait Connector: Debug + Send + Sync {
     fn get_splits(&self) -> Vec<Split>;
     fn query(&self, split: &Split) -> Pin<Box<dyn Stream<Item = Log> + Send>>;
 
@@ -20,4 +23,6 @@ pub trait Connector: Send + Sync {
     fn can_filter(&self, _filter: &FilterAst) -> bool {
         false
     }
+
+    async fn close(self);
 }

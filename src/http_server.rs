@@ -1,10 +1,15 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
+use std::sync::Arc;
 
+use axum::Extension;
 use axum::{http::StatusCode, routing::post, Json, Router};
-use color_eyre::eyre::{bail, Context};
-use color_eyre::Result;
+use color_eyre::{
+    eyre::{bail, Context},
+    Result,
+};
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
+use tokio::sync::RwLock;
 use tracing::info;
 use uuid::Uuid;
 use vrl::{
@@ -13,11 +18,18 @@ use vrl::{
     value::{Secrets, Value},
 };
 
-use crate::ast::{ast_to_vrl, filter_predicate_pushdown, FilterAst};
 use crate::{
+    ast::{ast_to_vrl, filter_predicate_pushdown, FilterAst},
     connector::{Connector, Split},
-    elasticsearch::ElasticsearchConnector,
+    quickwit_connector::QuickwitConnector,
 };
+
+#[derive(Debug)]
+struct State {
+    connectors: HashMap<String, Arc<dyn Connector>>,
+}
+
+type SharedState = Arc<RwLock<State>>;
 
 #[derive(Debug)]
 enum WorkflowStep {
@@ -33,17 +45,6 @@ enum WorkflowStep {
 #[derive(Debug)]
 struct Workflow {
     steps: Vec<WorkflowStep>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "snake_case")]
-enum QueryStep {
-    Filter(FilterAst),
-}
-
-#[derive(Debug, Deserialize)]
-struct QueryPlan {
-    steps: Vec<QueryStep>,
 }
 
 fn severity_to_str(severity: &Severity) -> &'static str {
@@ -183,7 +184,7 @@ impl Workflow {
     }
 }
 
-fn to_workflow(plan: QueryPlan, connector: &dyn Connector) -> Workflow {
+fn to_workflow(query_steps: Vec<QueryStep>, connector: &dyn Connector) -> Workflow {
     // The steps to run after all predicate pushdowns.
     let mut steps = Vec::new();
 
@@ -191,7 +192,7 @@ fn to_workflow(plan: QueryPlan, connector: &dyn Connector) -> Workflow {
     let mut steps_predicated = 0;
 
     // Try to pushdown steps.
-    for step in &plan.steps {
+    for step in &query_steps {
         match step {
             QueryStep::Filter(ast) => {
                 let (leftover, predicated) = filter_predicate_pushdown(ast.clone(), connector);
@@ -220,7 +221,7 @@ fn to_workflow(plan: QueryPlan, connector: &dyn Connector) -> Workflow {
     }
 
     // Add leftover steps.
-    for step in plan.steps.into_iter().skip(steps_predicated) {
+    for step in query_steps.into_iter().skip(steps_predicated) {
         match step {
             QueryStep::Filter(ast) => {
                 steps.push(WorkflowStep::Filter(ast));
@@ -231,13 +232,22 @@ fn to_workflow(plan: QueryPlan, connector: &dyn Connector) -> Workflow {
     Workflow { steps }
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum QueryStep {
+    Filter(FilterAst),
+}
+
 #[derive(Deserialize)]
 struct PostQueryRequest {
+    /// The connector to query from.
+    connector: String,
+
     /// The query id to set. If not set, the server will randomly generate an id.
     query_id: Option<Uuid>,
 
-    /// The query to run.
-    query: QueryPlan,
+    /// The query steps to run.
+    query: Vec<QueryStep>,
 }
 
 #[derive(Serialize)]
@@ -247,17 +257,37 @@ struct QueryResponse {
 
 /// Starts running a new query.
 async fn post_query_handler(
+    Extension(state): Extension<SharedState>,
     Json(req): Json<PostQueryRequest>,
 ) -> (StatusCode, Json<QueryResponse>) {
+    // TODO: remove all unwraps in this function.
     let query_id = req.query_id.unwrap_or_else(Uuid::now_v7);
+    let Some(connector) = state.read().await.connectors.get(&req.connector).cloned() else {
+        return (StatusCode::NOT_FOUND, Json(QueryResponse { query_id }));
+    };
+    let connector_ref = &*connector;
+
     info!(?req.query, "Starting to run a new query");
-    let connector = ElasticsearchConnector {};
-    let workflow = to_workflow(req.query, &connector);
+    let workflow = to_workflow(req.query, connector_ref);
     info!(?workflow, "Executing workflow");
-    workflow.execute(&connector).await.unwrap();
+    workflow.execute(connector_ref).await.unwrap();
     (StatusCode::OK, Json(QueryResponse { query_id }))
 }
 
-pub fn create_axum_app() -> Router {
-    Router::new().route("/query", post(post_query_handler))
+pub fn create_axum_app() -> Result<Router> {
+    let mut connectors = HashMap::new();
+    connectors.insert(
+        "tony".to_string(),
+        Arc::new(QuickwitConnector::new(serde_json::from_str(
+            r#"{
+                "url": "http://127.0.0.1:7280",
+                "refresh_interval": "5s"
+            }"#,
+        )?)) as Arc<dyn Connector>,
+    );
+    let state = Arc::new(RwLock::new(State { connectors }));
+
+    Ok(Router::new()
+        .route("/query", post(post_query_handler))
+        .layer(Extension(state)))
 }
