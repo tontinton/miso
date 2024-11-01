@@ -5,7 +5,7 @@ use futures_core::Stream;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    ast::FilterItem,
+    ast::FilterAst,
     connector::{Connector, Log, Split},
 };
 
@@ -31,11 +31,7 @@ impl Connector for ElasticsearchConnector {
         })
     }
 
-    fn apply_filter_and(&self, _item: &FilterItem) -> bool {
-        false
-    }
-
-    fn apply_filter_or(&self, _items: &[FilterItem]) -> bool {
+    fn can_filter(&self, _filter: &FilterAst) -> bool {
         false
     }
 }

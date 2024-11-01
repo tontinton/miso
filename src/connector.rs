@@ -3,7 +3,7 @@ use std::pin::Pin;
 use futures_core::Stream;
 use serde::{Deserialize, Serialize};
 
-use crate::{ast::FilterItem, elasticsearch::ElasticsearchSplit};
+use crate::{ast::FilterAst, elasticsearch::ElasticsearchSplit};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum Split {
@@ -15,6 +15,9 @@ pub type Log = String;
 pub trait Connector: Send + Sync {
     fn get_splits(&self) -> Vec<Split>;
     fn query(&self, split: &Split) -> Pin<Box<dyn Stream<Item = Log> + Send>>;
-    fn apply_filter_and(&self, item: &FilterItem) -> bool;
-    fn apply_filter_or(&self, items: &[FilterItem]) -> bool;
+
+    /// Returns whether the connector is able to predicate pushdown the entire filter AST.
+    fn can_filter(&self, _filter: &FilterAst) -> bool {
+        false
+    }
 }
