@@ -155,27 +155,11 @@ impl Workflow {
                     pushdown,
                     limit,
                 } => {
-                    // Currently running VRL and not predicating to connector.
-                    let program = if let Some(pushdown) = pushdown {
-                        let script = ast_to_vrl(pushdown);
-                        Some(compile_pretty_print_errors(&script)?)
-                    } else {
-                        None
-                    };
-
                     for split in splits {
-                        let mut query_stream = connector.query(collection, split, *limit);
+                        let mut query_stream =
+                            connector.query(collection, split, pushdown.clone(), *limit)?;
                         while let Some(log) = query_stream.next().await {
-                            let log = log?;
-                            if let Some(ref program) = program {
-                                if !run_vrl_filter(program, &log)
-                                    .context("scan fake predicate pushdown")?
-                                {
-                                    continue;
-                                }
-                            }
-
-                            logs.push(log);
+                            logs.push(log?);
                         }
                     }
                 }

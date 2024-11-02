@@ -1,4 +1,4 @@
-use std::{pin::Pin, sync::Arc, time::Duration};
+use std::{collections::BTreeMap, pin::Pin, sync::Arc, time::Duration};
 
 use async_stream::try_stream;
 use axum::async_trait;
@@ -6,6 +6,7 @@ use color_eyre::eyre::{bail, Context, Result};
 use futures_core::Stream;
 use reqwest::Client;
 use serde::{Deserialize, Deserializer, Serialize};
+use serde_json::{json, to_string};
 use tokio::{
     select, spawn,
     sync::{watch, RwLock},
@@ -108,10 +109,56 @@ pub struct QuickwitConnector {
     shutdown_tx: watch::Sender<()>,
 }
 
+fn ast_to_query(ast: &FilterAst) -> Result<serde_json::Value> {
+    #[allow(unreachable_patterns)]
+    Ok(match ast {
+        FilterAst::Or(filters) => {
+            assert!(!filters.is_empty());
+            json!({
+                "bool": {
+                    "should": filters.iter()
+                        .map(ast_to_query)
+                        .collect::<Result<Vec<_>>>()?,
+                }
+            })
+        }
+        FilterAst::And(filters) => {
+            assert!(!filters.is_empty());
+            json!({
+                "bool": {
+                    "must": filters.iter()
+                        .map(ast_to_query)
+                        .collect::<Result<Vec<_>>>()?,
+                }
+            })
+        }
+        FilterAst::Term(field, word) => {
+            json!({
+                "term": {
+                    field: {
+                        "value": word
+                    }
+                }
+            })
+        }
+        FilterAst::Eq(field, value) => {
+            json!({
+                "term": {
+                    field: {
+                        "value": value
+                    }
+                }
+            })
+        }
+        _ => bail!("Cannot predicate pushdown {:?}", ast),
+    })
+}
+
 #[instrument(name = "GET and parse quickwit begin search results")]
 async fn begin_search(
     base_url: &str,
     index: &str,
+    query: Option<serde_json::Value>,
     scroll_timeout: &Duration,
     scroll_size: u16,
 ) -> Result<(Vec<Log>, String)> {
@@ -123,7 +170,13 @@ async fn begin_search(
         scroll_size,
     );
     let client = Client::new();
-    let response = client.get(&url).send().await.context("http request")?;
+
+    let mut req = client.get(&url);
+    if let Some(query) = query {
+        req = req.json(&query);
+    }
+
+    let response = req.send().await.context("http request")?;
     if !response.status().is_success() {
         bail!("GET {} failed with status: {}", &url, response.status());
     }
@@ -141,7 +194,7 @@ async fn continue_search(
     scroll_id: String,
     scroll_timeout: &Duration,
 ) -> Result<(Vec<Log>, String)> {
-    let url = format!("{}/api/v1/_elastic/_search/scroll", base_url,);
+    let url = format!("{}/api/v1/_elastic/_search/scroll", base_url);
     let client = Client::new();
     let response = client
         .get(&url)
@@ -251,8 +304,9 @@ impl Connector for QuickwitConnector {
         &self,
         collection: &str,
         split: &Split,
+        pushdown: Option<FilterAst>,
         limit: Option<u64>,
-    ) -> Pin<Box<dyn Stream<Item = Result<Log>> + Send>> {
+    ) -> Result<Pin<Box<dyn Stream<Item = Result<Log>> + Send>>> {
         assert!(matches!(split, Split::Quickwit(..)));
 
         let url = self.config.url.clone();
@@ -262,42 +316,67 @@ impl Connector for QuickwitConnector {
             l.min(self.config.scroll_size as u64) as u16
         });
 
-        Box::pin(try_stream! {
-            let mut i = 0;
-            let (mut logs, mut scroll_id) = begin_search(&url, &collection, &scroll_timeout, scroll_size).await?;
+        let query = if let Some(ast) = pushdown {
+            let mut map = BTreeMap::new();
+            map.insert(
+                "query",
+                ast_to_query(&ast).context("filter ast to quickwit query")?,
+            );
+            let query = json!(map);
+
+            info!("Quickwit search '{}': {}", collection, to_string(&query)?);
+            Some(query)
+        } else {
+            info!("Quickwit search '{}'", collection);
+            None
+        };
+
+        Ok(Box::pin(try_stream! {
+            let mut streamed = 0;
+            let (mut logs, mut scroll_id) = begin_search(
+                &url,
+                &collection,
+                query,
+                &scroll_timeout,
+                scroll_size
+            ).await?;
+
             if logs.is_empty() {
                 return;
             }
             for log in logs {
                 if let Some(limit) = limit {
-                    if i >= limit {
-                        break;
+                    if streamed >= limit {
+                        return;
                     }
                 }
                 yield log;
-                i += 1;
+                streamed += 1;
             }
 
             loop {
                 (logs, scroll_id) = continue_search(&url, scroll_id, &scroll_timeout).await?;
                 if logs.is_empty() {
-                    break;
+                    return;
                 }
                 for log in logs {
                     if let Some(limit) = limit {
-                        if i >= limit {
-                            break;
+                        if streamed >= limit {
+                            return;
                         }
                     }
                     yield log;
-                    i += 1;
+                    streamed += 1;
                 }
             }
-        })
+        }))
     }
 
-    fn can_filter(&self, _filter: &FilterAst) -> bool {
-        false
+    fn can_filter(&self, filter: &FilterAst) -> bool {
+        matches!(
+            filter,
+            FilterAst::Or(..) | FilterAst::And(..) | FilterAst::Term(..) | FilterAst::Eq(..)
+        )
     }
 
     async fn close(self) {

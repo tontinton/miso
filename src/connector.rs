@@ -23,8 +23,9 @@ pub trait Connector: Debug + Send + Sync {
         &self,
         collection: &str,
         split: &Split,
+        pushdown: Option<FilterAst>,
         limit: Option<u64>,
-    ) -> Pin<Box<dyn Stream<Item = Result<Log>> + Send>>;
+    ) -> Result<Pin<Box<dyn Stream<Item = Result<Log>> + Send>>>;
 
     /// Returns whether the connector is able to predicate pushdown the entire filter AST.
     fn can_filter(&self, _filter: &FilterAst) -> bool {
