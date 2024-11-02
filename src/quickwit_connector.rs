@@ -250,9 +250,11 @@ impl Connector for QuickwitConnector {
     fn query(
         &self,
         collection: &str,
-        _split: &Split,
+        split: &Split,
         limit: Option<u64>,
     ) -> Pin<Box<dyn Stream<Item = Result<Log>> + Send>> {
+        assert!(matches!(split, Split::Quickwit(..)));
+
         let url = self.config.url.clone();
         let collection = collection.to_string();
         let scroll_timeout = self.config.scroll_timeout;
