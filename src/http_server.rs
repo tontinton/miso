@@ -37,6 +37,7 @@ enum WorkflowStep {
     Scan {
         splits: Vec<Split>,
         pushdown: Option<FilterAst>,
+        limit: Option<u64>,
     },
     /// Filter some items.
     Filter(FilterAst),
@@ -138,13 +139,22 @@ fn run_vrl_filter(program: &Program, log: &Log) -> Result<bool> {
 }
 
 impl Workflow {
-    async fn execute(&self, connector: &dyn Connector, collection: &str) -> Result<()> {
+    async fn execute(
+        &self,
+        connector: &dyn Connector,
+        collection: &str,
+        limit: Option<u64>,
+    ) -> Result<()> {
         // This is where each activity will be coordinated to a worker to be executed in parallel.
         // Right now as an example, we run everything sequentially here.
         let mut logs = Vec::new();
         for step in &self.steps {
             match step {
-                WorkflowStep::Scan { splits, pushdown } => {
+                WorkflowStep::Scan {
+                    splits,
+                    pushdown,
+                    limit,
+                } => {
                     // Currently running VRL and not predicating to connector.
                     let program = if let Some(pushdown) = pushdown {
                         let script = ast_to_vrl(pushdown);
@@ -154,7 +164,7 @@ impl Workflow {
                     };
 
                     for split in splits {
-                        let mut query_stream = connector.query(collection, split);
+                        let mut query_stream = connector.query(collection, split, *limit);
                         while let Some(log) = query_stream.next().await {
                             let log = log?;
                             if let Some(ref program) = program {
@@ -185,7 +195,8 @@ impl Workflow {
             }
         }
 
-        for log in logs {
+        let limit = limit.unwrap_or(logs.len() as u64);
+        for log in logs.into_iter().take(limit as usize) {
             println!("{}", to_string(&log)?);
         }
 
@@ -193,7 +204,11 @@ impl Workflow {
     }
 }
 
-fn to_workflow(query_steps: Vec<QueryStep>, connector: &dyn Connector) -> Workflow {
+fn to_workflow(
+    query_steps: Vec<QueryStep>,
+    limit: Option<u64>,
+    connector: &dyn Connector,
+) -> Workflow {
     // The steps to run after all predicate pushdowns.
     let mut steps = Vec::new();
 
@@ -217,7 +232,8 @@ fn to_workflow(query_steps: Vec<QueryStep>, connector: &dyn Connector) -> Workfl
                     steps.push(WorkflowStep::Scan {
                         splits: connector.get_splits(),
                         pushdown: (!pushdown_filters.is_empty())
-                            .then_some(FilterAst::And(pushdown_filters)),
+                            .then_some(FilterAst::And(pushdown_filters.clone())),
+                        limit: None,
                     });
                     steps.push(WorkflowStep::Filter(leftover));
 
@@ -229,11 +245,20 @@ fn to_workflow(query_steps: Vec<QueryStep>, connector: &dyn Connector) -> Workfl
         }
     }
 
-    // Add leftover steps.
-    for step in query_steps.into_iter().skip(steps_predicated) {
-        match step {
-            QueryStep::Filter(ast) => {
-                steps.push(WorkflowStep::Filter(ast));
+    if steps.is_empty() && steps_predicated == query_steps.len() {
+        steps.push(WorkflowStep::Scan {
+            splits: connector.get_splits(),
+            pushdown: (!pushdown_filters.is_empty()).then_some(FilterAst::And(pushdown_filters)),
+            // Predicate pushdown the limit if all filters were predicated.
+            limit,
+        });
+    } else {
+        // Add leftover steps.
+        for step in query_steps.into_iter().skip(steps_predicated) {
+            match step {
+                QueryStep::Filter(ast) => {
+                    steps.push(WorkflowStep::Filter(ast));
+                }
             }
         }
     }
@@ -260,6 +285,10 @@ struct PostQueryRequest {
 
     /// The query steps to run.
     query: Vec<QueryStep>,
+
+    /// Maximum number of items.
+    #[serde(default)]
+    limit: Option<u64>,
 }
 
 #[derive(Serialize)]
@@ -274,6 +303,11 @@ async fn post_query_handler(
 ) -> (StatusCode, Json<QueryResponse>) {
     // TODO: remove all unwraps in this function.
     let query_id = req.query_id.unwrap_or_else(Uuid::now_v7);
+
+    if req.query.is_empty() {
+        return (StatusCode::BAD_REQUEST, Json(QueryResponse { query_id }));
+    }
+
     let Some(connector) = state.read().await.connectors.get(&req.connector).cloned() else {
         return (StatusCode::NOT_FOUND, Json(QueryResponse { query_id }));
     };
@@ -287,10 +321,10 @@ async fn post_query_handler(
     let connector_ref = &*connector;
 
     info!(?req.query, "Starting to run a new query");
-    let workflow = to_workflow(req.query, connector_ref);
+    let workflow = to_workflow(req.query, req.limit, connector_ref);
     info!(?workflow, "Executing workflow");
     workflow
-        .execute(connector_ref, &req.collection)
+        .execute(connector_ref, &req.collection, req.limit)
         .await
         .unwrap();
     (StatusCode::OK, Json(QueryResponse { query_id }))

@@ -23,6 +23,7 @@ pub trait Connector: Debug + Send + Sync {
         &self,
         collection: &str,
         split: &Split,
+        limit: Option<u64>,
     ) -> Pin<Box<dyn Stream<Item = Result<Log>> + Send>>;
 
     /// Returns whether the connector is able to predicate pushdown the entire filter AST.
