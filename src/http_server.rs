@@ -36,7 +36,7 @@ type SharedState = Arc<RwLock<State>>;
 enum WorkflowStep {
     /// Run a search query.
     Scan {
-        splits: Vec<Split>,
+        splits: Vec<Arc<dyn Split>>,
         pushdown: Option<Arc<dyn FilterPushdown>>,
         limit: Option<u64>,
     },
@@ -158,7 +158,7 @@ impl Workflow {
                 } => {
                     for split in splits {
                         let mut query_stream =
-                            connector.query(collection, split, pushdown, *limit)?;
+                            connector.query(collection, &**split, pushdown, *limit)?;
                         while let Some(log) = query_stream.next().await {
                             logs.push(log?);
                         }

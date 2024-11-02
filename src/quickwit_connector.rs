@@ -21,8 +21,13 @@ use crate::{
 };
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct QuickwitSplit {
-    query: String,
+pub struct QuickwitSplit {}
+
+#[typetag::serde]
+impl Split for QuickwitSplit {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -306,20 +311,20 @@ impl Connector for QuickwitConnector {
             .any(|s| s == collection)
     }
 
-    fn get_splits(&self) -> Vec<Split> {
-        vec![Split::Quickwit(QuickwitSplit {
-            query: "".to_string(),
-        })]
+    fn get_splits(&self) -> Vec<Arc<dyn Split>> {
+        vec![Arc::new(QuickwitSplit {}) as Arc<dyn Split>]
     }
 
     fn query(
         &self,
         collection: &str,
-        split: &Split,
+        split: &dyn Split,
         pushdown: &Option<Arc<dyn FilterPushdown>>,
         limit: Option<u64>,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<Log>> + Send>>> {
-        assert!(matches!(split, Split::Quickwit(..)));
+        let Some(_) = split.as_any().downcast_ref::<QuickwitSplit>() else {
+            bail!("Downcasting split to wrong struct?");
+        };
 
         let url = self.config.url.clone();
         let collection = collection.to_string();

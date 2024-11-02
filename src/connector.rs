@@ -6,13 +6,12 @@ use std::{collections::BTreeMap, fmt::Debug};
 use axum::async_trait;
 use color_eyre::eyre::Result;
 use futures_core::Stream;
-use serde::{Deserialize, Serialize};
 
-use crate::{ast::FilterAst, quickwit_connector::QuickwitSplit};
+use crate::ast::FilterAst;
 
-#[derive(Debug, Serialize, Deserialize)]
-pub enum Split {
-    Quickwit(QuickwitSplit),
+#[typetag::serde(tag = "type")]
+pub trait Split: Any + Debug + Send + Sync {
+    fn as_any(&self) -> &dyn Any;
 }
 
 #[typetag::serde(tag = "type")]
@@ -25,11 +24,11 @@ pub type Log = BTreeMap<String, serde_json::Value>;
 #[async_trait]
 pub trait Connector: Debug + Send + Sync {
     async fn does_collection_exist(&self, collection: &str) -> bool;
-    fn get_splits(&self) -> Vec<Split>;
+    fn get_splits(&self) -> Vec<Arc<dyn Split>>;
     fn query(
         &self,
         collection: &str,
-        split: &Split,
+        split: &dyn Split,
         pushdown: &Option<Arc<dyn FilterPushdown>>,
         limit: Option<u64>,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<Log>> + Send>>>;
