@@ -24,7 +24,7 @@ pub type Log = BTreeMap<String, serde_json::Value>;
 #[async_trait]
 pub trait Connector: Debug + Send + Sync {
     async fn does_collection_exist(&self, collection: &str) -> bool;
-    fn get_splits(&self) -> Vec<Arc<dyn Split>>;
+    async fn get_splits(&self) -> Vec<Arc<dyn Split>>;
     fn query(
         &self,
         collection: &str,

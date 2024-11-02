@@ -189,7 +189,7 @@ impl Workflow {
     }
 }
 
-fn to_workflow(
+async fn to_workflow(
     query_steps: Vec<QueryStep>,
     limit: Option<u64>,
     connector: &dyn Connector,
@@ -224,7 +224,7 @@ fn to_workflow(
     };
 
     steps.push(WorkflowStep::Scan {
-        splits: connector.get_splits(),
+        splits: connector.get_splits().await,
         pushdown,
         limit,
     });
@@ -296,7 +296,7 @@ async fn post_query_handler(
     let connector_ref = &*connector;
 
     info!(?req.query, "Starting to run a new query");
-    let workflow = to_workflow(req.query, req.limit, connector_ref);
+    let workflow = to_workflow(req.query, req.limit, connector_ref).await;
     info!(?workflow, "Executing workflow");
     workflow
         .execute(connector_ref, &req.collection, req.limit)

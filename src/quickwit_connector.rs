@@ -311,7 +311,7 @@ impl Connector for QuickwitConnector {
             .any(|s| s == collection)
     }
 
-    fn get_splits(&self) -> Vec<Arc<dyn Split>> {
+    async fn get_splits(&self) -> Vec<Arc<dyn Split>> {
         vec![Arc::new(QuickwitSplit {}) as Arc<dyn Split>]
     }
 
