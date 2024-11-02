@@ -2,8 +2,9 @@ use std::{pin::Pin, sync::Arc, time::Duration};
 
 use async_stream::try_stream;
 use axum::async_trait;
-use color_eyre::eyre::Result;
+use color_eyre::eyre::{bail, Context, Result};
 use futures_core::Stream;
+use reqwest::Client;
 use serde::{Deserialize, Deserializer, Serialize};
 use tokio::{
     select, spawn,
@@ -11,12 +12,11 @@ use tokio::{
     task::JoinHandle,
     time::sleep,
 };
-use tracing::{debug, error, info, instrument};
+use tracing::{debug, error, info, instrument, warn};
 
 use crate::{
     ast::FilterAst,
     connector::{Connector, Log, Split},
-    http_client::get_text,
 };
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -47,10 +47,22 @@ struct SearchResponseHits {
 
 #[derive(Debug, Deserialize)]
 struct SearchResponse {
+    #[serde(rename = "_scroll_id")]
+    scroll_id: String,
     hits: SearchResponseHits,
 }
 
+#[derive(Debug, Serialize)]
+struct ContinueSearchRequest {
+    scroll_id: String,
+    scroll: String,
+}
+
 fn default_refresh_interval() -> Duration {
+    humantime::parse_duration("1m").expect("Invalid duration format")
+}
+
+fn default_scroll_timeout() -> Duration {
     humantime::parse_duration("1m").expect("Invalid duration format")
 }
 
@@ -62,6 +74,10 @@ where
     humantime::parse_duration(&s).map_err(serde::de::Error::custom)
 }
 
+fn default_scroll_size() -> u16 {
+    5000
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct QuickwitConfig {
     url: String,
@@ -71,6 +87,15 @@ pub struct QuickwitConfig {
         deserialize_with = "deserialize_duration"
     )]
     refresh_interval: Duration,
+
+    #[serde(
+        default = "default_scroll_timeout",
+        deserialize_with = "deserialize_duration"
+    )]
+    scroll_timeout: Duration,
+
+    #[serde(default = "default_scroll_size")]
+    scroll_size: u16,
 }
 
 type SharedCollections = Arc<RwLock<Vec<String>>>;
@@ -83,18 +108,70 @@ pub struct QuickwitConnector {
     shutdown_tx: watch::Sender<()>,
 }
 
-#[instrument(name = "GET and parse quickwit search results")]
-async fn search(base_url: &str, index: &str) -> Result<Vec<Log>> {
-    let url = format!("{}/api/v1/_elastic/{}/_search", base_url, index);
-    let text = get_text(&url).await?;
+#[instrument(name = "GET and parse quickwit begin search results")]
+async fn begin_search(
+    base_url: &str,
+    index: &str,
+    scroll_timeout: &Duration,
+    scroll_size: u16,
+) -> Result<(Vec<Log>, String)> {
+    let url = format!(
+        "{}/api/v1/_elastic/{}/_search?scroll={}ms&size={}",
+        base_url,
+        index,
+        scroll_timeout.as_millis(),
+        scroll_size,
+    );
+    let client = Client::new();
+    let response = client.get(&url).send().await.context("http request")?;
+    if !response.status().is_success() {
+        bail!("GET {} failed with status: {}", &url, response.status());
+    }
+    let text = response.text().await.context("text from response")?;
     let data: SearchResponse = serde_json::from_str(&text)?;
-    Ok(data.hits.hits.into_iter().map(|x| x.source).collect())
+    Ok((
+        data.hits.hits.into_iter().map(|x| x.source).collect(),
+        data.scroll_id,
+    ))
+}
+
+#[instrument(name = "GET and parse quickwit continue search results")]
+async fn continue_search(
+    base_url: &str,
+    scroll_id: String,
+    scroll_timeout: &Duration,
+) -> Result<(Vec<Log>, String)> {
+    let url = format!("{}/api/v1/_elastic/_search/scroll", base_url,);
+    let client = Client::new();
+    let response = client
+        .get(&url)
+        .json(&ContinueSearchRequest {
+            scroll_id,
+            scroll: format!("{}ms", scroll_timeout.as_millis()),
+        })
+        .send()
+        .await
+        .context("http request")?;
+    if !response.status().is_success() {
+        bail!("GET {} failed with status: {}", &url, response.status());
+    }
+    let text = response.text().await.context("text from response")?;
+    let data: SearchResponse = serde_json::from_str(&text)?;
+    Ok((
+        data.hits.hits.into_iter().map(|x| x.source).collect(),
+        data.scroll_id,
+    ))
 }
 
 #[instrument(name = "GET and parse quickwit indexes")]
 async fn get_indexes(base_url: &str) -> Result<Vec<String>> {
     let url = format!("{}/api/v1/indexes", base_url);
-    let text = get_text(&url).await?;
+    let client = Client::new();
+    let response = client.get(&url).send().await.context("http request")?;
+    if !response.status().is_success() {
+        bail!("GET {} failed with status: {}", &url, response.status());
+    }
+    let text = response.text().await.context("text from response")?;
     let data: Vec<IndexResponse> = serde_json::from_str(&text)?;
     Ok(data.into_iter().map(|x| x.index_config.index_id).collect())
 }
@@ -177,9 +254,22 @@ impl Connector for QuickwitConnector {
     ) -> Pin<Box<dyn Stream<Item = Result<Log>> + Send>> {
         let url = self.config.url.clone();
         let collection = collection.to_string();
+        let scroll_timeout = self.config.scroll_timeout;
+        let scroll_size = self.config.scroll_size;
         Box::pin(try_stream! {
-            for log in search(&url, &collection).await? {
+            let (mut logs, mut scroll_id) = begin_search(&url, &collection, &scroll_timeout, scroll_size).await?;
+            for log in logs {
                 yield log;
+            }
+
+            loop {
+                (logs, scroll_id) = continue_search(&url, scroll_id, &scroll_timeout).await?;
+                if logs.is_empty() {
+                    break;
+                }
+                for log in logs {
+                    yield log;
+                }
             }
         })
     }
