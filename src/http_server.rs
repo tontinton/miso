@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, HashMap};
+use std::fmt::Debug;
 use std::sync::Arc;
 
 use axum::{http::StatusCode, routing::post, Extension, Json, Router};
@@ -18,13 +19,13 @@ use vrl::{
     value::{KeyString, Secrets, Value},
 };
 
+use crate::connector::FilterPushdown;
 use crate::{
     ast::{ast_to_vrl, FilterAst},
     connector::{Connector, Log, Split},
     quickwit_connector::QuickwitConnector,
 };
 
-#[derive(Debug)]
 struct State {
     connectors: HashMap<String, Arc<dyn Connector>>,
 }
@@ -36,7 +37,7 @@ enum WorkflowStep {
     /// Run a search query.
     Scan {
         splits: Vec<Split>,
-        pushdown: Option<FilterAst>,
+        pushdown: Option<Arc<dyn FilterPushdown>>,
         limit: Option<u64>,
     },
     /// Filter some items.
@@ -157,7 +158,7 @@ impl Workflow {
                 } => {
                     for split in splits {
                         let mut query_stream =
-                            connector.query(collection, split, pushdown.clone(), *limit)?;
+                            connector.query(collection, split, pushdown, *limit)?;
                         while let Some(log) = query_stream.next().await {
                             logs.push(log?);
                         }
@@ -209,11 +210,13 @@ fn to_workflow(
 
     let num_filters = pushdown_filters.len();
     let pushdown_filter = FilterAst::And(pushdown_filters);
-    let (number_of_pushdown_steps, pushdown) = if connector.can_filter(&pushdown_filter) {
-        (num_filters, Some(pushdown_filter))
-    } else {
-        (0, None)
-    };
+    let (number_of_pushdown_steps, pushdown) =
+        if let Some(pushdown) = connector.apply_filter(&pushdown_filter) {
+            (num_filters, Some(pushdown))
+        } else {
+            (0, None)
+        };
+
     let limit = if num_filters == query_steps.len() {
         limit
     } else {

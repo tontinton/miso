@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, pin::Pin, sync::Arc, time::Duration};
+use std::{any::Any, collections::BTreeMap, pin::Pin, sync::Arc, time::Duration};
 
 use async_stream::try_stream;
 use axum::async_trait;
@@ -17,12 +17,24 @@ use tracing::{debug, error, info, instrument};
 
 use crate::{
     ast::FilterAst,
-    connector::{Connector, Log, Split},
+    connector::{Connector, FilterPushdown, Log, Split},
 };
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct QuickwitSplit {
     query: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct QuickwitFilter {
+    ast: serde_json::Value,
+}
+
+#[typetag::serde]
+impl FilterPushdown for QuickwitFilter {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -304,7 +316,7 @@ impl Connector for QuickwitConnector {
         &self,
         collection: &str,
         split: &Split,
-        pushdown: Option<FilterAst>,
+        pushdown: &Option<Arc<dyn FilterPushdown>>,
         limit: Option<u64>,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<Log>> + Send>>> {
         assert!(matches!(split, Split::Quickwit(..)));
@@ -316,12 +328,13 @@ impl Connector for QuickwitConnector {
             l.min(self.config.scroll_size as u64) as u16
         });
 
-        let query = if let Some(ast) = pushdown {
+        let query = if let Some(pushdown) = pushdown {
+            let Some(filter) = pushdown.as_any().downcast_ref::<QuickwitFilter>() else {
+                bail!("Downcasting filter predicate pushdown to wrong struct?");
+            };
+
             let mut map = BTreeMap::new();
-            map.insert(
-                "query",
-                ast_to_query(&ast).context("filter ast to quickwit query")?,
-            );
+            map.insert("query", filter.ast.clone());
             let query = json!(map);
 
             info!("Quickwit search '{}': {}", collection, to_string(&query)?);
@@ -372,11 +385,10 @@ impl Connector for QuickwitConnector {
         }))
     }
 
-    fn can_filter(&self, filter: &FilterAst) -> bool {
-        matches!(
-            filter,
-            FilterAst::Or(..) | FilterAst::And(..) | FilterAst::Term(..) | FilterAst::Eq(..)
-        )
+    fn apply_filter(&self, ast: &FilterAst) -> Option<Arc<dyn FilterPushdown>> {
+        ast_to_query(ast)
+            .ok()
+            .map(|x| Arc::new(QuickwitFilter { ast: x }) as Arc<dyn FilterPushdown>)
     }
 
     async fn close(self) {
