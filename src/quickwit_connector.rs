@@ -319,7 +319,7 @@ impl Connector for QuickwitConnector {
         &self,
         collection: &str,
         split: &dyn Split,
-        pushdown: &Option<Arc<dyn FilterPushdown>>,
+        pushdown: &Option<&dyn FilterPushdown>,
         limit: Option<u64>,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<Log>> + Send>>> {
         let Some(_) = split.as_any().downcast_ref::<QuickwitSplit>() else {

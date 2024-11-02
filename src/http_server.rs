@@ -158,7 +158,7 @@ impl Workflow {
                 } => {
                     for split in splits {
                         let mut query_stream =
-                            connector.query(collection, &**split, pushdown, *limit)?;
+                            connector.query(collection, &**split, &pushdown.as_deref(), *limit)?;
                         while let Some(log) = query_stream.next().await {
                             logs.push(log?);
                         }

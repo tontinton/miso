@@ -29,7 +29,7 @@ pub trait Connector: Debug + Send + Sync {
         &self,
         collection: &str,
         split: &dyn Split,
-        pushdown: &Option<Arc<dyn FilterPushdown>>,
+        pushdown: &Option<&dyn FilterPushdown>,
         limit: Option<u64>,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<Log>> + Send>>>;
 
