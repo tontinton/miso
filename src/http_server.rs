@@ -1,17 +1,22 @@
-use std::collections::{BTreeMap, HashMap};
-use std::fmt::Debug;
-use std::sync::Arc;
+use std::{
+    collections::{BTreeMap, HashMap},
+    fmt::Debug,
+    sync::Arc,
+};
 
 use axum::{http::StatusCode, routing::post, Extension, Json, Router};
 use color_eyre::{
     eyre::{bail, Context},
     Result,
 };
-use futures_util::StreamExt;
+use futures_util::{pin_mut, stream::FuturesUnordered, StreamExt};
 use serde::{Deserialize, Serialize};
 use serde_json::to_string;
-use tokio::sync::RwLock;
-use tracing::info;
+use tokio::{
+    select, spawn,
+    sync::{mpsc, RwLock},
+};
+use tracing::{debug, info};
 use uuid::Uuid;
 use vrl::{
     compiler::{compile, state::RuntimeState, Program, TargetValue, TimeZone},
@@ -40,6 +45,7 @@ enum WorkflowStep {
         pushdown: Option<Arc<dyn FilterPushdown>>,
         limit: Option<u64>,
     },
+
     /// Filter some items.
     Filter(FilterAst),
 }
@@ -141,48 +147,120 @@ fn run_vrl_filter(program: &Program, log: &Log) -> Result<bool> {
 
 impl Workflow {
     async fn execute(
-        &self,
-        connector: &dyn Connector,
+        self,
+        connector: Arc<dyn Connector>,
         collection: &str,
         limit: Option<u64>,
     ) -> Result<()> {
-        // This is where each activity will be coordinated to a worker to be executed in parallel.
-        // Right now as an example, we run everything sequentially here.
-        let mut logs = Vec::new();
-        for step in &self.steps {
-            match step {
-                WorkflowStep::Scan {
-                    splits,
-                    pushdown,
-                    limit,
-                } => {
-                    for split in splits {
-                        let mut query_stream =
-                            connector.query(collection, &**split, &pushdown.as_deref(), *limit)?;
-                        while let Some(log) = query_stream.next().await {
-                            logs.push(log?);
-                        }
-                    }
-                }
-                WorkflowStep::Filter(ast) => {
-                    let script = ast_to_vrl(ast);
-                    let program = compile_pretty_print_errors(&script)?;
-                    let mut filtered_logs = Vec::new();
-                    for log in logs {
-                        if !run_vrl_filter(&program, &log).context("filter vrl")? {
-                            continue;
-                        }
-
-                        filtered_logs.push(log);
-                    }
-                    logs = filtered_logs;
-                }
-            }
+        if self.steps.is_empty() {
+            return Ok(());
         }
 
-        let limit = limit.unwrap_or(logs.len() as u64);
-        for log in logs.into_iter().take(limit as usize) {
-            println!("{}", to_string(&log)?);
+        let (mut tx, mut next_rx) = mpsc::channel(1);
+        let mut rx: Option<mpsc::Receiver<Log>> = None;
+
+        let mut handles = FuturesUnordered::new();
+
+        for step in self.steps {
+            let handle = spawn({
+                let tx = tx.clone();
+                let rx = rx.take();
+                let collection = collection.to_string();
+                let connector = connector.clone();
+
+                async move {
+                    match step {
+                        WorkflowStep::Scan {
+                            splits,
+                            pushdown,
+                            limit,
+                        } => {
+                            for split in splits {
+                                let mut query_stream = connector.query(
+                                    &collection,
+                                    &*split,
+                                    &pushdown.as_deref(),
+                                    limit,
+                                )?;
+                                while let Some(log) = query_stream.next().await {
+                                    if let Err(e) = tx.send(log?).await {
+                                        debug!("Closing scan step: {}", e);
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        WorkflowStep::Filter(ast) => {
+                            let mut rx = rx.unwrap();
+                            let script = ast_to_vrl(&ast);
+                            let program = compile_pretty_print_errors(&script)?;
+                            while let Some(log) = rx.recv().await {
+                                if !run_vrl_filter(&program, &log).context("filter vrl")? {
+                                    continue;
+                                }
+
+                                if let Err(e) = tx.send(log).await {
+                                    debug!("Closing filter step: {}", e);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+
+                    Ok::<(), color_eyre::eyre::Error>(())
+                }
+            });
+
+            handles.push(handle);
+
+            rx = Some(next_rx);
+            (tx, next_rx) = mpsc::channel(1);
+        }
+
+        let print_future = async {
+            let mut rx = rx.unwrap();
+            let mut received = 0;
+
+            while let Some(log) = rx.recv().await {
+                println!("{}", to_string(&log)?);
+
+                received += 1;
+                if let Some(limit) = limit {
+                    if received >= limit {
+                        break;
+                    }
+                }
+            }
+
+            Ok::<(), color_eyre::eyre::Error>(())
+        };
+        pin_mut!(print_future);
+
+        loop {
+            select! {
+                result = &mut print_future => {
+                    for handle in handles {
+                        handle.abort();
+                    }
+                    result?;
+                }
+                maybe_result = handles.next() => {
+                    if let Some(result) = maybe_result {
+                        if let Err(e) = result {
+                            for handle in handles {
+                                handle.abort();
+                            }
+                            bail!("Failed one of the workflow step tasks: {}", e);
+                        }
+                        continue;
+                    } else {
+                        print_future.await?;
+                    }
+                }
+            }
+
+            debug!("Printing finished successfully");
+            break;
         }
 
         Ok(())
@@ -293,13 +371,11 @@ async fn post_query_handler(
         return (StatusCode::NOT_FOUND, Json(QueryResponse { query_id }));
     }
 
-    let connector_ref = &*connector;
-
     info!(?req.query, "Starting to run a new query");
-    let workflow = to_workflow(req.query, req.limit, connector_ref).await;
+    let workflow = to_workflow(req.query, req.limit, &*connector).await;
     info!(?workflow, "Executing workflow");
     workflow
-        .execute(connector_ref, &req.collection, req.limit)
+        .execute(connector, &req.collection, req.limit)
         .await
         .unwrap();
     (StatusCode::OK, Json(QueryResponse { query_id }))
