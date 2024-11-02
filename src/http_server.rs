@@ -19,7 +19,7 @@ use vrl::{
 };
 
 use crate::{
-    ast::{ast_to_vrl, filter_predicate_pushdown, FilterAst},
+    ast::{ast_to_vrl, FilterAst},
     connector::{Connector, Log, Split},
     quickwit_connector::QuickwitConnector,
 };
@@ -197,52 +197,40 @@ fn to_workflow(
     let mut steps = Vec::new();
 
     let mut pushdown_filters = Vec::new();
-    let mut steps_predicated = 0;
 
     // Try to pushdown steps.
     for step in &query_steps {
         match step {
             QueryStep::Filter(ast) => {
-                let (leftover, predicated) = filter_predicate_pushdown(ast.clone(), connector);
-                assert!(leftover.is_some() || predicated.is_some());
-
-                steps_predicated += 1;
-
-                if let Some(predicated) = predicated {
-                    pushdown_filters.push(predicated);
-                }
-
-                if let Some(leftover) = leftover {
-                    steps.push(WorkflowStep::Scan {
-                        splits: connector.get_splits(),
-                        pushdown: (!pushdown_filters.is_empty())
-                            .then_some(FilterAst::And(pushdown_filters.clone())),
-                        limit: None,
-                    });
-                    steps.push(WorkflowStep::Filter(leftover));
-
-                    // Found a step that was not fully predicated pushdown, stop trying to
-                    // predicate any step after this.
-                    break;
-                }
+                pushdown_filters.push(ast.clone());
             }
         }
     }
 
-    if steps.is_empty() && steps_predicated == query_steps.len() {
-        steps.push(WorkflowStep::Scan {
-            splits: connector.get_splits(),
-            pushdown: (!pushdown_filters.is_empty()).then_some(FilterAst::And(pushdown_filters)),
-            // Predicate pushdown the limit if all filters were predicated.
-            limit,
-        });
+    let num_filters = pushdown_filters.len();
+    let pushdown_filter = FilterAst::And(pushdown_filters);
+    let (number_of_pushdown_steps, pushdown) = if connector.can_filter(&pushdown_filter) {
+        (num_filters, Some(pushdown_filter))
     } else {
-        // Add leftover steps.
-        for step in query_steps.into_iter().skip(steps_predicated) {
-            match step {
-                QueryStep::Filter(ast) => {
-                    steps.push(WorkflowStep::Filter(ast));
-                }
+        (0, None)
+    };
+    let limit = if num_filters == query_steps.len() {
+        limit
+    } else {
+        None
+    };
+
+    steps.push(WorkflowStep::Scan {
+        splits: connector.get_splits(),
+        pushdown,
+        limit,
+    });
+
+    // Add leftover steps.
+    for step in query_steps.into_iter().skip(number_of_pushdown_steps) {
+        match step {
+            QueryStep::Filter(ast) => {
+                steps.push(WorkflowStep::Filter(ast));
             }
         }
     }
