@@ -251,6 +251,7 @@ impl Connector for QuickwitConnector {
         &self,
         collection: &str,
         _split: &Split,
+        _limit: Option<u64>,
     ) -> Pin<Box<dyn Stream<Item = Result<Log>> + Send>> {
         let url = self.config.url.clone();
         let collection = collection.to_string();
