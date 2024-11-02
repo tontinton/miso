@@ -8,6 +8,7 @@ pub enum FilterAst {
     Or(Vec<FilterAst>),
     And(Vec<FilterAst>),
     Term(/*field=*/ String, /*word=*/ String),
+    Eq(/*field=*/ String, /*value=*/ String),
 }
 
 /// Tries to predicate pushdown the provided AST to the connector.
@@ -62,7 +63,8 @@ pub fn ast_to_vrl(ast: &FilterAst) -> String {
     match ast {
         FilterAst::And(exprs) => binop_to_vrl(exprs, " && "),
         FilterAst::Or(exprs) => binop_to_vrl(exprs, " || "),
-        FilterAst::Term(field, word) => format!(".{field} == {word}"),
+        FilterAst::Eq(field, word) => format!(".{field} == {word}"),
+        FilterAst::Term(field, word) => format!("contains(string!(.{field}), \"{word}\")"),
     }
 }
 
@@ -76,18 +78,18 @@ mod tests {
             "and": [
                 {
                     "and": [
-                        { "term": ["a", "1"] },
+                        { "eq": ["a", "1"] },
                         {
                             "and": [
-                                { "term": ["b", "2"] }
+                                { "eq": ["b", "2"] }
                             ]
                         }
                     ]
                 },
                 {
                     "or": [
-                        { "term": ["c", "3"] },
-                        { "term": ["d", "4"] }
+                        { "eq": ["c", "3"] },
+                        { "eq": ["d", "4"] }
                     ]
                 }
             ]
