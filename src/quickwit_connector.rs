@@ -12,7 +12,7 @@ use tokio::{
     task::JoinHandle,
     time::sleep,
 };
-use tracing::{debug, error, info, instrument, warn};
+use tracing::{debug, error, info, instrument};
 
 use crate::{
     ast::FilterAst,
@@ -251,16 +251,29 @@ impl Connector for QuickwitConnector {
         &self,
         collection: &str,
         _split: &Split,
-        _limit: Option<u64>,
+        limit: Option<u64>,
     ) -> Pin<Box<dyn Stream<Item = Result<Log>> + Send>> {
         let url = self.config.url.clone();
         let collection = collection.to_string();
         let scroll_timeout = self.config.scroll_timeout;
-        let scroll_size = self.config.scroll_size;
+        let scroll_size = limit.map_or(self.config.scroll_size, |l| {
+            l.min(self.config.scroll_size as u64) as u16
+        });
+
         Box::pin(try_stream! {
+            let mut i = 0;
             let (mut logs, mut scroll_id) = begin_search(&url, &collection, &scroll_timeout, scroll_size).await?;
+            if logs.is_empty() {
+                return;
+            }
             for log in logs {
+                if let Some(limit) = limit {
+                    if i >= limit {
+                        break;
+                    }
+                }
                 yield log;
+                i += 1;
             }
 
             loop {
@@ -269,7 +282,13 @@ impl Connector for QuickwitConnector {
                     break;
                 }
                 for log in logs {
+                    if let Some(limit) = limit {
+                        if i >= limit {
+                            break;
+                        }
+                    }
                     yield log;
+                    i += 1;
                 }
             }
         })
