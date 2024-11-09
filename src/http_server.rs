@@ -188,7 +188,7 @@ impl Workflow {
                                     limit,
                                 )?;
                                 while let Some(log) = query_stream.next().await {
-                                    if let Err(e) = tx.send(log?).await {
+                                    if let Err(e) = tx.send(log.context("scan")?).await {
                                         debug!("Closing scan step: {}", e);
                                         break;
                                     }
@@ -198,7 +198,8 @@ impl Workflow {
                         WorkflowStep::Filter(ast) => {
                             let mut rx = rx.unwrap();
                             let script = ast_to_vrl(&ast);
-                            let program = compile_pretty_print_errors(&script)?;
+                            let program = compile_pretty_print_errors(&script)
+                                .context("compile filter vrl")?;
                             while let Some(log) = rx.recv().await {
                                 if !run_vrl_filter(&program, &log).context("filter vrl")? {
                                     continue;
@@ -227,7 +228,7 @@ impl Workflow {
             let mut received = 0;
 
             while let Some(log) = rx.recv().await {
-                println!("{}", to_string(&log)?);
+                println!("{}", to_string(&log).context("log to string")?);
 
                 received += 1;
                 if let Some(limit) = limit {
