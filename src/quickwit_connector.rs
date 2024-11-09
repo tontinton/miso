@@ -16,7 +16,8 @@ use tokio::{
 use tracing::{debug, error, info, instrument};
 
 use crate::{
-    connector::{Connector, FilterPushdown, Log, Split},
+    connector::{Connector, Log, QueryHandle, Split},
+    downcast_unwrap,
     filter::FilterAst,
 };
 
@@ -30,14 +31,30 @@ impl Split for QuickwitSplit {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-struct QuickwitFilter {
-    ast: serde_json::Value,
+#[derive(Debug, Serialize, Deserialize, Default)]
+struct QuickwitHandle {
+    queries: Vec<serde_json::Value>,
+    limit: Option<u64>,
 }
 
 #[typetag::serde]
-impl FilterPushdown for QuickwitFilter {
+impl QueryHandle for QuickwitHandle {
     fn as_any(&self) -> &dyn Any {
+        self
+    }
+    fn into_any(self: Box<Self>) -> Box<dyn Any> {
+        self
+    }
+}
+
+impl QuickwitHandle {
+    fn with_filter(mut self, query: serde_json::Value) -> QuickwitHandle {
+        self.queries.push(query);
+        self
+    }
+
+    fn with_limit(mut self, limit: u64) -> QuickwitHandle {
+        self.limit = Some(limit);
         self
     }
 }
@@ -351,12 +368,15 @@ impl Connector for QuickwitConnector {
         vec![Arc::new(QuickwitSplit {}) as Arc<dyn Split>]
     }
 
+    fn get_handle(&self) -> Box<dyn QueryHandle> {
+        Box::new(QuickwitHandle::default())
+    }
+
     fn query(
         &self,
         collection: &str,
         split: &dyn Split,
-        pushdown: &Option<&dyn FilterPushdown>,
-        limit: Option<u64>,
+        handle: &dyn QueryHandle,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<Log>> + Send>>> {
         let Some(_) = split.as_any().downcast_ref::<QuickwitSplit>() else {
             bail!("Downcasting split to wrong struct?");
@@ -365,17 +385,23 @@ impl Connector for QuickwitConnector {
         let url = self.config.url.clone();
         let collection = collection.to_string();
         let scroll_timeout = self.config.scroll_timeout;
+
+        let handle = downcast_unwrap!(ref handle, QuickwitHandle);
+        let limit = handle.limit;
         let scroll_size = limit.map_or(self.config.scroll_size, |l| {
             l.min(self.config.scroll_size as u64) as u16
         });
 
-        let query = if let Some(pushdown) = pushdown {
-            let Some(filter) = pushdown.as_any().downcast_ref::<QuickwitFilter>() else {
-                bail!("Downcasting filter predicate pushdown to wrong struct?");
-            };
-
+        let query = if !handle.queries.is_empty() {
             let mut map = BTreeMap::new();
-            map.insert("query", filter.ast.clone());
+            map.insert(
+                "query",
+                json!({
+                    "bool": {
+                        "must": handle.queries.clone(),
+                    }
+                }),
+            );
             let query = json!(map);
 
             info!("Quickwit search '{}': {}", collection, to_string(&query)?);
@@ -426,8 +452,18 @@ impl Connector for QuickwitConnector {
         }))
     }
 
-    fn apply_filter(&self, ast: &FilterAst) -> Option<Arc<dyn FilterPushdown>> {
-        ast_to_query(ast).map(|ast| Arc::new(QuickwitFilter { ast }) as Arc<dyn FilterPushdown>)
+    fn apply_filter(
+        &self,
+        ast: &FilterAst,
+        handle: Box<dyn QueryHandle>,
+    ) -> Option<Box<dyn QueryHandle>> {
+        let handle = downcast_unwrap!(handle, QuickwitHandle);
+        Some(Box::new(handle.with_filter(ast_to_query(ast)?)))
+    }
+
+    fn apply_limit(&self, max: u64, handle: Box<dyn QueryHandle>) -> Option<Box<dyn QueryHandle>> {
+        let handle = downcast_unwrap!(handle, QuickwitHandle);
+        Some(Box::new(handle.with_limit(max)))
     }
 
     async fn close(self) {

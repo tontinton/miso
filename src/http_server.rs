@@ -30,7 +30,7 @@ use vrl::{
 };
 
 use crate::{
-    connector::{Connector, FilterPushdown, Log, Split},
+    connector::{Connector, Log, QueryHandle, Split},
     filter::{filter_ast_to_vrl, FilterAst},
     project::{project_fields_to_vrl, ProjectField},
     quickwit_connector::QuickwitConnector,
@@ -47,8 +47,7 @@ enum WorkflowStep {
     /// Run a search query.
     Scan {
         splits: Vec<Arc<dyn Split>>,
-        pushdown: Option<Arc<dyn FilterPushdown>>,
-        limit: Option<u64>,
+        handle: Arc<dyn QueryHandle>,
     },
 
     /// Filter some items.
@@ -56,6 +55,9 @@ enum WorkflowStep {
 
     /// Project to select only some of the fields, and optionally rename some.
     Project(Vec<ProjectField>),
+
+    /// Limit to X amount of items.
+    Limit(u64),
 }
 
 #[derive(Debug)]
@@ -156,12 +158,7 @@ fn run_vrl_project(program: &Program, log: Log) -> Result<Log> {
 }
 
 impl Workflow {
-    async fn execute(
-        self,
-        connector: Arc<dyn Connector>,
-        collection: &str,
-        limit: Option<u64>,
-    ) -> Result<()> {
+    async fn execute(self, connector: Arc<dyn Connector>, collection: &str) -> Result<()> {
         if self.steps.is_empty() {
             return Ok(());
         }
@@ -180,18 +177,10 @@ impl Workflow {
 
                 async move {
                     match step {
-                        WorkflowStep::Scan {
-                            splits,
-                            pushdown,
-                            limit,
-                        } => {
+                        WorkflowStep::Scan { splits, handle } => {
                             for split in splits {
-                                let mut query_stream = connector.query(
-                                    &collection,
-                                    &*split,
-                                    &pushdown.as_deref(),
-                                    limit,
-                                )?;
+                                let mut query_stream =
+                                    connector.query(&collection, &*split, &*handle)?;
                                 while let Some(log) = query_stream.next().await {
                                     if let Err(e) = tx.send(log.context("scan")?).await {
                                         debug!("Closing scan step: {}", e);
@@ -231,6 +220,24 @@ impl Workflow {
                                 }
                             }
                         }
+                        WorkflowStep::Limit(max) => {
+                            let mut rx = rx.unwrap();
+                            info!("Limitting to {max}");
+
+                            let mut sent = 0;
+                            while let Some(log) = rx.recv().await {
+                                if sent >= max {
+                                    break;
+                                }
+
+                                if let Err(e) = tx.send(log).await {
+                                    debug!("Closing limit step: {}", e);
+                                    break;
+                                }
+
+                                sent += 1;
+                            }
+                        }
                     }
 
                     Ok::<(), color_eyre::eyre::Error>(())
@@ -245,19 +252,9 @@ impl Workflow {
 
         let print_future = async {
             let mut rx = rx.unwrap();
-            let mut received = 0;
-
             while let Some(log) = rx.recv().await {
                 println!("{}", to_string(&log).context("log to string")?);
-
-                received += 1;
-                if let Some(limit) = limit {
-                    if received >= limit {
-                        break;
-                    }
-                }
             }
-
             Ok::<(), color_eyre::eyre::Error>(())
         };
         pin_mut!(print_future);
@@ -293,58 +290,52 @@ impl Workflow {
     }
 }
 
-async fn to_workflow(
-    query_steps: Vec<QueryStep>,
-    limit: Option<u64>,
-    connector: &dyn Connector,
-) -> Workflow {
+async fn to_workflow(query_steps: Vec<QueryStep>, connector: &dyn Connector) -> Workflow {
     // The steps to run after all predicate pushdowns.
     let mut steps = Vec::new();
 
-    let mut pushdown_filters = Vec::new();
+    let mut handle = Some(connector.get_handle());
+    let mut num_predicated = 0;
 
     // Try to pushdown steps.
     for step in &query_steps {
         match step {
             QueryStep::Filter(ast) => {
-                pushdown_filters.push(ast.clone());
+                handle = connector.apply_filter(ast, handle.take().expect("query handle to exist"));
+            }
+            QueryStep::Limit(max) => {
+                handle = connector.apply_limit(*max, handle.take().expect("query handle to exist"));
             }
             // TODO: add project predicate pushdown.
             _ => {
                 break;
             }
         }
+
+        if handle.is_none() {
+            break;
+        }
+        num_predicated += 1;
     }
-
-    let num_filters = pushdown_filters.len();
-    let pushdown_filter = FilterAst::And(pushdown_filters);
-    let (number_of_pushdown_steps, pushdown) =
-        if let Some(pushdown) = connector.apply_filter(&pushdown_filter) {
-            (num_filters, Some(pushdown))
-        } else {
-            (0, None)
-        };
-
-    let limit = if num_filters == query_steps.len() {
-        limit
-    } else {
-        None
-    };
 
     steps.push(WorkflowStep::Scan {
         splits: connector.get_splits().await,
-        pushdown,
-        limit,
+        handle: handle
+            .map(|x| x.into())
+            .unwrap_or_else(|| connector.get_handle().into()),
     });
 
     // Add leftover steps.
-    for step in query_steps.into_iter().skip(number_of_pushdown_steps) {
+    for step in query_steps.into_iter().skip(num_predicated) {
         match step {
             QueryStep::Filter(ast) => {
                 steps.push(WorkflowStep::Filter(ast));
             }
             QueryStep::Project(fields) => {
                 steps.push(WorkflowStep::Project(fields));
+            }
+            QueryStep::Limit(max) => {
+                steps.push(WorkflowStep::Limit(max));
             }
         }
     }
@@ -357,6 +348,7 @@ async fn to_workflow(
 enum QueryStep {
     Filter(FilterAst),
     Project(Vec<ProjectField>),
+    Limit(u64),
 }
 
 #[derive(Deserialize)]
@@ -372,10 +364,6 @@ struct PostQueryRequest {
 
     /// The query steps to run.
     query: Vec<QueryStep>,
-
-    /// Maximum number of items.
-    #[serde(default)]
-    limit: Option<u64>,
 }
 
 #[derive(Serialize)]
@@ -437,13 +425,10 @@ async fn post_query_handler(
     }
 
     info!(?req.query, "Starting to run a new query");
-    let workflow = to_workflow(req.query, req.limit, &*connector).await;
+    let workflow = to_workflow(req.query, &*connector).await;
 
     info!(?workflow, "Executing workflow");
-    if let Err(err) = workflow
-        .execute(connector, &req.collection, req.limit)
-        .await
-    {
+    if let Err(err) = workflow.execute(connector, &req.collection).await {
         error!(?err, "Failed to execute workflow: {}", err);
         return Err(HttpError::new(
             StatusCode::INTERNAL_SERVER_ERROR,
