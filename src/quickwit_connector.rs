@@ -167,6 +167,42 @@ fn ast_to_query(ast: &FilterAst) -> Option<serde_json::Value> {
                 }
             })
         }
+        FilterAst::Gt(field, value) => {
+            json!({
+                "range": {
+                    field: {
+                        "gt": value
+                    }
+                }
+            })
+        }
+        FilterAst::Gte(field, value) => {
+            json!({
+                "range": {
+                    field: {
+                        "gte": value
+                    }
+                }
+            })
+        }
+        FilterAst::Lt(field, value) => {
+            json!({
+                "range": {
+                    field: {
+                        "lt": value
+                    }
+                }
+            })
+        }
+        FilterAst::Lte(field, value) => {
+            json!({
+                "range": {
+                    field: {
+                        "lte": value
+                    }
+                }
+            })
+        }
         _ => return None,
     })
 }
