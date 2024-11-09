@@ -4,14 +4,19 @@ use std::{
     sync::Arc,
 };
 
-use axum::{http::StatusCode, routing::post, Extension, Json, Router};
+use axum::{
+    http::StatusCode,
+    response::{IntoResponse, Response},
+    routing::post,
+    Extension, Json, Router,
+};
 use color_eyre::{
     eyre::{bail, Context},
     Result,
 };
 use futures_util::{pin_mut, stream::FuturesUnordered, StreamExt};
 use serde::{Deserialize, Serialize};
-use serde_json::to_string;
+use serde_json::{json, to_string};
 use tokio::{
     select, spawn,
     sync::{mpsc, RwLock},
@@ -349,25 +354,54 @@ struct QueryResponse {
     query_id: Uuid,
 }
 
+struct HttpError {
+    status: StatusCode,
+    message: String,
+}
+
+impl HttpError {
+    fn new(status: StatusCode, message: String) -> HttpError {
+        Self { status, message }
+    }
+}
+
+impl IntoResponse for HttpError {
+    fn into_response(self) -> Response {
+        let body = Json(json!({
+            "error": self.message,
+        }));
+        (self.status, body).into_response()
+    }
+}
+
 /// Starts running a new query.
 async fn post_query_handler(
     Extension(state): Extension<SharedState>,
     Json(req): Json<PostQueryRequest>,
-) -> (StatusCode, Json<QueryResponse>) {
+) -> Result<Json<QueryResponse>, HttpError> {
     let query_id = req.query_id.unwrap_or_else(Uuid::now_v7);
 
     if req.query.is_empty() {
-        return (StatusCode::BAD_REQUEST, Json(QueryResponse { query_id }));
+        return Err(HttpError::new(
+            StatusCode::BAD_REQUEST,
+            "empty query".to_string(),
+        ));
     }
 
     let Some(connector) = state.read().await.connectors.get(&req.connector).cloned() else {
-        return (StatusCode::NOT_FOUND, Json(QueryResponse { query_id }));
+        return Err(HttpError::new(
+            StatusCode::NOT_FOUND,
+            format!("connector '{}' not found", req.connector),
+        ));
     };
 
     info!(?query_id, ?req.collection, "Checking whether collection exists");
     if !connector.does_collection_exist(&req.collection).await {
         info!(?req.collection, "Collection doesn't exist");
-        return (StatusCode::NOT_FOUND, Json(QueryResponse { query_id }));
+        return Err(HttpError::new(
+            StatusCode::NOT_FOUND,
+            format!("collection '{}' not found", req.collection),
+        ));
     }
 
     info!(?query_id, ?req.query, "Starting to run a new query");
@@ -379,13 +413,13 @@ async fn post_query_handler(
         .await
     {
         error!(?query_id, ?err, "Failed to execute workflow: {}", err);
-        return (
+        return Err(HttpError::new(
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(QueryResponse { query_id }),
-        );
+            "failed to execute workflow".to_string(),
+        ));
     }
 
-    (StatusCode::OK, Json(QueryResponse { query_id }))
+    Ok(Json(QueryResponse { query_id }))
 }
 
 pub fn create_axum_app() -> Result<Router> {
