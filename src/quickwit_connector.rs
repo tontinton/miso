@@ -126,16 +126,16 @@ pub struct QuickwitConnector {
     shutdown_tx: watch::Sender<()>,
 }
 
-fn ast_to_query(ast: &FilterAst) -> Result<serde_json::Value> {
+fn ast_to_query(ast: &FilterAst) -> Option<serde_json::Value> {
     #[allow(unreachable_patterns)]
-    Ok(match ast {
+    Some(match ast {
         FilterAst::Or(filters) => {
             assert!(!filters.is_empty());
             json!({
                 "bool": {
                     "should": filters.iter()
                         .map(ast_to_query)
-                        .collect::<Result<Vec<_>>>()?,
+                        .collect::<Option<Vec<_>>>()?,
                 }
             })
         }
@@ -145,7 +145,7 @@ fn ast_to_query(ast: &FilterAst) -> Result<serde_json::Value> {
                 "bool": {
                     "must": filters.iter()
                         .map(ast_to_query)
-                        .collect::<Result<Vec<_>>>()?,
+                        .collect::<Option<Vec<_>>>()?,
                 }
             })
         }
@@ -167,7 +167,7 @@ fn ast_to_query(ast: &FilterAst) -> Result<serde_json::Value> {
                 }
             })
         }
-        _ => bail!("Cannot predicate pushdown {:?}", ast),
+        _ => return None,
     })
 }
 
@@ -391,9 +391,7 @@ impl Connector for QuickwitConnector {
     }
 
     fn apply_filter(&self, ast: &FilterAst) -> Option<Arc<dyn FilterPushdown>> {
-        ast_to_query(ast)
-            .ok()
-            .map(|x| Arc::new(QuickwitFilter { ast: x }) as Arc<dyn FilterPushdown>)
+        ast_to_query(ast).map(|ast| Arc::new(QuickwitFilter { ast }) as Arc<dyn FilterPushdown>)
     }
 
     async fn close(self) {
