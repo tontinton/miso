@@ -16,7 +16,7 @@ use tokio::{
     select, spawn,
     sync::{mpsc, RwLock},
 };
-use tracing::{debug, info};
+use tracing::{debug, error, info};
 use uuid::Uuid;
 use vrl::{
     compiler::{compile, state::RuntimeState, Program, TargetValue, TimeZone},
@@ -354,7 +354,6 @@ async fn post_query_handler(
     Extension(state): Extension<SharedState>,
     Json(req): Json<PostQueryRequest>,
 ) -> (StatusCode, Json<QueryResponse>) {
-    // TODO: remove all unwraps in this function.
     let query_id = req.query_id.unwrap_or_else(Uuid::now_v7);
 
     if req.query.is_empty() {
@@ -365,19 +364,27 @@ async fn post_query_handler(
         return (StatusCode::NOT_FOUND, Json(QueryResponse { query_id }));
     };
 
-    info!(?req.collection, "Checking whether collection exists");
+    info!(?query_id, ?req.collection, "Checking whether collection exists");
     if !connector.does_collection_exist(&req.collection).await {
         info!(?req.collection, "Collection doesn't exist");
         return (StatusCode::NOT_FOUND, Json(QueryResponse { query_id }));
     }
 
-    info!(?req.query, "Starting to run a new query");
+    info!(?query_id, ?req.query, "Starting to run a new query");
     let workflow = to_workflow(req.query, req.limit, &*connector).await;
-    info!(?workflow, "Executing workflow");
-    workflow
+
+    info!(?query_id, ?workflow, "Executing workflow");
+    if let Err(err) = workflow
         .execute(connector, &req.collection, req.limit)
         .await
-        .unwrap();
+    {
+        error!(?query_id, ?err, "Failed to execute workflow: {}", err);
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(QueryResponse { query_id }),
+        );
+    }
+
     (StatusCode::OK, Json(QueryResponse { query_id }))
 }
 
