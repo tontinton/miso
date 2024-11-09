@@ -21,7 +21,7 @@ fn binop_to_vrl(exprs: &[FilterAst], join: &str) -> String {
 
     result.push('(');
     for (i, expr) in exprs.iter().enumerate() {
-        result.push_str(&ast_to_vrl(expr));
+        result.push_str(&filter_ast_to_vrl(expr));
         if i != exprs.len() - 1 {
             result.push_str(join);
         }
@@ -30,7 +30,7 @@ fn binop_to_vrl(exprs: &[FilterAst], join: &str) -> String {
     result
 }
 
-pub fn ast_to_vrl(ast: &FilterAst) -> String {
+pub fn filter_ast_to_vrl(ast: &FilterAst) -> String {
     match ast {
         FilterAst::And(exprs) => binop_to_vrl(exprs, " && "),
         FilterAst::Or(exprs) => binop_to_vrl(exprs, " || "),
@@ -48,7 +48,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn ast_to_vrl_sanity() -> std::io::Result<()> {
+    fn filter_ast_to_vrl_sanity() -> std::io::Result<()> {
         let ast_raw = r#"{
             "and": [
                 {
@@ -69,7 +69,7 @@ mod tests {
                 }
             ]
         }"#;
-        let result = ast_to_vrl(&serde_json::from_str(ast_raw)?);
+        let result = filter_ast_to_vrl(&serde_json::from_str(ast_raw)?);
         assert_eq!(result, "((.a == 1 && (.b == 2)) && (.c == 3 || .d == 4))");
         Ok(())
     }

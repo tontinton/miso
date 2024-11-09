@@ -29,10 +29,10 @@ use vrl::{
     value::{KeyString, Secrets, Value},
 };
 
-use crate::connector::FilterPushdown;
 use crate::{
-    ast::{ast_to_vrl, FilterAst},
-    connector::{Connector, Log, Split},
+    connector::{Connector, FilterPushdown, Log, Split},
+    filter::{filter_ast_to_vrl, FilterAst},
+    project::{apply_project_fields, ProjectField},
     quickwit_connector::QuickwitConnector,
 };
 
@@ -53,6 +53,9 @@ enum WorkflowStep {
 
     /// Filter some items.
     Filter(FilterAst),
+
+    /// Project to select only some of the fields, and optionally rename some.
+    Project(Vec<ProjectField>),
 }
 
 #[derive(Debug)]
@@ -197,7 +200,7 @@ impl Workflow {
                         }
                         WorkflowStep::Filter(ast) => {
                             let mut rx = rx.unwrap();
-                            let script = ast_to_vrl(&ast);
+                            let script = filter_ast_to_vrl(&ast);
                             let program = compile_pretty_print_errors(&script)
                                 .context("compile filter vrl")?;
                             while let Some(log) = rx.recv().await {
@@ -207,6 +210,16 @@ impl Workflow {
 
                                 if let Err(e) = tx.send(log).await {
                                     debug!("Closing filter step: {}", e);
+                                    break;
+                                }
+                            }
+                        }
+                        WorkflowStep::Project(fields) => {
+                            let mut rx = rx.unwrap();
+                            while let Some(log) = rx.recv().await {
+                                let log = apply_project_fields(&fields, log);
+                                if let Err(e) = tx.send(log).await {
+                                    debug!("Closing project step: {}", e);
                                     break;
                                 }
                             }
@@ -289,6 +302,10 @@ async fn to_workflow(
             QueryStep::Filter(ast) => {
                 pushdown_filters.push(ast.clone());
             }
+            // TODO: add project predicate pushdown.
+            _ => {
+                break;
+            }
         }
     }
 
@@ -319,6 +336,9 @@ async fn to_workflow(
             QueryStep::Filter(ast) => {
                 steps.push(WorkflowStep::Filter(ast));
             }
+            QueryStep::Project(fields) => {
+                steps.push(WorkflowStep::Project(fields));
+            }
         }
     }
 
@@ -329,6 +349,7 @@ async fn to_workflow(
 #[serde(rename_all = "snake_case")]
 enum QueryStep {
     Filter(FilterAst),
+    Project(Vec<ProjectField>),
 }
 
 #[derive(Deserialize)]

@@ -16,8 +16,8 @@ use tokio::{
 use tracing::{debug, error, info, instrument};
 
 use crate::{
-    ast::FilterAst,
     connector::{Connector, FilterPushdown, Log, Split},
+    filter::FilterAst,
 };
 
 #[derive(Debug, Serialize, Deserialize)]

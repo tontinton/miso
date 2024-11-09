@@ -7,7 +7,7 @@ use axum::async_trait;
 use color_eyre::eyre::Result;
 use futures_core::Stream;
 
-use crate::ast::FilterAst;
+use crate::filter::FilterAst;
 
 #[typetag::serde(tag = "type")]
 pub trait Split: Any + Debug + Send + Sync {
