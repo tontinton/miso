@@ -3,10 +3,14 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "snake_case")]
 pub enum FilterAst {
-    Or(Vec<FilterAst>),
-    And(Vec<FilterAst>),
-    Contains(/*field=*/ String, /*word=*/ String),
-    Eq(/*field=*/ String, /*value=*/ String),
+    Or(Vec<FilterAst>),                            // ||
+    And(Vec<FilterAst>),                           // &&
+    Contains(/*field=*/ String, /*word=*/ String), // word in field
+    Eq(/*field=*/ String, /*value=*/ String),      // ==
+    Gt(/*field=*/ String, /*value=*/ String),      // >
+    Gte(/*field=*/ String, /*value=*/ String),     // >=
+    Lt(/*field=*/ String, /*value=*/ String),      // <
+    Lte(/*field=*/ String, /*value=*/ String),     // <=
 }
 
 fn binop_to_vrl(exprs: &[FilterAst], join: &str) -> String {
@@ -30,8 +34,12 @@ pub fn ast_to_vrl(ast: &FilterAst) -> String {
     match ast {
         FilterAst::And(exprs) => binop_to_vrl(exprs, " && "),
         FilterAst::Or(exprs) => binop_to_vrl(exprs, " || "),
-        FilterAst::Eq(field, word) => format!(".{field} == {word}"),
         FilterAst::Contains(field, word) => format!("contains(string!(.{field}), \"{word}\")"),
+        FilterAst::Eq(field, word) => format!(".{field} == {word}"),
+        FilterAst::Gt(field, word) => format!(".{field} > {word}"),
+        FilterAst::Gte(field, word) => format!(".{field} >= {word}"),
+        FilterAst::Lt(field, word) => format!(".{field} < {word}"),
+        FilterAst::Lte(field, word) => format!(".{field} <= {word}"),
     }
 }
 
