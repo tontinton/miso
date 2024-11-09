@@ -1,58 +1,86 @@
 use serde::{Deserialize, Serialize};
 
-use crate::connector::Log;
-
 #[derive(Debug, Serialize, Deserialize, Clone)]
-#[serde(untagged)]
-pub enum ProjectField {
-    Name(String),
-    Rename(/*from=*/ String, /*to=*/ String),
+#[serde(rename_all = "snake_case")]
+pub enum TransformAst {
+    Value(String),
+    Field(String),
+
+    #[serde(rename = "*")]
+    Mul(Box<TransformAst>, Box<TransformAst>),
+    #[serde(rename = "/")]
+    Div(Box<TransformAst>, Box<TransformAst>),
+    #[serde(rename = "+")]
+    Plus(Box<TransformAst>, Box<TransformAst>),
+    #[serde(rename = "-")]
+    Minus(Box<TransformAst>, Box<TransformAst>),
 }
 
-pub fn apply_project_fields(fields: &[ProjectField], mut input_log: Log) -> Log {
-    let mut output_log = Log::new();
-    for field in fields {
-        match field {
-            ProjectField::Name(name) => {
-                if let Some((key, value)) = input_log.remove_entry(name) {
-                    output_log.insert(key, value);
-                }
-            }
-            ProjectField::Rename(from, to) => {
-                if let Some(value) = input_log.remove(from) {
-                    output_log.insert(to.to_string(), value);
-                }
-            }
-        }
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ProjectField {
+    from: TransformAst,
+    to: String,
+}
+
+fn transform_binop_ast_to_vrl(left: &TransformAst, right: &TransformAst, op: &str) -> String {
+    format!(
+        "({} {} {})",
+        transform_ast_to_vrl(left, true),
+        op,
+        transform_ast_to_vrl(right, true)
+    )
+}
+
+fn transform_ast_to_vrl(ast: &TransformAst, binop: bool) -> String {
+    match ast {
+        TransformAst::Value(value) => value.to_string(),
+        TransformAst::Field(name) if binop => format!("to_int!(.{name})"),
+        TransformAst::Field(name) => format!(".{name}"),
+        TransformAst::Mul(left, right) => transform_binop_ast_to_vrl(left, right, "*"),
+        TransformAst::Div(left, right) => transform_binop_ast_to_vrl(left, right, "/"),
+        TransformAst::Plus(left, right) => transform_binop_ast_to_vrl(left, right, "+"),
+        TransformAst::Minus(left, right) => transform_binop_ast_to_vrl(left, right, "-"),
     }
-    output_log
+}
+
+pub fn project_fields_to_vrl(fields: &[ProjectField]) -> String {
+    let mut items = Vec::with_capacity(fields.len());
+    for field in fields {
+        items.push(format!(
+            "\"{}\": {}",
+            field.to,
+            transform_ast_to_vrl(&field.from, false)
+        ));
+    }
+    format!(". = {{{}}}", items.join(", "))
 }
 
 #[cfg(test)]
 mod tests {
-    use serde_json::json;
-
     use super::*;
 
     #[test]
-    fn apply_project_fields_sanity() -> std::io::Result<()> {
+    fn project_fields_to_vrl_sanity() -> std::io::Result<()> {
         let project_fields_raw = r#"[
-            "name",
-            ["from", "to"]
+            {
+                "from": {
+                    "*": [{"field": "name"}, {"value": "100"}]
+                },
+                "to": "test1"
+            },
+            {
+                "from": {
+                    "+": [{"field": "left"}, {"field": "right"}]
+                },
+                "to": "test2"
+            }
         ]"#;
         let project_fields: Vec<ProjectField> = serde_json::from_str(project_fields_raw)?;
-
-        let log_raw = r#"{
-            "name": 123,
-            "name2": 133,
-            "from": 100
-        }"#;
-        let log: Log = serde_json::from_str(log_raw)?;
-
-        let result = apply_project_fields(&project_fields, log);
-        assert_eq!(result.len(), 2);
-        assert_eq!(result.get("name"), Some(&json!(123)));
-        assert_eq!(result.get("to"), Some(&json!(100)));
+        let result = project_fields_to_vrl(&project_fields);
+        assert_eq!(
+            result,
+            r#". = {"test1": (to_int!(.name) * 100), "test2": (to_int!(.left) + to_int!(.right))}"#
+        );
         Ok(())
     }
 }

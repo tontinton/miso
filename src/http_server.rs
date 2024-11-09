@@ -26,13 +26,13 @@ use uuid::Uuid;
 use vrl::{
     compiler::{compile, state::RuntimeState, Program, TargetValue, TimeZone},
     diagnostic::{DiagnosticList, Severity},
-    value::{KeyString, Secrets, Value},
+    value::{Secrets, Value},
 };
 
 use crate::{
     connector::{Connector, FilterPushdown, Log, Split},
     filter::{filter_ast_to_vrl, FilterAst},
-    project::{apply_project_fields, ProjectField},
+    project::{project_fields_to_vrl, ProjectField},
     quickwit_connector::QuickwitConnector,
 };
 
@@ -129,28 +129,30 @@ fn compile_pretty_print_errors(script: &str) -> Result<Program> {
     }
 }
 
-fn log_to_vrl(log: &Log) -> Value {
-    Value::Object(
-        log.iter()
-            .map(|(k, v)| (KeyString::from(k.clone()), Value::from(v.clone())))
-            .collect(),
-    )
-}
-
-fn run_vrl_filter(program: &Program, log: &Log) -> Result<bool> {
+fn run_vrl(program: &Program, log: Log) -> Result<Value> {
     let mut target = TargetValue {
-        value: log_to_vrl(log),
+        value: log.into(),
         metadata: Value::Object(BTreeMap::new()),
         secrets: Secrets::default(),
     };
     let mut state = RuntimeState::default();
     let timezone = TimeZone::default();
     let mut ctx = vrl::compiler::Context::new(&mut target, &mut state, &timezone);
-    let Value::Boolean(allowed) = program.resolve(&mut ctx)? else {
+    Ok(program.resolve(&mut ctx)?)
+}
+
+fn run_vrl_filter(program: &Program, log: Log) -> Result<bool> {
+    let Value::Boolean(allowed) = run_vrl(program, log)? else {
         bail!("Response of VRL script not boolean");
     };
-
     Ok(allowed)
+}
+
+fn run_vrl_project(program: &Program, log: Log) -> Result<Log> {
+    let Value::Object(map) = run_vrl(program, log)? else {
+        bail!("Response of VRL script not object");
+    };
+    Ok(map)
 }
 
 impl Workflow {
@@ -201,10 +203,11 @@ impl Workflow {
                         WorkflowStep::Filter(ast) => {
                             let mut rx = rx.unwrap();
                             let script = filter_ast_to_vrl(&ast);
+                            info!("Filtering: `{script}`");
                             let program = compile_pretty_print_errors(&script)
                                 .context("compile filter vrl")?;
                             while let Some(log) = rx.recv().await {
-                                if !run_vrl_filter(&program, &log).context("filter vrl")? {
+                                if !run_vrl_filter(&program, log.clone()).context("filter vrl")? {
                                     continue;
                                 }
 
@@ -216,8 +219,12 @@ impl Workflow {
                         }
                         WorkflowStep::Project(fields) => {
                             let mut rx = rx.unwrap();
+                            let script = project_fields_to_vrl(&fields);
+                            info!("Projecting: `{script}`");
+                            let program = compile_pretty_print_errors(&script)
+                                .context("compile project vrl")?;
                             while let Some(log) = rx.recv().await {
-                                let log = apply_project_fields(&fields, log);
+                                let log = run_vrl_project(&program, log).context("project vrl")?;
                                 if let Err(e) = tx.send(log).await {
                                     debug!("Closing project step: {}", e);
                                     break;

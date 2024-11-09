@@ -1,11 +1,12 @@
 use std::any::Any;
+use std::fmt::Debug;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::{collections::BTreeMap, fmt::Debug};
 
 use axum::async_trait;
 use color_eyre::eyre::Result;
 use futures_core::Stream;
+use vrl::value::ObjectMap;
 
 use crate::filter::FilterAst;
 
@@ -19,7 +20,7 @@ pub trait FilterPushdown: Any + Debug + Send + Sync {
     fn as_any(&self) -> &dyn Any;
 }
 
-pub type Log = BTreeMap<String, serde_json::Value>;
+pub type Log = ObjectMap;
 
 #[async_trait]
 pub trait Connector: Debug + Send + Sync {
