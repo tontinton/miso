@@ -427,7 +427,7 @@ async fn post_query_handler(
         ));
     };
 
-    info!(?query_id, ?req.collection, "Checking whether collection exists");
+    info!(?req.collection, "Checking whether collection exists");
     if !connector.does_collection_exist(&req.collection).await {
         info!(?req.collection, "Collection doesn't exist");
         return Err(HttpError::new(
@@ -436,15 +436,15 @@ async fn post_query_handler(
         ));
     }
 
-    info!(?query_id, ?req.query, "Starting to run a new query");
+    info!(?req.query, "Starting to run a new query");
     let workflow = to_workflow(req.query, req.limit, &*connector).await;
 
-    info!(?query_id, ?workflow, "Executing workflow");
+    info!(?workflow, "Executing workflow");
     if let Err(err) = workflow
         .execute(connector, &req.collection, req.limit)
         .await
     {
-        error!(?query_id, ?err, "Failed to execute workflow: {}", err);
+        error!(?err, "Failed to execute workflow: {}", err);
         return Err(HttpError::new(
             StatusCode::INTERNAL_SERVER_ERROR,
             "failed to execute workflow".to_string(),
