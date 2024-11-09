@@ -21,7 +21,7 @@ use tokio::{
     select, spawn,
     sync::{mpsc, RwLock},
 };
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, span, Level};
 use uuid::Uuid;
 use vrl::{
     compiler::{compile, state::RuntimeState, Program, TargetValue, TimeZone},
@@ -381,6 +381,9 @@ async fn post_query_handler(
     Json(req): Json<PostQueryRequest>,
 ) -> Result<Json<QueryResponse>, HttpError> {
     let query_id = req.query_id.unwrap_or_else(Uuid::now_v7);
+
+    let span = span!(Level::INFO, "query", ?query_id);
+    let _enter = span.enter();
 
     if req.query.is_empty() {
         return Err(HttpError::new(
