@@ -149,7 +149,7 @@ fn ast_to_query(ast: &FilterAst) -> Result<serde_json::Value> {
                 }
             })
         }
-        FilterAst::Term(field, word) => {
+        FilterAst::Contains(field, word) => {
             json!({
                 "term": {
                     field: {

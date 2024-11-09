@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 pub enum FilterAst {
     Or(Vec<FilterAst>),
     And(Vec<FilterAst>),
-    Term(/*field=*/ String, /*word=*/ String),
+    Contains(/*field=*/ String, /*word=*/ String),
     Eq(/*field=*/ String, /*value=*/ String),
 }
 
@@ -31,7 +31,7 @@ pub fn ast_to_vrl(ast: &FilterAst) -> String {
         FilterAst::And(exprs) => binop_to_vrl(exprs, " && "),
         FilterAst::Or(exprs) => binop_to_vrl(exprs, " || "),
         FilterAst::Eq(field, word) => format!(".{field} == {word}"),
-        FilterAst::Term(field, word) => format!("contains(string!(.{field}), \"{word}\")"),
+        FilterAst::Contains(field, word) => format!("contains(string!(.{field}), \"{word}\")"),
     }
 }
 
