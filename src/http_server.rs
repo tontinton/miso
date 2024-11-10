@@ -169,6 +169,8 @@ impl Workflow {
         let mut handles = FuturesUnordered::new();
 
         for step in self.steps {
+            debug!("Spawning step: {:?}", step);
+
             let handle = spawn({
                 let tx = tx.clone();
                 let rx = rx.take();
@@ -258,6 +260,8 @@ impl Workflow {
             Ok::<(), color_eyre::eyre::Error>(())
         };
         pin_mut!(print_future);
+
+        debug!("Starting to print logs");
 
         loop {
             select! {
