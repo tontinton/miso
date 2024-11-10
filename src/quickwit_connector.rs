@@ -412,6 +412,12 @@ impl Connector for QuickwitConnector {
         };
 
         Ok(Box::pin(try_stream! {
+            if let Some(limit) = limit {
+                if limit == 0 {
+                    return;
+                }
+            }
+
             let mut streamed = 0;
             let (mut logs, mut scroll_id) = begin_search(
                 &url,
@@ -425,13 +431,13 @@ impl Connector for QuickwitConnector {
                 return;
             }
             for log in logs {
+                yield log;
+                streamed += 1;
                 if let Some(limit) = limit {
                     if streamed >= limit {
                         return;
                     }
                 }
-                yield log;
-                streamed += 1;
             }
 
             loop {
@@ -440,13 +446,13 @@ impl Connector for QuickwitConnector {
                     return;
                 }
                 for log in logs {
+                    yield log;
+                    streamed += 1;
                     if let Some(limit) = limit {
                         if streamed >= limit {
                             return;
                         }
                     }
-                    yield log;
-                    streamed += 1;
                 }
             }
         }))
