@@ -26,7 +26,7 @@ use uuid::Uuid;
 use vrl::{
     compiler::{compile, state::RuntimeState, Program, TargetValue, TimeZone},
     diagnostic::{DiagnosticList, Severity},
-    value::{Secrets, Value},
+    value::{KeyString, Secrets, Value},
 };
 
 use crate::{
@@ -34,6 +34,7 @@ use crate::{
     filter::{filter_ast_to_vrl, FilterAst},
     project::{project_fields_to_vrl, ProjectField},
     quickwit_connector::QuickwitConnector,
+    vrl_utils::partial_cmp_values,
 };
 
 struct State {
@@ -58,6 +59,9 @@ enum WorkflowStep {
 
     /// Limit to X amount of items.
     Limit(u64),
+
+    /// Sort items.
+    Sort(Sort),
 }
 
 #[derive(Debug)]
@@ -240,6 +244,65 @@ impl Workflow {
                                 sent += 1;
                             }
                         }
+                        WorkflowStep::Sort(sort) => {
+                            let mut rx = rx.unwrap();
+                            info!("Sorting {:?}", sort);
+
+                            let by: KeyString = sort.by.into();
+                            let mut tracked_type = None;
+
+                            let mut logs = Vec::new();
+                            while let Some(log) = rx.recv().await {
+                                if let Some(value) = log.get(&by) {
+                                    let value_type = std::mem::discriminant(value);
+                                    if let Some(t) = tracked_type {
+                                        if t != value_type {
+                                            bail!(
+                                                "Cannot sort over differing types: {:?} != {:?}",
+                                                t,
+                                                value_type
+                                            );
+                                        }
+                                    } else {
+                                        tracked_type = Some(value_type);
+                                    }
+                                }
+
+                                logs.push(log);
+                            }
+
+                            let nulls_order = sort.nulls;
+
+                            logs.sort_unstable_by(|a, b| {
+                                let a_val = a.get(&by).unwrap_or(&Value::Null);
+                                let b_val = b.get(&by).unwrap_or(&Value::Null);
+                                let order = match (a_val, b_val, nulls_order.clone()) {
+                                    (Value::Null, _, NullsOrder::First) => std::cmp::Ordering::Less,
+                                    (_, Value::Null, NullsOrder::First) => {
+                                        std::cmp::Ordering::Greater
+                                    }
+                                    (Value::Null, _, NullsOrder::Last) => {
+                                        std::cmp::Ordering::Greater
+                                    }
+                                    (_, Value::Null, NullsOrder::Last) => std::cmp::Ordering::Less,
+                                    _ => partial_cmp_values(a_val, b_val)
+                                        .expect("Types should be comparable"),
+                                };
+
+                                if sort.order == SortOrder::Asc {
+                                    order
+                                } else {
+                                    order.reverse()
+                                }
+                            });
+
+                            for log in logs {
+                                if let Err(e) = tx.send(log).await {
+                                    debug!("Closing sort step: {}", e);
+                                    break;
+                                }
+                            }
+                        }
                     }
 
                     Ok::<(), color_eyre::eyre::Error>(())
@@ -341,10 +404,40 @@ async fn to_workflow(query_steps: Vec<QueryStep>, connector: &dyn Connector) -> 
             QueryStep::Limit(max) => {
                 steps.push(WorkflowStep::Limit(max));
             }
+            QueryStep::Sort(sort) => {
+                steps.push(WorkflowStep::Sort(sort));
+            }
         }
     }
 
     Workflow { steps }
+}
+
+#[derive(Debug, Deserialize, Default, PartialEq)]
+#[serde(rename_all = "snake_case")]
+enum SortOrder {
+    #[default]
+    Asc,
+    Desc,
+}
+
+#[derive(Debug, Deserialize, Default, Clone)]
+#[serde(rename_all = "snake_case")]
+enum NullsOrder {
+    #[default]
+    Last,
+    First,
+}
+
+#[derive(Debug, Deserialize)]
+struct Sort {
+    by: String,
+
+    #[serde(default)]
+    order: SortOrder,
+
+    #[serde(default)]
+    nulls: NullsOrder,
 }
 
 #[derive(Debug, Deserialize)]
@@ -353,6 +446,7 @@ enum QueryStep {
     Filter(FilterAst),
     Project(Vec<ProjectField>),
     Limit(u64),
+    Sort(Sort),
 }
 
 #[derive(Deserialize)]
