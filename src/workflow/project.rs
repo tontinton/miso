@@ -1,4 +1,16 @@
+use async_stream::try_stream;
+use color_eyre::eyre::{bail, Context, Result};
+use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
+use tracing::info;
+use vrl::{compiler::Program, core::Value};
+
+use crate::{
+    log::{Log, LogStream, LogTryStream},
+    workflow::vrl_utils::compile_pretty_print_errors,
+};
+
+use super::vrl_utils::run_vrl;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "snake_case")]
@@ -43,7 +55,7 @@ fn transform_ast_to_vrl(ast: &TransformAst, binop: bool) -> String {
     }
 }
 
-pub fn project_fields_to_vrl(fields: &[ProjectField]) -> String {
+fn project_fields_to_vrl(fields: &[ProjectField]) -> String {
     let mut items = Vec::with_capacity(fields.len());
     for field in fields {
         items.push(format!(
@@ -53,6 +65,30 @@ pub fn project_fields_to_vrl(fields: &[ProjectField]) -> String {
         ));
     }
     format!(". = {{{}}}", items.join(", "))
+}
+
+fn run_vrl_project(program: &Program, log: Log) -> Result<Log> {
+    let Value::Object(map) = run_vrl(program, log)? else {
+        bail!("Response of VRL script not object");
+    };
+    Ok(map)
+}
+
+pub fn project_stream(
+    fields: &[ProjectField],
+    mut input_stream: LogStream,
+) -> Result<LogTryStream> {
+    let script = project_fields_to_vrl(fields);
+    let program = compile_pretty_print_errors(&script).context("compile project vrl")?;
+
+    info!("Projecting: `{script}`");
+
+    Ok(Box::pin(try_stream! {
+        while let Some(log) = input_stream.next().await {
+            let log = run_vrl_project(&program, log).context("project vrl")?;
+            yield log;
+        }
+    }))
 }
 
 #[cfg(test)]

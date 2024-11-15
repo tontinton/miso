@@ -1,7 +1,6 @@
 pub mod args;
 pub mod connector;
-pub mod filter;
 pub mod http_server;
-pub mod project;
+pub mod log;
 pub mod quickwit_connector;
-pub mod vrl_utils;
+pub mod workflow;

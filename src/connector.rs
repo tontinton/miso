@@ -1,14 +1,12 @@
 use std::any::Any;
 use std::fmt::Debug;
-use std::pin::Pin;
 use std::sync::Arc;
 
 use axum::async_trait;
 use color_eyre::eyre::Result;
-use futures_core::Stream;
-use vrl::value::ObjectMap;
 
-use crate::filter::FilterAst;
+use crate::log::LogTryStream;
+use crate::workflow::filter::FilterAst;
 
 #[macro_export]
 macro_rules! downcast_unwrap {
@@ -43,8 +41,6 @@ pub trait QueryHandle: Any + Debug + Send + Sync {
     fn into_any(self: Box<Self>) -> Box<dyn Any>;
 }
 
-pub type Log = ObjectMap;
-
 #[async_trait]
 pub trait Connector: Debug + Send + Sync {
     async fn does_collection_exist(&self, collection: &str) -> bool;
@@ -58,7 +54,7 @@ pub trait Connector: Debug + Send + Sync {
         collection: &str,
         split: &dyn Split,
         handle: &dyn QueryHandle,
-    ) -> Result<Pin<Box<dyn Stream<Item = Result<Log>> + Send>>>;
+    ) -> Result<LogTryStream>;
 
     /// Returns the filter AST the connector should predicate pushdown.
     /// None means it can't predicate pushdown the filter AST provided.
