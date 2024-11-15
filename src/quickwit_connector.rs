@@ -1,9 +1,8 @@
-use std::{any::Any, collections::BTreeMap, pin::Pin, sync::Arc, time::Duration};
+use std::{any::Any, collections::BTreeMap, sync::Arc, time::Duration};
 
 use async_stream::try_stream;
 use axum::async_trait;
 use color_eyre::eyre::{bail, Context, Result};
-use futures_core::Stream;
 use reqwest::Client;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{json, to_string};
@@ -16,9 +15,10 @@ use tokio::{
 use tracing::{debug, error, info, instrument};
 
 use crate::{
-    connector::{Connector, Log, QueryHandle, Split},
+    connector::{Connector, QueryHandle, Split},
     downcast_unwrap,
-    filter::FilterAst,
+    log::{Log, LogTryStream},
+    workflow::filter::FilterAst,
 };
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -377,7 +377,7 @@ impl Connector for QuickwitConnector {
         collection: &str,
         split: &dyn Split,
         handle: &dyn QueryHandle,
-    ) -> Result<Pin<Box<dyn Stream<Item = Result<Log>> + Send>>> {
+    ) -> Result<LogTryStream> {
         let Some(_) = split.as_any().downcast_ref::<QuickwitSplit>() else {
             bail!("Downcasting split to wrong struct?");
         };

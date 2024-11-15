@@ -1,4 +1,18 @@
+use async_stream::try_stream;
+use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
+
+use color_eyre::{
+    eyre::{bail, Context},
+    Result,
+};
+use tracing::info;
+use vrl::{compiler::Program, core::Value};
+
+use crate::{
+    log::{Log, LogStream, LogTryStream},
+    workflow::vrl_utils::{compile_pretty_print_errors, run_vrl},
+};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "snake_case")]
@@ -30,7 +44,7 @@ fn binop_to_vrl(exprs: &[FilterAst], join: &str) -> String {
     result
 }
 
-pub fn filter_ast_to_vrl(ast: &FilterAst) -> String {
+fn filter_ast_to_vrl(ast: &FilterAst) -> String {
     match ast {
         FilterAst::And(exprs) => binop_to_vrl(exprs, " && "),
         FilterAst::Or(exprs) => binop_to_vrl(exprs, " || "),
@@ -41,6 +55,28 @@ pub fn filter_ast_to_vrl(ast: &FilterAst) -> String {
         FilterAst::Lt(field, word) => format!(".{field} < {word}"),
         FilterAst::Lte(field, word) => format!(".{field} <= {word}"),
     }
+}
+
+fn run_vrl_filter(program: &Program, log: Log) -> Result<bool> {
+    let Value::Boolean(allowed) = run_vrl(program, log)? else {
+        bail!("Response of VRL script not boolean");
+    };
+    Ok(allowed)
+}
+
+pub fn filter_stream(ast: &FilterAst, mut input_stream: LogStream) -> Result<LogTryStream> {
+    let script = filter_ast_to_vrl(ast);
+    let program = compile_pretty_print_errors(&script).context("compile filter vrl")?;
+
+    info!("Filtering: `{script}`");
+
+    Ok(Box::pin(try_stream! {
+        while let Some(log) = input_stream.next().await {
+            if run_vrl_filter(&program, log.clone()).context("filter vrl")? {
+                yield log;
+            }
+        }
+    }))
 }
 
 #[cfg(test)]
