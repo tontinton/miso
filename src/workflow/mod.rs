@@ -67,6 +67,16 @@ async fn stream_to_tx(mut stream: LogTryStream, tx: mpsc::Sender<Log>, tag: &str
     Ok(())
 }
 
+async fn logs_vec_to_tx(logs: Vec<Log>, tx: mpsc::Sender<Log>, tag: &str) -> Result<()> {
+    for log in logs {
+        if let Err(e) = tx.send(log).await {
+            debug!("Closing {} step: {}", tag, e);
+            break;
+        }
+    }
+    Ok(())
+}
+
 impl Workflow {
     pub fn new(steps: Vec<WorkflowStep>) -> Self {
         Self { steps }
@@ -112,8 +122,8 @@ impl Workflow {
                             stream_to_tx(stream, tx, "limit").await?;
                         }
                         WorkflowStep::Sort(sort) => {
-                            let stream = sort_stream(sort, rx_stream(rx.unwrap()))?;
-                            stream_to_tx(stream, tx, "sort").await?;
+                            let logs = sort_stream(sort, rx_stream(rx.unwrap())).await?;
+                            logs_vec_to_tx(logs, tx, "sort").await?;
                         }
                     }
 

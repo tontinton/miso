@@ -1,4 +1,3 @@
-use async_stream::try_stream;
 use color_eyre::eyre::{bail, Result};
 use futures_util::StreamExt;
 use serde::Deserialize;
@@ -6,7 +5,7 @@ use tracing::info;
 use vrl::{core::Value, value::KeyString};
 
 use crate::{
-    log::{Log, LogStream, LogTryStream},
+    log::{Log, LogStream},
     workflow::vrl_utils::partial_cmp_values,
 };
 
@@ -63,43 +62,34 @@ async fn collect_logs(by: &KeyString, mut input_stream: LogStream) -> Result<Vec
     Ok(logs)
 }
 
-pub fn sort_stream(sort: Sort, input_stream: LogStream) -> Result<LogTryStream> {
+pub async fn sort_stream(sort: Sort, input_stream: LogStream) -> Result<Vec<Log>> {
     info!(
         "Sorting by '{}' (order: {:?}, nulls: {:?})",
         sort.by, sort.order, sort.nulls
     );
 
-    Ok(Box::pin(try_stream! {
-        let by: KeyString = sort.by.into();
-        let nulls_order = sort.nulls;
+    let by: KeyString = sort.by.into();
+    let nulls_order = sort.nulls;
 
-        let mut logs = collect_logs(&by, input_stream).await?;
+    let mut logs = collect_logs(&by, input_stream).await?;
 
-        logs.sort_unstable_by(|a, b| {
-            let a_val = a.get(&by).unwrap_or(&Value::Null);
-            let b_val = b.get(&by).unwrap_or(&Value::Null);
-            let order = match (a_val, b_val, nulls_order.clone()) {
-                (Value::Null, _, NullsOrder::First) => std::cmp::Ordering::Less,
-                (_, Value::Null, NullsOrder::First) => {
-                    std::cmp::Ordering::Greater
-                }
-                (Value::Null, _, NullsOrder::Last) => {
-                    std::cmp::Ordering::Greater
-                }
-                (_, Value::Null, NullsOrder::Last) => std::cmp::Ordering::Less,
-                _ => partial_cmp_values(a_val, b_val)
-                    .expect("Types should be comparable"),
-            };
+    logs.sort_unstable_by(|a, b| {
+        let a_val = a.get(&by).unwrap_or(&Value::Null);
+        let b_val = b.get(&by).unwrap_or(&Value::Null);
+        let order = match (a_val, b_val, nulls_order.clone()) {
+            (Value::Null, _, NullsOrder::First) => std::cmp::Ordering::Less,
+            (_, Value::Null, NullsOrder::First) => std::cmp::Ordering::Greater,
+            (Value::Null, _, NullsOrder::Last) => std::cmp::Ordering::Greater,
+            (_, Value::Null, NullsOrder::Last) => std::cmp::Ordering::Less,
+            _ => partial_cmp_values(a_val, b_val).expect("Types should be comparable"),
+        };
 
-            if sort.order == SortOrder::Asc {
-                order
-            } else {
-                order.reverse()
-            }
-        });
-
-        for log in logs {
-            yield log;
+        if sort.order == SortOrder::Asc {
+            order
+        } else {
+            order.reverse()
         }
-    }))
+    });
+
+    Ok(logs)
 }
