@@ -3,6 +3,7 @@ use std::sync::Arc;
 use async_stream::stream;
 use color_eyre::eyre::{bail, Context, Result};
 use futures_util::{pin_mut, stream::FuturesUnordered, StreamExt};
+use kinded::Kinded;
 use serde_json::to_string;
 use tokio::{select, spawn, sync::mpsc};
 use tracing::debug;
@@ -23,15 +24,18 @@ pub mod project;
 pub mod sort;
 pub mod vrl_utils;
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
+pub struct Scan {
+    pub collection: String,
+    pub connector: Arc<dyn Connector>,
+    pub splits: Vec<Arc<dyn Split>>,
+    pub handle: Arc<dyn QueryHandle>,
+}
+
+#[derive(Kinded, Clone, Debug)]
 pub enum WorkflowStep {
     /// Run a search query.
-    Scan {
-        collection: String,
-        connector: Arc<dyn Connector>,
-        splits: Vec<Arc<dyn Split>>,
-        handle: Arc<dyn QueryHandle>,
-    },
+    Scan(Scan),
 
     /// Filter some items.
     Filter(FilterAst),
@@ -103,14 +107,18 @@ impl Workflow {
 
                 async move {
                     match step {
-                        WorkflowStep::Scan {
+                        WorkflowStep::Scan(Scan {
                             collection,
                             connector,
                             splits,
                             handle,
-                        } => {
+                        }) => {
                             for (i, split) in splits.into_iter().enumerate() {
-                                let stream = connector.query(&collection, &*split, &*handle)?;
+                                let stream = connector.query(
+                                    &collection,
+                                    split.as_ref(),
+                                    handle.as_ref(),
+                                )?;
                                 stream_to_tx(stream, tx.clone(), &format!("scan({i})")).await?;
                             }
                         }

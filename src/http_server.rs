@@ -14,13 +14,17 @@ use tracing::{error, info, span, Level};
 use uuid::Uuid;
 
 use crate::{
-    connector::{Connector, Predicate},
+    connector::Connector,
+    optimizations::Optimizer,
     quickwit_connector::QuickwitConnector,
-    workflow::{filter::FilterAst, project::ProjectField, sort::Sort, Workflow, WorkflowStep},
+    workflow::{
+        filter::FilterAst, project::ProjectField, sort::Sort, Scan, Workflow, WorkflowStep,
+    },
 };
 
 struct State {
     connectors: HashMap<String, Arc<dyn Connector>>,
+    optimizer: Arc<Optimizer>,
 }
 
 type SharedState = Arc<RwLock<State>>;
@@ -29,9 +33,6 @@ async fn to_workflow(
     state: SharedState,
     query_steps: Vec<QueryStep>,
 ) -> Result<Workflow, HttpError> {
-    // The steps to run after all predicate pushdowns.
-    let mut steps = Vec::new();
-
     if query_steps.is_empty() {
         return Err(HttpError::new(
             StatusCode::BAD_REQUEST,
@@ -46,25 +47,18 @@ async fn to_workflow(
         ));
     };
 
-    let mut collection = String::new();
-    let mut connector = None;
-    let mut handle = None;
-    let mut predicated_steps = 1;
+    let mut steps = Vec::with_capacity(query_steps.len());
 
-    // Try to pushdown steps.
-    for step in query_steps.iter().skip(predicated_steps) {
-        let next_handle = handle.take().expect("query handle to exist");
-
-        let predicate = match step {
-            QueryStep::Scan(..) if connector.is_some() => {
+    for (i, step) in query_steps.into_iter().enumerate() {
+        match step {
+            QueryStep::Scan(..) if i > 0 => {
                 return Err(HttpError::new(
                     StatusCode::BAD_REQUEST,
                     "cannot scan inside a scan".to_string(),
                 ));
             }
-            QueryStep::Scan(connector_name, collection_name) => {
-                let Some(scan_connector) =
-                    state.read().await.connectors.get(connector_name).cloned()
+            QueryStep::Scan(connector_name, collection) => {
+                let Some(connector) = state.read().await.connectors.get(&connector_name).cloned()
                 else {
                     return Err(HttpError::new(
                         StatusCode::NOT_FOUND,
@@ -72,61 +66,21 @@ async fn to_workflow(
                     ));
                 };
 
-                info!(?collection_name, "Checking whether collection exists");
-                if !scan_connector.does_collection_exist(collection_name).await {
-                    info!(?collection_name, "Collection doesn't exist");
+                info!(?collection, "Checking whether collection exists");
+                if !connector.does_collection_exist(&collection).await {
+                    info!(?collection, "Collection doesn't exist");
                     return Err(HttpError::new(
                         StatusCode::NOT_FOUND,
-                        format!("collection '{}' not found", collection_name),
+                        format!("collection '{}' not found", collection),
                     ));
                 }
 
-                let next_handle = scan_connector.get_handle();
-                connector = Some(scan_connector);
-                collection = collection_name.clone();
-
-                // Workflow step will be created right after this loop.
-                Predicate::Pushdown(next_handle)
-            }
-            QueryStep::Filter(ast) => connector
-                .clone()
-                .expect("scan should be before filter")
-                .apply_filter(ast, next_handle),
-            QueryStep::Limit(max) => connector
-                .clone()
-                .expect("scan should be before limit")
-                .apply_limit(*max, next_handle),
-            // TODO: add project predicate pushdown.
-            _ => Predicate::None(next_handle),
-        };
-
-        match predicate {
-            Predicate::Pushdown(next_handle) => {
-                predicated_steps += 1;
-                handle = Some(next_handle);
-            }
-            Predicate::None(final_handle) => {
-                handle = Some(final_handle);
-                break;
-            }
-        }
-    }
-
-    steps.push(WorkflowStep::Scan {
-        collection,
-        connector: connector.clone().unwrap(),
-        splits: connector.clone().unwrap().get_splits().await,
-        handle: handle.expect("query handle to exist").into(),
-    });
-
-    // Add leftover steps.
-    for step in query_steps.into_iter().skip(predicated_steps) {
-        match step {
-            QueryStep::Scan(..) => {
-                return Err(HttpError::new(
-                    StatusCode::BAD_REQUEST,
-                    "cannot scan inside a scan".to_string(),
-                ));
+                steps.push(WorkflowStep::Scan(Scan {
+                    collection,
+                    connector: connector.clone(),
+                    splits: connector.clone().get_splits().await,
+                    handle: connector.get_handle().into(),
+                }));
             }
             QueryStep::Filter(ast) => {
                 steps.push(WorkflowStep::Filter(ast));
@@ -143,7 +97,8 @@ async fn to_workflow(
         }
     }
 
-    Ok(Workflow::new(steps))
+    let optimizer = state.read().await.optimizer.clone();
+    Ok(Workflow::new(optimizer.optimize(steps)))
 }
 
 #[derive(Debug, Deserialize)]
@@ -226,7 +181,10 @@ pub fn create_axum_app() -> Result<Router> {
             }"#,
         )?)) as Arc<dyn Connector>,
     );
-    let state = Arc::new(RwLock::new(State { connectors }));
+    let state = Arc::new(RwLock::new(State {
+        connectors,
+        optimizer: Arc::new(Optimizer::default()),
+    }));
 
     Ok(Router::new()
         .route("/query", post(post_query_handler))
