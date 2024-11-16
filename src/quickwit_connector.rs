@@ -15,7 +15,7 @@ use tokio::{
 use tracing::{debug, error, info, instrument};
 
 use crate::{
-    connector::{Connector, Predicate, QueryHandle, Split},
+    connector::{Connector, QueryHandle, Split},
     downcast_unwrap,
     log::{Log, LogTryStream},
     workflow::filter::FilterAst,
@@ -42,20 +42,19 @@ impl QueryHandle for QuickwitHandle {
     fn as_any(&self) -> &dyn Any {
         self
     }
-    fn into_any(self: Box<Self>) -> Box<dyn Any> {
-        self
-    }
 }
 
 impl QuickwitHandle {
-    fn with_filter(mut self, query: serde_json::Value) -> QuickwitHandle {
-        self.queries.push(query);
-        self
+    fn with_filter(&self, query: serde_json::Value) -> QuickwitHandle {
+        let mut handle = self.clone();
+        handle.queries.push(query);
+        handle
     }
 
-    fn with_limit(mut self, limit: u64) -> QuickwitHandle {
-        self.limit = Some(limit);
-        self
+    fn with_limit(&self, limit: u64) -> QuickwitHandle {
+        let mut handle = self.clone();
+        handle.limit = Some(limit);
+        handle
     }
 }
 
@@ -386,7 +385,7 @@ impl Connector for QuickwitConnector {
         let collection = collection.to_string();
         let scroll_timeout = self.config.scroll_timeout;
 
-        let handle = downcast_unwrap!(ref handle, QuickwitHandle);
+        let handle = downcast_unwrap!(handle, QuickwitHandle);
         let limit = handle.limit;
         let scroll_size = limit.map_or(self.config.scroll_size, |l| {
             l.min(self.config.scroll_size as u64) as u16
@@ -464,17 +463,18 @@ impl Connector for QuickwitConnector {
         }))
     }
 
-    fn apply_filter(&self, ast: &FilterAst, handle: Box<dyn QueryHandle>) -> Predicate {
+    fn apply_filter(
+        &self,
+        ast: &FilterAst,
+        handle: &dyn QueryHandle,
+    ) -> Option<Box<dyn QueryHandle>> {
         let handle = downcast_unwrap!(handle, QuickwitHandle);
-        let Some(filter) = ast_to_query(ast) else {
-            return Predicate::None(handle);
-        };
-        Predicate::Pushdown(Box::new(handle.with_filter(filter)))
+        Some(Box::new(handle.with_filter(ast_to_query(ast)?)))
     }
 
-    fn apply_limit(&self, max: u64, handle: Box<dyn QueryHandle>) -> Predicate {
+    fn apply_limit(&self, max: u64, handle: &dyn QueryHandle) -> Option<Box<dyn QueryHandle>> {
         let handle = downcast_unwrap!(handle, QuickwitHandle);
-        Predicate::Pushdown(Box::new(handle.with_limit(max)))
+        Some(Box::new(handle.with_limit(max)))
     }
 
     async fn close(self) {

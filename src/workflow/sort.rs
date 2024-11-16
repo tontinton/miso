@@ -9,7 +9,7 @@ use crate::{
     workflow::vrl_utils::partial_cmp_values,
 };
 
-#[derive(Debug, Deserialize, Default, PartialEq)]
+#[derive(Debug, Deserialize, Default, PartialEq, Clone)]
 #[serde(rename_all = "snake_case")]
 pub enum SortOrder {
     #[default]
@@ -25,7 +25,7 @@ pub enum NullsOrder {
     First,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct Sort {
     by: String,
 
