@@ -27,6 +27,8 @@ pub mod vrl_utils;
 pub enum WorkflowStep {
     /// Run a search query.
     Scan {
+        collection: String,
+        connector: Arc<dyn Connector>,
         splits: Vec<Arc<dyn Split>>,
         handle: Arc<dyn QueryHandle>,
     },
@@ -82,7 +84,7 @@ impl Workflow {
         Self { steps }
     }
 
-    pub async fn execute(self, connector: Arc<dyn Connector>, collection: &str) -> Result<()> {
+    pub async fn execute(self) -> Result<()> {
         if self.steps.is_empty() {
             return Ok(());
         }
@@ -98,12 +100,15 @@ impl Workflow {
             let handle = spawn({
                 let tx = tx.clone();
                 let rx = rx.take();
-                let collection = collection.to_string();
-                let connector = connector.clone();
 
                 async move {
                     match step {
-                        WorkflowStep::Scan { splits, handle } => {
+                        WorkflowStep::Scan {
+                            collection,
+                            connector,
+                            splits,
+                            handle,
+                        } => {
                             for (i, split) in splits.into_iter().enumerate() {
                                 let stream = connector.query(&collection, &*split, &*handle)?;
                                 stream_to_tx(stream, tx.clone(), &format!("scan({i})")).await?;

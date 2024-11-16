@@ -41,6 +41,14 @@ pub trait QueryHandle: Any + Debug + Send + Sync {
     fn into_any(self: Box<Self>) -> Box<dyn Any>;
 }
 
+pub enum Predicate {
+    /// A new handle containing the predicate.
+    Pushdown(Box<dyn QueryHandle>),
+
+    /// The input handle unmodified.
+    None(Box<dyn QueryHandle>),
+}
+
 #[async_trait]
 pub trait Connector: Debug + Send + Sync {
     async fn does_collection_exist(&self, collection: &str) -> bool;
@@ -60,22 +68,14 @@ pub trait Connector: Debug + Send + Sync {
     /// None means it can't predicate pushdown the filter AST provided.
     /// Called multiple times, which means that every time you predicate pushdown
     /// an expression you need to query them all with an AND, or the connector's equivalent.
-    fn apply_filter(
-        &self,
-        _ast: &FilterAst,
-        _handle: Box<dyn QueryHandle>,
-    ) -> Option<Box<dyn QueryHandle>> {
-        None
+    fn apply_filter(&self, _ast: &FilterAst, handle: Box<dyn QueryHandle>) -> Predicate {
+        Predicate::None(handle)
     }
 
     /// Returns the handle with limit to predicate pushdown.
     /// None means it can't predicate pushdown limit.
-    fn apply_limit(
-        &self,
-        _max: u64,
-        _handle: Box<dyn QueryHandle>,
-    ) -> Option<Box<dyn QueryHandle>> {
-        None
+    fn apply_limit(&self, _max: u64, handle: Box<dyn QueryHandle>) -> Predicate {
+        Predicate::None(handle)
     }
 
     async fn close(self);

@@ -15,7 +15,7 @@ use tokio::{
 use tracing::{debug, error, info, instrument};
 
 use crate::{
-    connector::{Connector, QueryHandle, Split},
+    connector::{Connector, Predicate, QueryHandle, Split},
     downcast_unwrap,
     log::{Log, LogTryStream},
     workflow::filter::FilterAst,
@@ -31,7 +31,7 @@ impl Split for QuickwitSplit {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 struct QuickwitHandle {
     queries: Vec<serde_json::Value>,
     limit: Option<u64>,
@@ -458,18 +458,17 @@ impl Connector for QuickwitConnector {
         }))
     }
 
-    fn apply_filter(
-        &self,
-        ast: &FilterAst,
-        handle: Box<dyn QueryHandle>,
-    ) -> Option<Box<dyn QueryHandle>> {
+    fn apply_filter(&self, ast: &FilterAst, handle: Box<dyn QueryHandle>) -> Predicate {
         let handle = downcast_unwrap!(handle, QuickwitHandle);
-        Some(Box::new(handle.with_filter(ast_to_query(ast)?)))
+        let Some(filter) = ast_to_query(ast) else {
+            return Predicate::None(handle);
+        };
+        Predicate::Pushdown(Box::new(handle.with_filter(filter)))
     }
 
-    fn apply_limit(&self, max: u64, handle: Box<dyn QueryHandle>) -> Option<Box<dyn QueryHandle>> {
+    fn apply_limit(&self, max: u64, handle: Box<dyn QueryHandle>) -> Predicate {
         let handle = downcast_unwrap!(handle, QuickwitHandle);
-        Some(Box::new(handle.with_limit(max)))
+        Predicate::Pushdown(Box::new(handle.with_limit(max)))
     }
 
     async fn close(self) {
