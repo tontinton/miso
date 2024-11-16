@@ -34,12 +34,14 @@ async fn to_workflow(query_steps: Vec<QueryStep>, connector: &dyn Connector) -> 
 
     // Try to pushdown steps.
     for step in &query_steps {
+        let current_handle = handle.take().expect("query handle to exist");
+
         match step {
             QueryStep::Filter(ast) => {
-                handle = connector.apply_filter(ast, handle.take().expect("query handle to exist"));
+                handle = connector.apply_filter(ast, current_handle);
             }
             QueryStep::Limit(max) => {
-                handle = connector.apply_limit(*max, handle.take().expect("query handle to exist"));
+                handle = connector.apply_limit(*max, current_handle);
             }
             // TODO: add project predicate pushdown.
             _ => {
