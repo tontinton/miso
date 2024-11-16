@@ -404,10 +404,16 @@ impl Connector for QuickwitConnector {
             );
             let query = json!(map);
 
-            info!("Quickwit search '{}': {}", collection, to_string(&query)?);
+            info!(
+                ?scroll_size,
+                ?limit,
+                "Quickwit search '{}': {}",
+                collection,
+                to_string(&query)?
+            );
             Some(query)
         } else {
-            info!("Quickwit search '{}'", collection);
+            info!(?scroll_size, ?limit, "Quickwit search '{}'", collection);
             None
         };
 
