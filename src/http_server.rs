@@ -94,6 +94,9 @@ async fn to_workflow(
             QueryStep::Sort(sort) => {
                 steps.push(WorkflowStep::Sort(sort));
             }
+            QueryStep::Top(sort, max) => {
+                steps.push(WorkflowStep::TopN(sort, max));
+            }
         }
     }
 
@@ -109,6 +112,7 @@ enum QueryStep {
     Project(Vec<ProjectField>),
     Limit(u64),
     Sort(Sort),
+    Top(Sort, u64),
 }
 
 #[derive(Deserialize)]
