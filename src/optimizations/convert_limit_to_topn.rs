@@ -2,9 +2,9 @@ use crate::{pattern, workflow::WorkflowStep};
 
 use super::{Optimization, Pattern};
 
-pub struct SortLimitToTopN;
+pub struct ConvertSortLimitToTopN;
 
-impl Optimization for SortLimitToTopN {
+impl Optimization for ConvertSortLimitToTopN {
     fn pattern(&self) -> Pattern {
         pattern!(Sort -> Limit)
     }
