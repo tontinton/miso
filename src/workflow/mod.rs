@@ -6,6 +6,7 @@ use futures_util::{pin_mut, stream::FuturesUnordered, StreamExt};
 use kinded::Kinded;
 use serde_json::to_string;
 use tokio::{select, spawn, sync::mpsc};
+use topn::topn_stream;
 use tracing::debug;
 
 use crate::{
@@ -22,6 +23,7 @@ pub mod filter;
 pub mod limit;
 pub mod project;
 pub mod sort;
+pub mod topn;
 pub mod vrl_utils;
 
 #[derive(Clone, Debug)]
@@ -48,6 +50,9 @@ pub enum WorkflowStep {
 
     /// Sort items.
     Sort(Sort),
+
+    /// Basically like Sort -> Limit, but more memory efficient (holding only N items).
+    TopN(Sort, u64),
 }
 
 #[derive(Debug)]
@@ -137,6 +142,10 @@ impl Workflow {
                         WorkflowStep::Sort(sort) => {
                             let logs = sort_stream(sort, rx_stream(rx.unwrap())).await?;
                             logs_vec_to_tx(logs, tx, "sort").await?;
+                        }
+                        WorkflowStep::TopN(sort, limit) => {
+                            let logs = topn_stream(sort, limit, rx_stream(rx.unwrap())).await?;
+                            logs_vec_to_tx(logs, tx, "top-n").await?;
                         }
                     }
 

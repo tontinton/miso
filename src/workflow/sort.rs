@@ -27,13 +27,13 @@ pub enum NullsOrder {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Sort {
-    by: String,
+    pub by: String,
 
     #[serde(default)]
-    order: SortOrder,
+    pub order: SortOrder,
 
     #[serde(default)]
-    nulls: NullsOrder,
+    pub nulls: NullsOrder,
 }
 
 async fn collect_logs(by: &KeyString, mut input_stream: LogStream) -> Result<Vec<Log>> {
@@ -42,17 +42,19 @@ async fn collect_logs(by: &KeyString, mut input_stream: LogStream) -> Result<Vec
     let mut logs = Vec::new();
     while let Some(log) = input_stream.next().await {
         if let Some(value) = log.get(by) {
-            let value_type = std::mem::discriminant(value);
-            if let Some(t) = tracked_type {
-                if t != value_type {
-                    bail!(
-                        "Cannot sort over differing types: {:?} != {:?}",
-                        t,
-                        value_type
-                    );
+            if value != &Value::Null {
+                let value_type = std::mem::discriminant(value);
+                if let Some(t) = tracked_type {
+                    if t != value_type {
+                        bail!(
+                            "Cannot sort over differing types: {:?} != {:?}",
+                            t,
+                            value_type
+                        );
+                    }
+                } else {
+                    tracked_type = Some(value_type);
                 }
-            } else {
-                tracked_type = Some(value_type);
             }
         }
 
