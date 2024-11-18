@@ -1,12 +1,16 @@
+use push_limit_into_topn::PushLimitIntoTopN;
 use smallvec::SmallVec;
 
 use crate::workflow::{WorkflowStep, WorkflowStepKind};
 use push_filter_into_scan::PushFilterIntoScan;
+use push_limit_into_limit::PushLimitIntoLimit;
 use push_limit_into_scan::PushLimitIntoScan;
 use sort_limit_to_topn::SortLimitToTopN;
 
 mod push_filter_into_scan;
+mod push_limit_into_limit;
 mod push_limit_into_scan;
+mod push_limit_into_topn;
 mod sort_limit_to_topn;
 
 pub type Pattern = SmallVec<[WorkflowStepKind; 4]>;
@@ -35,9 +39,13 @@ impl Default for Optimizer {
     fn default() -> Self {
         Self {
             optimizations: vec![
+                // Filter.
                 Box::new(PushFilterIntoScan),
+                // Limit.
+                Box::new(PushLimitIntoLimit),
                 Box::new(PushLimitIntoScan),
                 Box::new(SortLimitToTopN),
+                Box::new(PushLimitIntoTopN),
             ],
         }
     }
