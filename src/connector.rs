@@ -7,6 +7,7 @@ use color_eyre::eyre::Result;
 
 use crate::log::LogTryStream;
 use crate::workflow::filter::FilterAst;
+use crate::workflow::sort::Sort;
 
 #[macro_export]
 macro_rules! downcast_unwrap {
@@ -58,6 +59,17 @@ pub trait Connector: Debug + Send + Sync {
     /// Returns the handle with limit to predicate pushdown.
     /// None means it can't predicate pushdown limit.
     fn apply_limit(&self, _max: u32, _handle: &dyn QueryHandle) -> Option<Box<dyn QueryHandle>> {
+        None
+    }
+
+    /// Returns the handle with sort order and limit to predicate pushdown.
+    /// None means it can't predicate pushdown top-n.
+    fn apply_topn(
+        &self,
+        _sort: &Sort,
+        _max: u32,
+        _handle: &dyn QueryHandle,
+    ) -> Option<Box<dyn QueryHandle>> {
         None
     }
 
