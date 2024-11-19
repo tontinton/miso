@@ -3,12 +3,12 @@ use push_topn_into_scan::PushTopNIntoScan;
 use smallvec::SmallVec;
 
 use crate::workflow::{WorkflowStep, WorkflowStepKind};
-use convert_limit_to_topn::ConvertSortLimitToTopN;
+use convert_sort_limit_to_topn::ConvertSortLimitToTopN;
 use push_filter_into_scan::PushFilterIntoScan;
 use push_limit_into_limit::PushLimitIntoLimit;
 use push_limit_into_scan::PushLimitIntoScan;
 
-mod convert_limit_to_topn;
+mod convert_sort_limit_to_topn;
 mod push_filter_into_scan;
 mod push_limit_into_limit;
 mod push_limit_into_scan;
