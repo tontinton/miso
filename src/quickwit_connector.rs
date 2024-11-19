@@ -18,7 +18,7 @@ use crate::{
     connector::{Connector, QueryHandle, Split},
     downcast_unwrap,
     log::{Log, LogTryStream},
-    workflow::filter::FilterAst,
+    workflow::{filter::FilterAst, sort::Sort},
 };
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -34,6 +34,7 @@ impl Split for QuickwitSplit {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 struct QuickwitHandle {
     queries: Vec<serde_json::Value>,
+    sort: Option<serde_json::Value>,
     limit: Option<u32>,
 }
 
@@ -54,6 +55,13 @@ impl QuickwitHandle {
     fn with_limit(&self, limit: u32) -> QuickwitHandle {
         let mut handle = self.clone();
         handle.limit = Some(limit);
+        handle
+    }
+
+    fn with_topn(&self, sort: serde_json::Value, limit: u32) -> QuickwitHandle {
+        let mut handle = self.clone();
+        handle.limit = Some(limit);
+        handle.sort = Some(sort);
         handle
     }
 }
@@ -142,7 +150,7 @@ pub struct QuickwitConnector {
     shutdown_tx: watch::Sender<()>,
 }
 
-fn ast_to_query(ast: &FilterAst) -> Option<serde_json::Value> {
+fn filter_ast_to_query(ast: &FilterAst) -> Option<serde_json::Value> {
     #[allow(unreachable_patterns)]
     Some(match ast {
         FilterAst::Or(filters) => {
@@ -150,7 +158,7 @@ fn ast_to_query(ast: &FilterAst) -> Option<serde_json::Value> {
             json!({
                 "bool": {
                     "should": filters.iter()
-                        .map(ast_to_query)
+                        .map(filter_ast_to_query)
                         .collect::<Option<Vec<_>>>()?,
                 }
             })
@@ -160,7 +168,7 @@ fn ast_to_query(ast: &FilterAst) -> Option<serde_json::Value> {
             json!({
                 "bool": {
                     "must": filters.iter()
-                        .map(ast_to_query)
+                        .map(filter_ast_to_query)
                         .collect::<Option<Vec<_>>>()?,
                 }
             })
@@ -391,9 +399,10 @@ impl Connector for QuickwitConnector {
             l.min(self.config.scroll_size as u32) as u16
         });
 
-        let query = if !handle.queries.is_empty() {
-            let mut map = BTreeMap::new();
-            map.insert(
+        let mut query_map = BTreeMap::new();
+
+        if !handle.queries.is_empty() {
+            query_map.insert(
                 "query",
                 json!({
                     "bool": {
@@ -401,20 +410,25 @@ impl Connector for QuickwitConnector {
                     }
                 }),
             );
-            let query = json!(map);
+        }
 
-            info!(
-                ?scroll_size,
-                ?limit,
-                "Quickwit search '{}': {}",
-                collection,
-                to_string(&query)?
-            );
-            Some(query)
+        if let Some(sort) = &handle.sort {
+            query_map.insert("sort", json!([sort.clone()]));
+        }
+
+        let query = if !query_map.is_empty() {
+            Some(json!(query_map))
         } else {
-            info!(?scroll_size, ?limit, "Quickwit search '{}'", collection);
             None
         };
+
+        info!(
+            ?scroll_size,
+            ?limit,
+            "Quickwit search '{}': {}",
+            collection,
+            to_string(&query)?
+        );
 
         Ok(Box::pin(try_stream! {
             if let Some(limit) = limit {
@@ -469,12 +483,28 @@ impl Connector for QuickwitConnector {
         handle: &dyn QueryHandle,
     ) -> Option<Box<dyn QueryHandle>> {
         let handle = downcast_unwrap!(handle, QuickwitHandle);
-        Some(Box::new(handle.with_filter(ast_to_query(ast)?)))
+        Some(Box::new(handle.with_filter(filter_ast_to_query(ast)?)))
     }
 
     fn apply_limit(&self, max: u32, handle: &dyn QueryHandle) -> Option<Box<dyn QueryHandle>> {
         let handle = downcast_unwrap!(handle, QuickwitHandle);
         Some(Box::new(handle.with_limit(max)))
+    }
+
+    fn apply_topn(
+        &self,
+        sort: &Sort,
+        max: u32,
+        handle: &dyn QueryHandle,
+    ) -> Option<Box<dyn QueryHandle>> {
+        let handle = downcast_unwrap!(handle, QuickwitHandle);
+        let sort = json!({
+            &sort.by: {
+                "order": &sort.order,
+                "nulls": &sort.nulls,
+            }
+        });
+        Some(Box::new(handle.with_topn(sort, max)))
     }
 
     async fn close(self) {
