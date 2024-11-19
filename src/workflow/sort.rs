@@ -1,6 +1,6 @@
 use color_eyre::eyre::{bail, Result};
 use futures_util::StreamExt;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tracing::info;
 use vrl::{core::Value, value::KeyString};
 
@@ -9,7 +9,7 @@ use crate::{
     workflow::vrl_utils::partial_cmp_values,
 };
 
-#[derive(Debug, Deserialize, Default, PartialEq, Clone)]
+#[derive(Debug, Serialize, Deserialize, Default, PartialEq, Clone)]
 #[serde(rename_all = "snake_case")]
 pub enum SortOrder {
     #[default]
@@ -17,7 +17,7 @@ pub enum SortOrder {
     Desc,
 }
 
-#[derive(Debug, Deserialize, Default, PartialEq, Clone)]
+#[derive(Debug, Serialize, Deserialize, Default, PartialEq, Clone)]
 #[serde(rename_all = "snake_case")]
 pub enum NullsOrder {
     #[default]
