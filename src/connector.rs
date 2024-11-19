@@ -57,7 +57,7 @@ pub trait Connector: Debug + Send + Sync {
 
     /// Returns the handle with limit to predicate pushdown.
     /// None means it can't predicate pushdown limit.
-    fn apply_limit(&self, _max: u64, _handle: &dyn QueryHandle) -> Option<Box<dyn QueryHandle>> {
+    fn apply_limit(&self, _max: u32, _handle: &dyn QueryHandle) -> Option<Box<dyn QueryHandle>> {
         None
     }
 

@@ -59,7 +59,7 @@ impl PartialEq for Sortable {
     }
 }
 
-pub async fn topn_stream(sort: Sort, limit: u64, mut input_stream: LogStream) -> Result<Vec<Log>> {
+pub async fn topn_stream(sort: Sort, limit: u32, mut input_stream: LogStream) -> Result<Vec<Log>> {
     info!(
         "Collecting top {} sorted by '{}' (order: {:?}, nulls: {:?})",
         limit, sort.by, sort.order, sort.nulls,

@@ -34,7 +34,7 @@ impl Split for QuickwitSplit {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 struct QuickwitHandle {
     queries: Vec<serde_json::Value>,
-    limit: Option<u64>,
+    limit: Option<u32>,
 }
 
 #[typetag::serde]
@@ -51,7 +51,7 @@ impl QuickwitHandle {
         handle
     }
 
-    fn with_limit(&self, limit: u64) -> QuickwitHandle {
+    fn with_limit(&self, limit: u32) -> QuickwitHandle {
         let mut handle = self.clone();
         handle.limit = Some(limit);
         handle
@@ -388,7 +388,7 @@ impl Connector for QuickwitConnector {
         let handle = downcast_unwrap!(handle, QuickwitHandle);
         let limit = handle.limit;
         let scroll_size = limit.map_or(self.config.scroll_size, |l| {
-            l.min(self.config.scroll_size as u64) as u16
+            l.min(self.config.scroll_size as u32) as u16
         });
 
         let query = if !handle.queries.is_empty() {
@@ -472,7 +472,7 @@ impl Connector for QuickwitConnector {
         Some(Box::new(handle.with_filter(ast_to_query(ast)?)))
     }
 
-    fn apply_limit(&self, max: u64, handle: &dyn QueryHandle) -> Option<Box<dyn QueryHandle>> {
+    fn apply_limit(&self, max: u32, handle: &dyn QueryHandle) -> Option<Box<dyn QueryHandle>> {
         let handle = downcast_unwrap!(handle, QuickwitHandle);
         Some(Box::new(handle.with_limit(max)))
     }

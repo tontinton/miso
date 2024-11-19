@@ -110,9 +110,9 @@ enum QueryStep {
     Scan(/*connector=*/ String, /*collection=*/ String),
     Filter(FilterAst),
     Project(Vec<ProjectField>),
-    Limit(u64),
+    Limit(u32),
     Sort(Sort),
-    Top(Sort, u64),
+    Top(Sort, u32),
 }
 
 #[derive(Deserialize)]
