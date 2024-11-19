@@ -13,11 +13,11 @@ impl Optimization for PushLimitIntoTopN {
         let WorkflowStep::Limit(a) = &steps[0] else {
             return None;
         };
-        let WorkflowStep::TopN(sort, b) = &steps[1] else {
+        let WorkflowStep::TopN(sorts, b) = &steps[1] else {
             return None;
         };
         Some(vec![WorkflowStep::TopN(
-            sort.clone(),
+            sorts.clone(),
             std::cmp::min(*a, *b),
         )])
     }

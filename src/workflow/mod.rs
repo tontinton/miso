@@ -49,10 +49,10 @@ pub enum WorkflowStep {
     Limit(u32),
 
     /// Sort items.
-    Sort(Sort),
+    Sort(Vec<Sort>),
 
     /// Basically like Sort -> Limit, but more memory efficient (holding only N items).
-    TopN(Sort, u32),
+    TopN(Vec<Sort>, u32),
 }
 
 #[derive(Debug)]
@@ -139,12 +139,12 @@ impl Workflow {
                             let stream = limit_stream(limit, rx_stream(rx.unwrap()))?;
                             stream_to_tx(stream, tx, "limit").await?;
                         }
-                        WorkflowStep::Sort(sort) => {
-                            let logs = sort_stream(sort, rx_stream(rx.unwrap())).await?;
+                        WorkflowStep::Sort(sorts) => {
+                            let logs = sort_stream(sorts, rx_stream(rx.unwrap())).await?;
                             logs_vec_to_tx(logs, tx, "sort").await?;
                         }
-                        WorkflowStep::TopN(sort, limit) => {
-                            let logs = topn_stream(sort, limit, rx_stream(rx.unwrap())).await?;
+                        WorkflowStep::TopN(sorts, limit) => {
+                            let logs = topn_stream(sorts, limit, rx_stream(rx.unwrap())).await?;
                             logs_vec_to_tx(logs, tx, "top-n").await?;
                         }
                     }

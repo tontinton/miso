@@ -66,7 +66,7 @@ pub trait Connector: Debug + Send + Sync {
     /// None means it can't predicate pushdown top-n.
     fn apply_topn(
         &self,
-        _sort: &Sort,
+        _sorts: &[Sort],
         _max: u32,
         _handle: &dyn QueryHandle,
     ) -> Option<Box<dyn QueryHandle>> {

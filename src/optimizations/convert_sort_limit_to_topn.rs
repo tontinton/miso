@@ -10,12 +10,12 @@ impl Optimization for ConvertSortLimitToTopN {
     }
 
     fn apply(&self, steps: &[WorkflowStep]) -> Option<Vec<WorkflowStep>> {
-        let WorkflowStep::Sort(sort) = steps[0].clone() else {
+        let WorkflowStep::Sort(sorts) = steps[0].clone() else {
             return None;
         };
         let WorkflowStep::Limit(limit) = steps[1].clone() else {
             return None;
         };
-        Some(vec![WorkflowStep::TopN(sort, limit)])
+        Some(vec![WorkflowStep::TopN(sorts, limit)])
     }
 }

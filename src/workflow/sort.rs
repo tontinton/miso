@@ -1,3 +1,5 @@
+use std::{cmp::Ordering, fmt};
+
 use color_eyre::eyre::{bail, Result};
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
@@ -36,24 +38,112 @@ pub struct Sort {
     pub nulls: NullsOrder,
 }
 
-async fn collect_logs(by: &KeyString, mut input_stream: LogStream) -> Result<Vec<Log>> {
-    let mut tracked_type = None;
+#[derive(Debug)]
+pub struct SortConfig {
+    by: Vec<KeyString>,
+    pub sort_orders: Vec<SortOrder>,
+    nulls_orders: Vec<NullsOrder>,
+}
+
+impl SortConfig {
+    pub fn new(sorts: &[Sort]) -> Self {
+        Self {
+            by: sorts.iter().map(|sort| sort.by.clone().into()).collect(),
+            sort_orders: sorts.iter().map(|sort| sort.clone().order).collect(),
+            nulls_orders: sorts.iter().map(|sort| sort.clone().nulls).collect(),
+        }
+    }
+}
+
+impl fmt::Display for SortOrder {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            SortOrder::Asc => write!(f, "asc"),
+            SortOrder::Desc => write!(f, "desc"),
+        }
+    }
+}
+
+impl fmt::Display for NullsOrder {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            NullsOrder::Last => write!(f, "last"),
+            NullsOrder::First => write!(f, "first"),
+        }
+    }
+}
+
+impl fmt::Display for Sort {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{} (order: {}, nulls: {})",
+            self.by, self.order, self.nulls
+        )
+    }
+}
+
+pub fn cmp_logs(a: &Log, b: &Log, config: &SortConfig) -> Option<Ordering> {
+    for ((key, sort_order), nulls_order) in config
+        .by
+        .iter()
+        .zip(&config.sort_orders)
+        .zip(&config.nulls_orders)
+    {
+        let a_val = a.get(key).unwrap_or(&Value::Null);
+        let b_val = b.get(key).unwrap_or(&Value::Null);
+        let mut any_null = true;
+        let ordering = match (a_val, b_val, nulls_order) {
+            (Value::Null, Value::Null, _) => Ordering::Equal,
+            (Value::Null, _, NullsOrder::First) => Ordering::Less,
+            (_, Value::Null, NullsOrder::First) => Ordering::Greater,
+            (Value::Null, _, NullsOrder::Last) => Ordering::Greater,
+            (_, Value::Null, NullsOrder::Last) => Ordering::Less,
+            _ => {
+                any_null = false;
+                partial_cmp_values(a_val, b_val)?
+            }
+        };
+
+        if ordering == Ordering::Equal {
+            continue;
+        }
+
+        if any_null {
+            return Some(ordering);
+        }
+
+        return Some(if *sort_order == SortOrder::Asc {
+            ordering
+        } else {
+            ordering.reverse()
+        });
+    }
+
+    Some(Ordering::Equal)
+}
+
+async fn collect_logs(by: &[KeyString], mut input_stream: LogStream) -> Result<Vec<Log>> {
+    let mut tracked_types = vec![None; by.len()];
 
     let mut logs = Vec::new();
     while let Some(log) = input_stream.next().await {
-        if let Some(value) = log.get(by) {
-            if value != &Value::Null {
-                let value_type = std::mem::discriminant(value);
-                if let Some(t) = tracked_type {
-                    if t != value_type {
-                        bail!(
-                            "Cannot sort over differing types: {:?} != {:?}",
-                            t,
-                            value_type
-                        );
+        for (tracked_type, key) in tracked_types.iter_mut().zip(by) {
+            if let Some(value) = log.get(key) {
+                if value != &Value::Null {
+                    let value_type = std::mem::discriminant(value);
+                    if let Some(t) = tracked_type {
+                        if *t != value_type {
+                            bail!(
+                                "Cannot sort over differing types (key '{}'): {:?} != {:?}",
+                                key,
+                                *t,
+                                value_type
+                            );
+                        }
+                    } else {
+                        *tracked_type = Some(value_type);
                     }
-                } else {
-                    tracked_type = Some(value_type);
                 }
             }
         }
@@ -64,33 +154,21 @@ async fn collect_logs(by: &KeyString, mut input_stream: LogStream) -> Result<Vec
     Ok(logs)
 }
 
-pub async fn sort_stream(sort: Sort, input_stream: LogStream) -> Result<Vec<Log>> {
+pub async fn sort_stream(sorts: Vec<Sort>, input_stream: LogStream) -> Result<Vec<Log>> {
     info!(
-        "Sorting by '{}' (order: {:?}, nulls: {:?})",
-        sort.by, sort.order, sort.nulls
+        "Sorting by {}",
+        sorts
+            .iter()
+            .map(|sort| sort.to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
     );
 
-    let by: KeyString = sort.by.into();
-    let nulls_order = sort.nulls;
-
-    let mut logs = collect_logs(&by, input_stream).await?;
+    let config = SortConfig::new(&sorts);
+    let mut logs = collect_logs(&config.by, input_stream).await?;
 
     logs.sort_unstable_by(|a, b| {
-        let a_val = a.get(&by).unwrap_or(&Value::Null);
-        let b_val = b.get(&by).unwrap_or(&Value::Null);
-        let order = match (a_val, b_val, nulls_order.clone()) {
-            (Value::Null, _, NullsOrder::First) => std::cmp::Ordering::Less,
-            (_, Value::Null, NullsOrder::First) => std::cmp::Ordering::Greater,
-            (Value::Null, _, NullsOrder::Last) => std::cmp::Ordering::Greater,
-            (_, Value::Null, NullsOrder::Last) => std::cmp::Ordering::Less,
-            _ => partial_cmp_values(a_val, b_val).expect("Types should be comparable"),
-        };
-
-        if sort.order == SortOrder::Asc {
-            order
-        } else {
-            order.reverse()
-        }
+        cmp_logs(a, b, &config).expect("types should have been validated")
     });
 
     Ok(logs)

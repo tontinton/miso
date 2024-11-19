@@ -2,104 +2,67 @@ use std::{cmp::Ordering, collections::BinaryHeap};
 
 use futures_util::StreamExt;
 
-use color_eyre::{eyre::bail, Result};
+use color_eyre::Result;
 use tracing::info;
-use vrl::{core::Value, value::KeyString};
 
-use crate::{
-    log::{Log, LogStream},
-    workflow::sort::SortOrder,
-};
+use crate::log::{Log, LogStream};
 
-use super::{
-    sort::{NullsOrder, Sort},
-    vrl_utils::partial_cmp_values,
-};
+use super::sort::{cmp_logs, Sort, SortConfig};
 
 #[derive(Debug)]
-struct Sortable {
+struct Sortable<'a> {
     log: Log,
-    value: Value,
-    smallest: bool,
-    nulls: NullsOrder,
+    config: &'a SortConfig,
 }
 
-impl Ord for Sortable {
+impl Ord for Sortable<'_> {
     fn cmp(&self, other: &Self) -> Ordering {
-        match (&self.value, &other.value, &self.nulls) {
-            (Value::Null, Value::Null, _) => Ordering::Equal,
-            (Value::Null, _, NullsOrder::First) => Ordering::Less,
-            (_, Value::Null, NullsOrder::First) => Ordering::Greater,
-            (Value::Null, _, NullsOrder::Last) => Ordering::Greater,
-            (_, Value::Null, NullsOrder::Last) => Ordering::Less,
-            _ => {
-                let ord = partial_cmp_values(&self.value, &other.value)
-                    .expect("types should have been validated");
-                if !self.smallest {
-                    ord.reverse()
-                } else {
-                    ord
-                }
-            }
+        if let Some(ordering) = cmp_logs(&self.log, &other.log, self.config) {
+            ordering
+        } else {
+            // On wrong type, provide the opposite to get the log out of the heap.
+            Ordering::Greater
         }
     }
 }
 
-impl PartialOrd for Sortable {
+impl PartialOrd for Sortable<'_> {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
 
-impl Eq for Sortable {}
+impl Eq for Sortable<'_> {}
 
-impl PartialEq for Sortable {
+impl PartialEq for Sortable<'_> {
     fn eq(&self, other: &Self) -> bool {
         self.cmp(other) == Ordering::Equal
     }
 }
 
-pub async fn topn_stream(sort: Sort, limit: u32, mut input_stream: LogStream) -> Result<Vec<Log>> {
+pub async fn topn_stream(
+    sorts: Vec<Sort>,
+    limit: u32,
+    mut input_stream: LogStream,
+) -> Result<Vec<Log>> {
     info!(
-        "Collecting top {} sorted by '{}' (order: {:?}, nulls: {:?})",
-        limit, sort.by, sort.order, sort.nulls,
+        "Collecting top {} sorted by {}",
+        limit,
+        sorts
+            .iter()
+            .map(|sort| sort.to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
     );
 
-    let by: KeyString = sort.by.into();
-    let nulls = sort.nulls;
-    let smallest = sort.order == SortOrder::Asc;
+    let config = SortConfig::new(&sorts);
 
-    let mut tracked_type = None;
     let mut heap = BinaryHeap::new();
-    let mut number_of_nulls = 0;
 
     while let Some(log) = input_stream.next().await {
-        let Some(value) = log.get(&by) else {
-            continue;
-        };
-
-        if value != &Value::Null {
-            let value_type = std::mem::discriminant(value);
-            if let Some(t) = tracked_type {
-                if t != value_type {
-                    bail!(
-                        "Cannot sort over differing types: {:?} != {:?}",
-                        t,
-                        value_type
-                    );
-                }
-            } else {
-                tracked_type = Some(value_type);
-            }
-        } else {
-            number_of_nulls += 1;
-        }
-
         let sortable = Sortable {
-            value: value.clone(),
             log,
-            smallest,
-            nulls: nulls.clone(),
+            config: &config,
         };
 
         if heap.len() < limit as usize {
@@ -110,12 +73,6 @@ pub async fn topn_stream(sort: Sort, limit: u32, mut input_stream: LogStream) ->
                 heap.pop();
                 heap.push(sortable);
             }
-        }
-
-        if nulls == NullsOrder::First && number_of_nulls >= limit {
-            // Optimization: when doing nulls first, once we get N amount of nulls, no reason to
-            // continue.
-            break;
         }
     }
 

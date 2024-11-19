@@ -13,13 +13,13 @@ impl Optimization for PushTopNIntoScan {
         let WorkflowStep::Scan(mut scan) = steps[0].clone() else {
             return None;
         };
-        let WorkflowStep::TopN(sort, max) = &steps[1] else {
+        let WorkflowStep::TopN(sorts, max) = &steps[1] else {
             return None;
         };
 
         scan.handle = scan
             .connector
-            .apply_topn(sort, *max, scan.handle.as_ref())?
+            .apply_topn(sorts, *max, scan.handle.as_ref())?
             .into();
 
         Some(vec![WorkflowStep::Scan(scan)])

@@ -111,8 +111,8 @@ enum QueryStep {
     Filter(FilterAst),
     Project(Vec<ProjectField>),
     Limit(u32),
-    Sort(Sort),
-    Top(Sort, u32),
+    Sort(Vec<Sort>),
+    Top(Vec<Sort>, u32),
 }
 
 #[derive(Deserialize)]

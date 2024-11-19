@@ -34,7 +34,7 @@ impl Split for QuickwitSplit {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 struct QuickwitHandle {
     queries: Vec<serde_json::Value>,
-    sort: Option<serde_json::Value>,
+    sorts: Option<serde_json::Value>,
     limit: Option<u32>,
 }
 
@@ -61,7 +61,7 @@ impl QuickwitHandle {
     fn with_topn(&self, sort: serde_json::Value, limit: u32) -> QuickwitHandle {
         let mut handle = self.clone();
         handle.limit = Some(limit);
-        handle.sort = Some(sort);
+        handle.sorts = Some(sort);
         handle
     }
 }
@@ -412,8 +412,8 @@ impl Connector for QuickwitConnector {
             );
         }
 
-        if let Some(sort) = &handle.sort {
-            query_map.insert("sort", json!([sort.clone()]));
+        if let Some(sorts) = &handle.sorts {
+            query_map.insert("sort", sorts.clone());
         }
 
         let query = if !query_map.is_empty() {
@@ -493,18 +493,25 @@ impl Connector for QuickwitConnector {
 
     fn apply_topn(
         &self,
-        sort: &Sort,
+        sorts: &[Sort],
         max: u32,
         handle: &dyn QueryHandle,
     ) -> Option<Box<dyn QueryHandle>> {
         let handle = downcast_unwrap!(handle, QuickwitHandle);
-        let sort = json!({
-            &sort.by: {
-                "order": &sort.order,
-                "nulls": &sort.nulls,
-            }
-        });
-        Some(Box::new(handle.with_topn(sort, max)))
+        let sorts = serde_json::Value::Array(
+            sorts
+                .iter()
+                .map(|sort| {
+                    json!({
+                        &sort.by: {
+                            "order": &sort.order,
+                            "nulls": &sort.nulls,
+                        }
+                    })
+                })
+                .collect(),
+        );
+        Some(Box::new(handle.with_topn(sorts, max)))
     }
 
     async fn close(self) {
