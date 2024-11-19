@@ -44,7 +44,7 @@ pub trait Connector: Debug + Send + Sync {
         handle: &dyn QueryHandle,
     ) -> Result<LogTryStream>;
 
-    /// Returns the filter AST the connector should predicate pushdown.
+    /// Returns the handle with the filter AST the connector should predicate pushdown.
     /// None means it can't predicate pushdown the filter AST provided.
     /// Called multiple times, which means that every time you predicate pushdown
     /// an expression you need to query them all with an AND, or the connector's equivalent.
