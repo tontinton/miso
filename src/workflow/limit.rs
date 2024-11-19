@@ -6,7 +6,7 @@ use tracing::info;
 
 use crate::log::{LogStream, LogTryStream};
 
-pub fn limit_stream(limit: u64, mut input_stream: LogStream) -> Result<LogTryStream> {
+pub fn limit_stream(limit: u32, mut input_stream: LogStream) -> Result<LogTryStream> {
     info!("Limitting to {limit}");
 
     Ok(Box::pin(try_stream! {

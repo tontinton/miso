@@ -46,13 +46,13 @@ pub enum WorkflowStep {
     Project(Vec<ProjectField>),
 
     /// Limit to X amount of items.
-    Limit(u64),
+    Limit(u32),
 
     /// Sort items.
     Sort(Sort),
 
     /// Basically like Sort -> Limit, but more memory efficient (holding only N items).
-    TopN(Sort, u64),
+    TopN(Sort, u32),
 }
 
 #[derive(Debug)]
