@@ -17,7 +17,7 @@ pub enum SortOrder {
     Desc,
 }
 
-#[derive(Debug, Deserialize, Default, Clone)]
+#[derive(Debug, Deserialize, Default, PartialEq, Clone)]
 #[serde(rename_all = "snake_case")]
 pub enum NullsOrder {
     #[default]
