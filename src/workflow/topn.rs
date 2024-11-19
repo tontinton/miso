@@ -71,6 +71,7 @@ pub async fn topn_stream(sort: Sort, limit: u64, mut input_stream: LogStream) ->
 
     let mut tracked_type = None;
     let mut heap = BinaryHeap::new();
+    let mut number_of_nulls = 0;
 
     while let Some(log) = input_stream.next().await {
         let Some(value) = log.get(&by) else {
@@ -90,6 +91,8 @@ pub async fn topn_stream(sort: Sort, limit: u64, mut input_stream: LogStream) ->
             } else {
                 tracked_type = Some(value_type);
             }
+        } else {
+            number_of_nulls += 1;
         }
 
         let sortable = Sortable {
@@ -107,6 +110,12 @@ pub async fn topn_stream(sort: Sort, limit: u64, mut input_stream: LogStream) ->
                 heap.pop();
                 heap.push(sortable);
             }
+        }
+
+        if nulls == NullsOrder::First && number_of_nulls >= limit {
+            // Optimization: when doing nulls first, once we get N amount of nulls, no reason to
+            // continue.
+            break;
         }
     }
 
