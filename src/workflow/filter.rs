@@ -21,6 +21,7 @@ pub enum FilterAst {
     And(Vec<FilterAst>),                           // &&
     Contains(/*field=*/ String, /*word=*/ String), // word in field
     Eq(/*field=*/ String, /*value=*/ String),      // ==
+    Ne(/*field=*/ String, /*value=*/ String),      // !=
     Gt(/*field=*/ String, /*value=*/ String),      // >
     Gte(/*field=*/ String, /*value=*/ String),     // >=
     Lt(/*field=*/ String, /*value=*/ String),      // <
@@ -50,6 +51,7 @@ fn filter_ast_to_vrl(ast: &FilterAst) -> String {
         FilterAst::Or(exprs) => binop_to_vrl(exprs, " || "),
         FilterAst::Contains(field, word) => format!("contains(string!(.{field}), \"{word}\")"),
         FilterAst::Eq(field, word) => format!(".{field} == {word}"),
+        FilterAst::Ne(field, word) => format!(".{field} != {word}"),
         FilterAst::Gt(field, word) => format!(".{field} > {word}"),
         FilterAst::Gte(field, word) => format!(".{field} >= {word}"),
         FilterAst::Lt(field, word) => format!(".{field} < {word}"),
