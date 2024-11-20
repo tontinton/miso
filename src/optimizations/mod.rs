@@ -1,6 +1,6 @@
+use pattern::{Group, Pattern};
 use push_limit_into_topn::PushLimitIntoTopN;
 use push_topn_into_scan::PushTopNIntoScan;
-use smallvec::SmallVec;
 
 use crate::workflow::{WorkflowStep, WorkflowStepKind};
 use convert_sort_limit_to_topn::ConvertSortLimitToTopN;
@@ -10,6 +10,7 @@ use push_limit_into_limit::PushLimitIntoLimit;
 use push_limit_into_scan::PushLimitIntoScan;
 
 mod convert_sort_limit_to_topn;
+mod pattern;
 mod push_count_into_scan;
 mod push_filter_into_scan;
 mod push_limit_into_limit;
@@ -17,22 +18,21 @@ mod push_limit_into_scan;
 mod push_limit_into_topn;
 mod push_topn_into_scan;
 
-pub type Pattern = SmallVec<[WorkflowStepKind; 4]>;
-
 #[macro_export]
-macro_rules! pattern {
-    ($($step:ident) -> +) => {
-        smallvec::smallvec![$($crate::workflow::WorkflowStepKind::$step),+]
+macro_rules! opt {
+    ($optimization:ident) => {
+        Box::new($optimization) as Box<dyn Optimization>
     };
 }
 
 pub trait Optimization: Send + Sync {
     fn pattern(&self) -> Pattern;
-    fn apply(&self, steps: &[WorkflowStep]) -> Option<Vec<WorkflowStep>>;
+    fn apply(&self, steps: &[WorkflowStep], groups: &[Group]) -> Option<Vec<WorkflowStep>>;
 }
 
 pub struct Optimizer {
     optimizations: Vec<Box<dyn Optimization>>,
+    patterns: Vec<Pattern>,
 }
 
 fn to_kind(steps: &[WorkflowStep]) -> Vec<WorkflowStepKind> {
@@ -41,19 +41,22 @@ fn to_kind(steps: &[WorkflowStep]) -> Vec<WorkflowStepKind> {
 
 impl Default for Optimizer {
     fn default() -> Self {
+        let optimizations = vec![
+            // Filter.
+            opt!(PushFilterIntoScan),
+            // Limit.
+            opt!(PushLimitIntoLimit),
+            opt!(PushLimitIntoScan),
+            opt!(ConvertSortLimitToTopN),
+            opt!(PushLimitIntoTopN),
+            opt!(PushTopNIntoScan),
+            // Count.
+            opt!(PushCountIntoScan),
+        ];
+        let patterns = optimizations.iter().map(|o| o.pattern()).collect();
         Self {
-            optimizations: vec![
-                // Filter.
-                Box::new(PushFilterIntoScan),
-                // Limit.
-                Box::new(PushLimitIntoLimit),
-                Box::new(PushLimitIntoScan),
-                Box::new(ConvertSortLimitToTopN),
-                Box::new(PushLimitIntoTopN),
-                Box::new(PushTopNIntoScan),
-                // Count.
-                Box::new(PushCountIntoScan),
-            ],
+            optimizations,
+            patterns,
         }
     }
 }
@@ -62,25 +65,24 @@ impl Optimizer {
     pub fn optimize(&self, mut steps: Vec<WorkflowStep>) -> Vec<WorkflowStep> {
         let mut kinded_steps = to_kind(&steps);
         let mut optimized_in_loop = true;
+        let mut groups = Vec::new();
 
         while optimized_in_loop {
             optimized_in_loop = false;
 
-            for optimization in &self.optimizations {
-                let pattern = optimization.pattern();
-                let Some(matched_index) = kinded_steps
-                    .windows(pattern.len())
-                    .position(|window| window == pattern.as_slice())
+            for (optimization, pattern) in self.optimizations.iter().zip(&self.patterns) {
+                groups.clear();
+                let Some((start, end)) =
+                    Pattern::search_first_with_groups(pattern, &kinded_steps, &mut groups)
                 else {
                     continue;
                 };
 
-                let range = matched_index..matched_index + pattern.len();
-                let Some(new_steps) = optimization.apply(&steps[range.clone()]) else {
+                let Some(new_steps) = optimization.apply(&steps[start..end], &groups) else {
                     continue;
                 };
 
-                steps.splice(range, new_steps);
+                steps.splice(start..end, new_steps);
                 kinded_steps = to_kind(&steps);
                 optimized_in_loop = true;
             }

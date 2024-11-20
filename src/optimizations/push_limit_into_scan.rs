@@ -1,15 +1,15 @@
 use crate::{pattern, workflow::WorkflowStep};
 
-use super::{Optimization, Pattern};
+use super::{Group, Optimization, Pattern};
 
 pub struct PushLimitIntoScan;
 
 impl Optimization for PushLimitIntoScan {
     fn pattern(&self) -> Pattern {
-        pattern!(Scan -> Limit)
+        pattern!(Scan Limit)
     }
 
-    fn apply(&self, steps: &[WorkflowStep]) -> Option<Vec<WorkflowStep>> {
+    fn apply(&self, steps: &[WorkflowStep], _groups: &[Group]) -> Option<Vec<WorkflowStep>> {
         let WorkflowStep::Scan(mut scan) = steps[0].clone() else {
             return None;
         };
