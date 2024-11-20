@@ -191,6 +191,17 @@ fn filter_ast_to_query(ast: &FilterAst) -> Option<serde_json::Value> {
                 }
             })
         }
+        FilterAst::Ne(field, value) => {
+            json!({
+                "bool": {
+                    "must_not": {
+                        "term": {
+                            field: value
+                        }
+                    }
+                }
+            })
+        }
         FilterAst::Gt(field, value) => {
             json!({
                 "range": {
