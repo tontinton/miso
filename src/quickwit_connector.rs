@@ -265,8 +265,13 @@ async fn begin_search(
     }
 
     let response = req.send().await.context("http request")?;
-    if !response.status().is_success() {
-        bail!("GET {} failed with status: {}", &url, response.status());
+    let status = response.status();
+    if !status.is_success() {
+        if let Ok(text) = response.text().await {
+            bail!("GET {} failed with status {}: {}", &url, status, text);
+        } else {
+            bail!("GET {} failed with status {}", &url, status);
+        }
     }
     let text = response.text().await.context("text from response")?;
     let data: SearchResponse = serde_json::from_str(&text)?;
