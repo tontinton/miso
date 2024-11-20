@@ -173,6 +173,15 @@ fn filter_ast_to_query(ast: &FilterAst) -> Option<serde_json::Value> {
                 }
             })
         }
+        FilterAst::StartsWith(field, prefix) => {
+            json!({
+                "match_phrase_prefix": {
+                    field: {
+                        "query": prefix
+                    }
+                }
+            })
+        }
         FilterAst::Eq(field, value) => {
             json!({
                 "term": {
