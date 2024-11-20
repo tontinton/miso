@@ -47,7 +47,8 @@ async fn to_workflow(
         ));
     };
 
-    let mut steps = Vec::with_capacity(query_steps.len());
+    let num_steps = query_steps.len();
+    let mut steps = Vec::with_capacity(num_steps);
 
     for (i, step) in query_steps.into_iter().enumerate() {
         match step {
@@ -97,6 +98,15 @@ async fn to_workflow(
             QueryStep::Top(sort, max) => {
                 steps.push(WorkflowStep::TopN(sort, max));
             }
+            QueryStep::Count => {
+                if i != num_steps - 1 {
+                    return Err(HttpError::new(
+                        StatusCode::BAD_REQUEST,
+                        "count must be the last step".to_string(),
+                    ));
+                }
+                steps.push(WorkflowStep::Count);
+            }
         }
     }
 
@@ -113,6 +123,7 @@ enum QueryStep {
     Limit(u32),
     Sort(Vec<Sort>),
     Top(Vec<Sort>, u32),
+    Count,
 }
 
 #[derive(Deserialize)]

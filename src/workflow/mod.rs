@@ -39,20 +39,23 @@ pub enum WorkflowStep {
     /// Run a search query.
     Scan(Scan),
 
-    /// Filter some items.
+    /// Filter some records.
     Filter(FilterAst),
 
     /// Project to select only some of the fields, and optionally rename some.
     Project(Vec<ProjectField>),
 
-    /// Limit to X amount of items.
+    /// Limit to X amount of records.
     Limit(u32),
 
-    /// Sort items.
+    /// Sort records.
     Sort(Vec<Sort>),
 
-    /// Basically like Sort -> Limit, but more memory efficient (holding only N items).
+    /// Basically like Sort -> Limit, but more memory efficient (holding only N records).
     TopN(Vec<Sort>, u32),
+
+    /// The number of records. Only works as the last step.
+    Count,
 }
 
 #[derive(Debug)]
@@ -146,6 +149,15 @@ impl Workflow {
                         WorkflowStep::TopN(sorts, limit) => {
                             let logs = topn_stream(sorts, limit, rx_stream(rx.unwrap())).await?;
                             logs_vec_to_tx(logs, tx, "top-n").await?;
+                        }
+                        WorkflowStep::Count => {
+                            let mut rx = rx.unwrap();
+
+                            let mut count = 0;
+                            while rx.recv().await.is_some() {
+                                count += 1;
+                            }
+                            println!("{}", count);
                         }
                     }
 
