@@ -10,7 +10,7 @@ use color_eyre::Result;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tokio::sync::RwLock;
-use tracing::{error, info, span, Level};
+use tracing::{debug, error, info, span, Level};
 use uuid::Uuid;
 
 use crate::{
@@ -166,7 +166,7 @@ async fn post_query_handler(
     info!(?req.query, "Starting to run a new query");
     let workflow = to_workflow(state, req.query).await?;
 
-    info!(?workflow, "Executing workflow");
+    debug!(?workflow, "Executing workflow");
     if let Err(err) = workflow.execute().await {
         return Err(HttpError::new(
             StatusCode::INTERNAL_SERVER_ERROR,
