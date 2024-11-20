@@ -15,9 +15,9 @@ use tokio::{
 use tracing::{debug, error, info, instrument};
 
 use crate::{
-    connector::{Connector, QueryHandle, Split},
+    connector::{Connector, QueryHandle, QueryResponse, Split},
     downcast_unwrap,
-    log::{Log, LogTryStream},
+    log::Log,
     workflow::{filter::FilterAst, sort::Sort},
 };
 
@@ -36,6 +36,7 @@ struct QuickwitHandle {
     queries: Vec<serde_json::Value>,
     sorts: Option<serde_json::Value>,
     limit: Option<u32>,
+    count: bool,
 }
 
 #[typetag::serde]
@@ -62,6 +63,12 @@ impl QuickwitHandle {
         let mut handle = self.clone();
         handle.limit = Some(limit);
         handle.sorts = Some(sort);
+        handle
+    }
+
+    fn with_count(&self) -> QuickwitHandle {
+        let mut handle = self.clone();
+        handle.count = true;
         handle
     }
 }
@@ -98,6 +105,11 @@ struct SearchResponse {
 struct ContinueSearchRequest {
     scroll_id: String,
     scroll: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct CountResponse {
+    count: u64,
 }
 
 fn default_refresh_interval() -> Duration {
@@ -309,6 +321,30 @@ async fn continue_search(
     ))
 }
 
+#[instrument(name = "GET and parse quickwit count result")]
+async fn count(base_url: &str, index: &str, query: Option<serde_json::Value>) -> Result<u64> {
+    let url = format!("{}/api/v1/_elastic/{}/_count", base_url, index);
+    let client = Client::new();
+
+    let mut req = client.get(&url);
+    if let Some(query) = query {
+        req = req.json(&query);
+    }
+
+    let response = req.send().await.context("http request")?;
+    let status = response.status();
+    if !status.is_success() {
+        if let Ok(text) = response.text().await {
+            bail!("GET {} failed with status {}: {}", &url, status, text);
+        } else {
+            bail!("GET {} failed with status {}", &url, status);
+        }
+    }
+    let text = response.text().await.context("text from response")?;
+    let data: CountResponse = serde_json::from_str(&text)?;
+    Ok(data.count)
+}
+
 #[instrument(name = "GET and parse quickwit indexes")]
 async fn get_indexes(base_url: &str) -> Result<Vec<String>> {
     let url = format!("{}/api/v1/indexes", base_url);
@@ -395,12 +431,12 @@ impl Connector for QuickwitConnector {
         Box::new(QuickwitHandle::default())
     }
 
-    fn query(
+    async fn query(
         &self,
         collection: &str,
         split: &dyn Split,
         handle: &dyn QueryHandle,
-    ) -> Result<LogTryStream> {
+    ) -> Result<QueryResponse> {
         let Some(_) = split.as_any().downcast_ref::<QuickwitSplit>() else {
             bail!("Downcasting split to wrong struct?");
         };
@@ -439,6 +475,7 @@ impl Connector for QuickwitConnector {
         };
 
         info!(
+            ?handle.count,
             ?scroll_size,
             ?limit,
             "Quickwit search '{}': {}",
@@ -446,7 +483,11 @@ impl Connector for QuickwitConnector {
             to_string(&query)?
         );
 
-        Ok(Box::pin(try_stream! {
+        if handle.count {
+            return Ok(QueryResponse::Count(count(&url, &collection, query).await?));
+        }
+
+        Ok(QueryResponse::Logs(Box::pin(try_stream! {
             if let Some(limit) = limit {
                 if limit == 0 {
                     return;
@@ -490,7 +531,7 @@ impl Connector for QuickwitConnector {
                     }
                 }
             }
-        }))
+        })))
     }
 
     fn apply_filter(
@@ -539,6 +580,11 @@ impl Connector for QuickwitConnector {
                 .collect(),
         );
         Some(Box::new(handle.with_topn(sorts, max)))
+    }
+
+    fn apply_count(&self, handle: &dyn QueryHandle) -> Option<Box<dyn QueryHandle>> {
+        let handle = downcast_unwrap!(handle, QuickwitHandle);
+        Some(Box::new(handle.with_count()))
     }
 
     async fn close(self) {

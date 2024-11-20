@@ -10,7 +10,7 @@ use topn::topn_stream;
 use tracing::debug;
 
 use crate::{
-    connector::{Connector, QueryHandle, Split},
+    connector::{Connector, QueryHandle, QueryResponse, Split},
     log::{Log, LogStream, LogTryStream},
     workflow::{
         filter::filter_stream, limit::limit_stream, project::project_stream, sort::sort_stream,
@@ -122,12 +122,16 @@ impl Workflow {
                             handle,
                         }) => {
                             for (i, split) in splits.into_iter().enumerate() {
-                                let stream = connector.query(
-                                    &collection,
-                                    split.as_ref(),
-                                    handle.as_ref(),
-                                )?;
-                                stream_to_tx(stream, tx.clone(), &format!("scan({i})")).await?;
+                                let response = connector
+                                    .query(&collection, split.as_ref(), handle.as_ref())
+                                    .await?;
+                                match response {
+                                    QueryResponse::Logs(stream) => {
+                                        stream_to_tx(stream, tx.clone(), &format!("scan({i})"))
+                                            .await?
+                                    }
+                                    QueryResponse::Count(count) => println!("{}", count),
+                                }
                             }
                         }
                         WorkflowStep::Filter(ast) => {

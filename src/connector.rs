@@ -19,6 +19,11 @@ macro_rules! downcast_unwrap {
     }};
 }
 
+pub enum QueryResponse {
+    Logs(LogTryStream),
+    Count(u64),
+}
+
 #[typetag::serde(tag = "type")]
 pub trait Split: Any + Debug + Send + Sync {
     fn as_any(&self) -> &dyn Any;
@@ -37,12 +42,12 @@ pub trait Connector: Debug + Send + Sync {
 
     async fn get_splits(&self) -> Vec<Arc<dyn Split>>;
 
-    fn query(
+    async fn query(
         &self,
         collection: &str,
         split: &dyn Split,
         handle: &dyn QueryHandle,
-    ) -> Result<LogTryStream>;
+    ) -> Result<QueryResponse>;
 
     /// Returns the handle with the filter AST the connector should predicate pushdown.
     /// None means it can't predicate pushdown the filter AST provided.
