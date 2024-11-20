@@ -73,5 +73,11 @@ pub trait Connector: Debug + Send + Sync {
         None
     }
 
+    /// Returns the handle with count predicate pushdown.
+    /// None means it can't predicate pushdown count.
+    fn apply_count(&self, _handle: &dyn QueryHandle) -> Option<Box<dyn QueryHandle>> {
+        None
+    }
+
     async fn close(self);
 }
