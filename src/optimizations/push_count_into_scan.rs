@@ -1,15 +1,15 @@
 use crate::{pattern, workflow::WorkflowStep};
 
-use super::{Optimization, Pattern};
+use super::{Group, Optimization, Pattern};
 
 pub struct PushCountIntoScan;
 
 impl Optimization for PushCountIntoScan {
     fn pattern(&self) -> Pattern {
-        pattern!(Scan -> Count)
+        pattern!(Scan Count)
     }
 
-    fn apply(&self, steps: &[WorkflowStep]) -> Option<Vec<WorkflowStep>> {
+    fn apply(&self, steps: &[WorkflowStep], _groups: &[Group]) -> Option<Vec<WorkflowStep>> {
         let WorkflowStep::Scan(mut scan) = steps[0].clone() else {
             return None;
         };
