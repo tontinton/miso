@@ -488,6 +488,11 @@ impl Connector for QuickwitConnector {
 
     fn apply_limit(&self, max: u32, handle: &dyn QueryHandle) -> Option<Box<dyn QueryHandle>> {
         let handle = downcast_unwrap!(handle, QuickwitHandle);
+        if let Some(limit) = handle.limit {
+            if limit < max {
+                return None;
+            }
+        }
         Some(Box::new(handle.with_limit(max)))
     }
 
@@ -498,6 +503,12 @@ impl Connector for QuickwitConnector {
         handle: &dyn QueryHandle,
     ) -> Option<Box<dyn QueryHandle>> {
         let handle = downcast_unwrap!(handle, QuickwitHandle);
+        if let Some(limit) = handle.limit {
+            if limit < max {
+                return None;
+            }
+        }
+
         let sorts = serde_json::Value::Array(
             sorts
                 .iter()
