@@ -159,7 +159,7 @@ struct VecCollector {
     staged: RefCell<Vec<(usize, /*is_start=*/ bool)>>,
 }
 
-impl VecCollector {
+impl Default for VecCollector {
     fn default() -> Self {
         Self {
             groups: RefCell::new(Vec::new()),
@@ -167,7 +167,9 @@ impl VecCollector {
             staged: RefCell::new(Vec::new()),
         }
     }
+}
 
+impl VecCollector {
     fn into_with_offset(self, offset: usize) -> Vec<Group> {
         self.groups
             .take()
