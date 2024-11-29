@@ -484,7 +484,11 @@ impl Connector for QuickwitConnector {
         );
 
         if handle.count {
-            return Ok(QueryResponse::Count(count(&url, &collection, query).await?));
+            let mut result = count(&url, &collection, query).await?;
+            if let Some(limit) = limit {
+                result = (limit as u64).min(result);
+            }
+            return Ok(QueryResponse::Count(result));
         }
 
         Ok(QueryResponse::Logs(Box::pin(try_stream! {
