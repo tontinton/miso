@@ -157,7 +157,7 @@ impl Workflow {
                         WorkflowStep::Count => {
                             let mut rx = rx.unwrap();
 
-                            let mut count = 0;
+                            let mut count: u64 = 0;
                             while rx.recv().await.is_some() {
                                 count += 1;
                             }
