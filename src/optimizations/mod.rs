@@ -1,5 +1,5 @@
 use pattern::{Group, Pattern};
-use push_limit_into_topn::PushLimitIntoTopN;
+use push_topn_into_limit::PushTopNIntoLimit;
 use push_topn_into_scan::PushTopNIntoScan;
 
 use crate::workflow::{WorkflowStep, WorkflowStepKind};
@@ -16,7 +16,7 @@ mod push_count_into_scan;
 mod push_filter_into_scan;
 mod push_limit_into_limit;
 mod push_limit_into_scan;
-mod push_limit_into_topn;
+mod push_topn_into_limit;
 mod push_topn_into_scan;
 mod remove_redundant_sorts_before_count;
 
@@ -50,7 +50,7 @@ impl Default for Optimizer {
             opt!(PushLimitIntoLimit),
             opt!(PushLimitIntoScan),
             opt!(ConvertSortLimitToTopN),
-            opt!(PushLimitIntoTopN),
+            opt!(PushTopNIntoLimit),
             opt!(PushTopNIntoScan),
             // Count.
             opt!(PushCountIntoScan),
