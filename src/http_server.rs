@@ -18,7 +18,8 @@ use crate::{
     optimizations::Optimizer,
     quickwit_connector::QuickwitConnector,
     workflow::{
-        filter::FilterAst, project::ProjectField, sort::Sort, Scan, Workflow, WorkflowStep,
+        filter::FilterAst, project::ProjectField, sort::Sort, summarize::Summarize, Scan, Workflow,
+        WorkflowStep,
     },
 };
 
@@ -98,6 +99,9 @@ async fn to_workflow(
             QueryStep::Top(sort, max) => {
                 steps.push(WorkflowStep::TopN(sort, max));
             }
+            QueryStep::Summarize(config) => {
+                steps.push(WorkflowStep::Summarize(config));
+            }
             QueryStep::Count => {
                 if i != num_steps - 1 {
                     return Err(HttpError::new(
@@ -123,6 +127,7 @@ enum QueryStep {
     Limit(u32),
     Sort(Vec<Sort>),
     Top(Vec<Sort>, u32),
+    Summarize(Summarize),
     Count,
 }
 

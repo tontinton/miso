@@ -5,6 +5,7 @@ use color_eyre::eyre::{bail, Context, Result};
 use futures_util::{pin_mut, stream::FuturesUnordered, StreamExt};
 use kinded::Kinded;
 use serde_json::to_string;
+use summarize::{summarize_stream, Summarize};
 use tokio::{select, spawn, sync::mpsc};
 use topn::topn_stream;
 use tracing::debug;
@@ -23,6 +24,7 @@ pub mod filter;
 pub mod limit;
 pub mod project;
 pub mod sort;
+pub mod summarize;
 pub mod topn;
 pub mod vrl_utils;
 
@@ -53,6 +55,9 @@ pub enum WorkflowStep {
 
     /// Basically like Sort -> Limit, but more memory efficient (holding only N records).
     TopN(Vec<Sort>, u32),
+
+    /// Group records by fields, and aggregate the grouped buckets.
+    Summarize(Summarize),
 
     /// The number of records. Only works as the last step.
     Count,
@@ -153,6 +158,10 @@ impl Workflow {
                         WorkflowStep::TopN(sorts, limit) => {
                             let logs = topn_stream(sorts, limit, rx_stream(rx.unwrap())).await?;
                             logs_vec_to_tx(logs, tx, "top-n").await?;
+                        }
+                        WorkflowStep::Summarize(config) => {
+                            let logs = summarize_stream(config, rx_stream(rx.unwrap())).await?;
+                            logs_vec_to_tx(logs, tx, "summarize").await?;
                         }
                         WorkflowStep::Count => {
                             let mut rx = rx.unwrap();

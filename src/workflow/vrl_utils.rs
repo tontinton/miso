@@ -89,9 +89,6 @@ pub fn compile_pretty_print_errors(script: &str) -> Result<Program> {
 
 // Should be replaced by: https://github.com/vectordotdev/vrl/pull/1117.
 pub fn partial_cmp_values(left: &Value, right: &Value) -> Option<Ordering> {
-    if std::mem::discriminant(left) != std::mem::discriminant(right) {
-        return None;
-    }
     match (left, right) {
         (Value::Bytes(a), Value::Bytes(b)) => a.partial_cmp(b),
         (Value::Regex(a), Value::Regex(b)) => a.partial_cmp(b),
