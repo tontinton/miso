@@ -8,6 +8,7 @@ use color_eyre::eyre::Result;
 use crate::log::LogTryStream;
 use crate::workflow::filter::FilterAst;
 use crate::workflow::sort::Sort;
+use crate::workflow::summarize::Summarize;
 
 #[macro_export]
 macro_rules! downcast_unwrap {
@@ -81,6 +82,16 @@ pub trait Connector: Debug + Send + Sync {
     /// Returns the handle with count predicate pushdown.
     /// None means it can't predicate pushdown count.
     fn apply_count(&self, _handle: &dyn QueryHandle) -> Option<Box<dyn QueryHandle>> {
+        None
+    }
+
+    /// Returns the handle with summarize predicate pushdown.
+    /// None means it can't predicate pushdown count.
+    fn apply_summarize(
+        &self,
+        _config: &Summarize,
+        _handle: &dyn QueryHandle,
+    ) -> Option<Box<dyn QueryHandle>> {
         None
     }
 
