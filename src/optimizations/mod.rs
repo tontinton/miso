@@ -8,6 +8,7 @@ use push_count_into_scan::PushCountIntoScan;
 use push_filter_into_scan::PushFilterIntoScan;
 use push_limit_into_limit::PushLimitIntoLimit;
 use push_limit_into_scan::PushLimitIntoScan;
+use push_summarize_into_scan::PushSummarizeIntoScan;
 use remove_redundant_sorts_before_count::RemoveRedundantSortsBeforeCount;
 
 mod convert_sort_limit_to_topn;
@@ -16,6 +17,7 @@ mod push_count_into_scan;
 mod push_filter_into_scan;
 mod push_limit_into_limit;
 mod push_limit_into_scan;
+mod push_summarize_into_scan;
 mod push_topn_into_limit;
 mod push_topn_into_scan;
 mod remove_redundant_sorts_before_count;
@@ -55,6 +57,8 @@ impl Default for Optimizer {
             // Count.
             opt!(PushCountIntoScan),
             opt!(RemoveRedundantSortsBeforeCount),
+            // Summarize.
+            opt!(PushSummarizeIntoScan),
         ];
         let patterns = optimizations.iter().map(|o| o.pattern()).collect();
         Self {
