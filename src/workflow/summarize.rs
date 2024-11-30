@@ -29,8 +29,8 @@ pub enum Aggregation {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Summarize {
-    aggs: HashMap<String, Aggregation>,
-    by: Vec<String>,
+    pub aggs: HashMap<String, Aggregation>,
+    pub by: Vec<String>,
 }
 
 /// An on-going aggregation (including the needed state to compute the next value of the
