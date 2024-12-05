@@ -131,24 +131,43 @@ impl PartialEq for Sortable {
     }
 }
 
-fn create_aggregate(aggregation: &Aggregation) -> Arc<dyn Aggregate> {
+fn create_aggregate(aggregation: Aggregation) -> Arc<dyn Aggregate> {
     match aggregation {
         Aggregation::Count => Arc::new(Count::default()),
-        Aggregation::Min(field) => Arc::new(MinMax::new_min(field.clone().into())),
-        Aggregation::Max(field) => Arc::new(MinMax::new_max(field.clone().into())),
+        Aggregation::Min(field) => Arc::new(MinMax::new_min(field.into())),
+        Aggregation::Max(field) => Arc::new(MinMax::new_max(field.into())),
     }
 }
 
-pub async fn summarize_stream(config: Summarize, mut input_stream: LogStream) -> Result<Vec<Log>> {
-    info!("{config:?}");
+async fn summarize_all(
+    mut input_stream: LogStream,
+    output_fields: Vec<KeyString>,
+    aggregations: Vec<Aggregation>,
+) -> Result<Vec<Log>> {
+    let aggregates: Vec<Arc<dyn Aggregate>> =
+        aggregations.into_iter().map(create_aggregate).collect();
 
-    let (output_fields, aggregations): (Vec<KeyString>, Vec<_>) = config
-        .aggs
-        .into_iter()
-        .map(|(field, agg)| (field.into(), agg))
-        .unzip();
+    while let Some(log) = input_stream.next().await {
+        for aggregate in &aggregates {
+            aggregate.input(&log);
+        }
+    }
 
-    let by: Vec<KeyString> = config.by.into_iter().map(|x| x.into()).collect();
+    let mut log = Log::new();
+    for (output_field, aggregate) in output_fields.clone().into_iter().zip(aggregates) {
+        log.insert(output_field, aggregate.value());
+    }
+
+    Ok(vec![log])
+}
+
+async fn summarize_group_by(
+    group_by: Vec<String>,
+    mut input_stream: LogStream,
+    output_fields: Vec<KeyString>,
+    aggregations: Vec<Aggregation>,
+) -> Result<Vec<Log>> {
+    let by: Vec<KeyString> = group_by.into_iter().map(|x| x.into()).collect();
 
     // All of HashMap, HashSet, BTreeMap and BtreeSet rely on either the hash or the order of keys
     // be unchanging, so having types with interior mutability is a bad idea.
@@ -187,7 +206,7 @@ pub async fn summarize_stream(config: Summarize, mut input_stream: LogStream) ->
 
         let entry = group_aggregates
             .entry(group_keys)
-            .or_insert_with(|| aggregations.iter().map(create_aggregate).collect());
+            .or_insert_with(|| aggregations.iter().cloned().map(create_aggregate).collect());
 
         for aggregate in entry {
             aggregate.input(&log);
@@ -210,4 +229,20 @@ pub async fn summarize_stream(config: Summarize, mut input_stream: LogStream) ->
     }
 
     Ok(logs)
+}
+
+pub async fn summarize_stream(config: Summarize, input_stream: LogStream) -> Result<Vec<Log>> {
+    info!("{config:?}");
+
+    let (output_fields, aggregations): (Vec<KeyString>, Vec<Aggregation>) = config
+        .aggs
+        .into_iter()
+        .map(|(field, agg)| (field.into(), agg))
+        .unzip();
+
+    if config.by.is_empty() {
+        summarize_all(input_stream, output_fields, aggregations).await
+    } else {
+        summarize_group_by(config.by, input_stream, output_fields, aggregations).await
+    }
 }
