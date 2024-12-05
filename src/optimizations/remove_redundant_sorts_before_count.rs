@@ -11,7 +11,7 @@ impl Optimization for RemoveRedundantSortsBeforeCount {
     }
 
     fn apply(&self, steps: &[WorkflowStep], groups: &[Group]) -> Option<Vec<WorkflowStep>> {
-        assert!(groups.len() == 1);
+        assert_eq!(groups.len(), 1);
 
         let (start, end) = groups[0];
 
