@@ -1,16 +1,21 @@
 use std::{collections::HashMap, sync::Arc};
 
 use async_recursion::async_recursion;
+use async_stream::stream;
 use axum::{
     http::StatusCode,
-    response::{IntoResponse, Response},
+    response::{sse::Event, IntoResponse, Response, Sse},
     routing::post,
     Extension, Json, Router,
 };
 use color_eyre::{eyre::Context, Result};
-use serde::{Deserialize, Serialize};
-use serde_json::{json, to_string};
-use tokio::sync::RwLock;
+use futures_core::Stream;
+use serde::Deserialize;
+use serde_json::json;
+use tokio::{
+    spawn,
+    sync::{mpsc, RwLock},
+};
 use tracing::{debug, error, info, span, Level};
 use uuid::Uuid;
 
@@ -141,17 +146,12 @@ enum QueryStep {
 }
 
 #[derive(Deserialize)]
-struct PostQueryRequest {
+struct QueryRequest {
     /// The query id to set. If not set, the server will randomly generate an id.
     query_id: Option<Uuid>,
 
     /// The query steps to run.
     query: Vec<QueryStep>,
-}
-
-#[derive(Serialize)]
-struct QueryResponse {
-    query_id: Uuid,
 }
 
 struct HttpError {
@@ -180,10 +180,10 @@ impl IntoResponse for HttpError {
 }
 
 /// Starts running a new query.
-async fn post_query_handler(
+async fn query_stream(
     Extension(state): Extension<SharedState>,
-    Json(req): Json<PostQueryRequest>,
-) -> Result<Json<QueryResponse>, HttpError> {
+    Json(req): Json<QueryRequest>,
+) -> Result<Sse<impl Stream<Item = Result<Event, axum::Error>>>, HttpError> {
     let query_id = req.query_id.unwrap_or_else(Uuid::now_v7);
 
     let span = span!(Level::INFO, "query", ?query_id);
@@ -194,19 +194,24 @@ async fn post_query_handler(
 
     debug!(?workflow, "Executing workflow");
 
-    let print_log = |log: Log| async move {
-        println!("{}", to_string(&log).context("log to string")?);
-        Ok(())
+    let (tx, mut rx) = mpsc::channel(1);
+    let send_log_to_sse_tx = move |log: Log| {
+        let tx = tx.clone();
+        async move {
+            tx.send(log).await.context("log to SSE tx")?;
+            Ok(())
+        }
     };
 
-    if let Err(err) = workflow.execute(print_log).await {
-        return Err(HttpError::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("failed to execute workflow: {:?}", err),
-        ));
-    }
+    // TODO: propagate error to user.
+    let workflow_task = spawn(workflow.execute(send_log_to_sse_tx));
 
-    Ok(Json(QueryResponse { query_id }))
+    Ok(Sse::new(stream! {
+        while let Some(log) = rx.recv().await {
+            yield Event::default().json_data(log);
+        }
+        let _ = workflow_task.await;
+    }))
 }
 
 pub fn create_axum_app() -> Result<Router> {
@@ -226,6 +231,6 @@ pub fn create_axum_app() -> Result<Router> {
     }));
 
     Ok(Router::new()
-        .route("/query", post(post_query_handler))
+        .route("/query", post(query_stream))
         .layer(Extension(state)))
 }
