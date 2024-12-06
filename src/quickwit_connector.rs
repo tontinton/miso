@@ -240,7 +240,6 @@ fn filter_ast_to_query(ast: &FilterAst) -> Option<serde_json::Value> {
     #[allow(unreachable_patterns)]
     Some(match ast {
         FilterAst::Or(filters) => {
-            assert!(!filters.is_empty());
             json!({
                 "bool": {
                     "should": filters.iter()
@@ -250,7 +249,6 @@ fn filter_ast_to_query(ast: &FilterAst) -> Option<serde_json::Value> {
             })
         }
         FilterAst::And(filters) => {
-            assert!(!filters.is_empty());
             json!({
                 "bool": {
                     "must": filters.iter()
