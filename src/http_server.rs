@@ -1,5 +1,6 @@
 use std::{collections::HashMap, sync::Arc};
 
+use async_recursion::async_recursion;
 use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
@@ -30,6 +31,7 @@ struct State {
 
 type SharedState = Arc<RwLock<State>>;
 
+#[async_recursion]
 async fn to_workflow(
     state: SharedState,
     query_steps: Vec<QueryStep>,
@@ -102,6 +104,11 @@ async fn to_workflow(
             QueryStep::Summarize(config) => {
                 steps.push(WorkflowStep::Summarize(config));
             }
+            QueryStep::Union(inner_steps) => {
+                steps.push(WorkflowStep::Union(
+                    to_workflow(state.clone(), inner_steps).await?,
+                ));
+            }
             QueryStep::Count => {
                 if i != num_steps - 1 {
                     return Err(HttpError::new(
@@ -128,6 +135,7 @@ enum QueryStep {
     Sort(Vec<Sort>),
     Top(Vec<Sort>, u32),
     Summarize(Summarize),
+    Union(Vec<QueryStep>),
     Count,
 }
 
@@ -184,7 +192,7 @@ async fn post_query_handler(
     let workflow = to_workflow(state, req.query).await?;
 
     debug!(?workflow, "Executing workflow");
-    if let Err(err) = workflow.execute().await {
+    if let Err(err) = workflow.execute_and_print().await {
         return Err(HttpError::new(
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("failed to execute workflow: {:?}", err),

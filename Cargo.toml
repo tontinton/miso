@@ -12,6 +12,7 @@ inherits = "release"
 lto = "thin"
 
 [dependencies]
+async-recursion = "1.1.1"
 async-stream = "0.3.6"
 axum = { version = "0.7.7", features = ["macros"] }
 clap = { version = "4.5.20", features = ["derive"] }
