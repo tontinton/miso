@@ -95,6 +95,15 @@ impl Optimizer {
             }
         }
 
+        // Don't forget to optimize union steps too!
         steps
+            .into_iter()
+            .map(|mut step| {
+                if let WorkflowStep::Union(ref mut workflow) = step {
+                    workflow.steps = self.optimize(workflow.steps.clone());
+                }
+                step
+            })
+            .collect()
     }
 }

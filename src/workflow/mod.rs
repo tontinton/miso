@@ -73,7 +73,7 @@ pub enum WorkflowStep {
 
 #[derive(Debug, Clone)]
 pub struct Workflow {
-    steps: Vec<WorkflowStep>,
+    pub steps: Vec<WorkflowStep>,
 }
 
 fn rx_stream(mut rx: mpsc::Receiver<Log>) -> LogStream {
