@@ -158,13 +158,14 @@ impl HttpError {
 
 impl IntoResponse for HttpError {
     fn into_response(self) -> Response {
-        if self.status.is_server_error() {
-            error!("Failed internal response: {}", self.message);
-        }
+        let body = if self.status.is_server_error() {
+            error!("Internal server error: {}", self.message);
+            Json(json!({"error": "Internal server error"}))
+        } else {
+            error!("User error: {}", self.message);
+            Json(json!({"error": self.message}))
+        };
 
-        let body = Json(json!({
-            "error": self.message,
-        }));
         (self.status, body).into_response()
     }
 }
@@ -186,7 +187,7 @@ async fn post_query_handler(
     if let Err(err) = workflow.execute().await {
         return Err(HttpError::new(
             StatusCode::INTERNAL_SERVER_ERROR,
-            format!("failed to execute workflow: {}", err),
+            format!("failed to execute workflow: {:?}", err),
         ));
     }
 
