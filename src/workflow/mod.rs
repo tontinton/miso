@@ -9,6 +9,7 @@ use summarize::{summarize_stream, Summarize};
 use tokio::{spawn, sync::mpsc, task::JoinHandle};
 use topn::topn_stream;
 use tracing::debug;
+use vrl::core::Value;
 
 use crate::{
     connector::{Connector, QueryHandle, QueryResponse, Split},
@@ -27,6 +28,8 @@ pub mod sort;
 pub mod summarize;
 pub mod topn;
 pub mod vrl_utils;
+
+const COUNT_LOG_FIELD_NAME: &str = "count";
 
 type WorkflowTasks = FuturesUnordered<JoinHandle<Result<()>>>;
 
@@ -79,6 +82,13 @@ fn rx_stream(mut rx: mpsc::Receiver<Log>) -> LogStream {
             yield log
         }
     })
+}
+
+async fn count_to_tx(count: i64, tx: mpsc::Sender<Log>) -> Result<()> {
+    let mut count_log = Log::new();
+    count_log.insert(COUNT_LOG_FIELD_NAME.into(), Value::Integer(count));
+    tx.send(count_log).await.context("send count to tx")?;
+    Ok(())
 }
 
 async fn stream_to_tx(mut stream: LogTryStream, tx: mpsc::Sender<Log>, tag: &str) -> Result<()> {
@@ -134,7 +144,7 @@ impl WorkflowStep {
                             QueryResponse::Count(count) => return Ok(Some(count)),
                         }
 
-                        Ok::<Option<u64>, color_eyre::eyre::Error>(None)
+                        Ok::<Option<i64>, color_eyre::eyre::Error>(None)
                     }));
                 }
 
@@ -154,7 +164,9 @@ impl WorkflowStep {
                 }
 
                 if let Some(inner) = count {
-                    println!("{}", inner);
+                    count_to_tx(inner, tx)
+                        .await
+                        .context("send count from scan")?;
                 }
             }
             WorkflowStep::Filter(ast) => {
@@ -209,11 +221,14 @@ impl WorkflowStep {
             WorkflowStep::Count => {
                 let mut rx = rx.unwrap();
 
-                let mut count: u64 = 0;
+                let mut count: i64 = 0;
                 while rx.recv().await.is_some() {
                     count += 1;
                 }
-                println!("{}", count);
+
+                count_to_tx(count, tx)
+                    .await
+                    .context("send count from count")?;
             }
         }
 

@@ -141,7 +141,7 @@ struct ContinueSearchRequest {
 
 #[derive(Debug, Deserialize)]
 struct CountResponse {
-    count: u64,
+    count: i64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -396,7 +396,7 @@ async fn continue_search(
 }
 
 #[instrument(skip(query), name = "GET and parse quickwit count result")]
-async fn count(base_url: &str, index: &str, query: Option<serde_json::Value>) -> Result<u64> {
+async fn count(base_url: &str, index: &str, query: Option<serde_json::Value>) -> Result<i64> {
     let url = format!("{}/api/v1/_elastic/{}/_count", base_url, index);
     let client = Client::new();
 
@@ -781,7 +781,7 @@ impl Connector for QuickwitConnector {
         if handle.count {
             let mut result = count(&url, &collection, query).await?;
             if let Some(limit) = limit {
-                result = (limit as u64).min(result);
+                result = (limit as i64).min(result);
             }
             return Ok(QueryResponse::Count(result));
         }
