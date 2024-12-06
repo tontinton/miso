@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{sync::Arc, time::Instant};
 
 use async_stream::stream;
 use color_eyre::eyre::{bail, Context, Result};
@@ -8,7 +8,7 @@ use serde_json::to_string;
 use summarize::{summarize_stream, Summarize};
 use tokio::{spawn, sync::mpsc, task::JoinHandle};
 use topn::topn_stream;
-use tracing::debug;
+use tracing::{debug, info, instrument};
 use vrl::core::Value;
 
 use crate::{
@@ -236,8 +236,9 @@ impl WorkflowStep {
     }
 }
 
+#[instrument(skip_all)]
 async fn execute_tasks(mut tasks: WorkflowTasks) -> Result<()> {
-    debug!("Waiting for workflow tasks");
+    let start = Instant::now();
 
     while let Some(join_result) = tasks.next().await {
         let result = join_result?;
@@ -249,7 +250,8 @@ async fn execute_tasks(mut tasks: WorkflowTasks) -> Result<()> {
         }
     }
 
-    debug!("Workflow tasks done");
+    let duration = start.elapsed();
+    info!(elapsed_time = ?duration, "Workflow execution time");
 
     Ok(())
 }
