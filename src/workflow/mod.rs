@@ -71,6 +71,22 @@ pub enum WorkflowStep {
     Count,
 }
 
+impl std::fmt::Display for WorkflowStep {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            WorkflowStep::Scan(..) => write!(f, "scan"),
+            WorkflowStep::Filter(..) => write!(f, "filter"),
+            WorkflowStep::Project(..) => write!(f, "project"),
+            WorkflowStep::Limit(limit) => write!(f, "limit({})", limit),
+            WorkflowStep::Sort(..) => write!(f, "sort"),
+            WorkflowStep::TopN(.., limit) => write!(f, "top-n({})", limit),
+            WorkflowStep::Summarize(..) => write!(f, "summarize"),
+            WorkflowStep::Union(..) => write!(f, "union"),
+            WorkflowStep::Count => write!(f, "count"),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Workflow {
     pub steps: Vec<WorkflowStep>,
@@ -112,11 +128,14 @@ async fn logs_vec_to_tx(logs: Vec<Log>, tx: mpsc::Sender<Log>, tag: &str) -> Res
 }
 
 impl WorkflowStep {
+    #[instrument(skip_all, fields(step = %self))]
     async fn execute(
         self: WorkflowStep,
         rx: Option<mpsc::Receiver<Log>>,
         tx: mpsc::Sender<Log>,
     ) -> Result<()> {
+        let start = Instant::now();
+
         match self {
             WorkflowStep::Scan(Scan {
                 collection,
@@ -231,6 +250,9 @@ impl WorkflowStep {
                     .context("send count from count")?;
             }
         }
+
+        let duration = start.elapsed();
+        info!(elapsed_time = ?duration, "Workflow step execution time");
 
         Ok(())
     }
