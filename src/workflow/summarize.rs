@@ -191,7 +191,7 @@ async fn summarize_group_by(
             if let Some(t) = tracked_type {
                 if *t != value_type {
                     bail!(
-                        "Cannot summarize over differing types (key '{}'): {:?} != {:?}",
+                        "cannot summarize over differing types (key '{}'): {:?} != {:?}",
                         key,
                         *t,
                         value_type

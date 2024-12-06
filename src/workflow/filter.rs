@@ -65,7 +65,7 @@ fn filter_ast_to_vrl(ast: &FilterAst) -> String {
 
 fn run_vrl_filter(program: &Program, log: Log) -> Result<bool> {
     let Value::Boolean(allowed) = run_vrl(program, log)? else {
-        bail!("Response of VRL script not boolean");
+        bail!("response of VRL script not boolean");
     };
     Ok(allowed)
 }

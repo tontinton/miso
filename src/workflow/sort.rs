@@ -135,7 +135,7 @@ async fn collect_logs(by: &[KeyString], mut input_stream: LogStream) -> Result<V
                     if let Some(t) = tracked_type {
                         if *t != value_type {
                             bail!(
-                                "Cannot sort over differing types (key '{}'): {:?} != {:?}",
+                                "cannot sort over differing types (key '{}'): {:?} != {:?}",
                                 key,
                                 *t,
                                 value_type

@@ -71,7 +71,7 @@ fn project_fields_to_vrl(fields: &[ProjectField]) -> String {
 
 fn run_vrl_project(program: &Program, log: Log) -> Result<Log> {
     let Value::Object(map) = run_vrl(program, log)? else {
-        bail!("Response of VRL script not object");
+        bail!("response of VRL script not object");
     };
     Ok(map)
 }

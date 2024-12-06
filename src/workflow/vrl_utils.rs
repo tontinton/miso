@@ -82,7 +82,7 @@ pub fn compile_pretty_print_errors(script: &str) -> Result<Program> {
         Err(diagnostics) => {
             println!("Errors:");
             pretty_print_diagnostics(&diagnostics);
-            bail!("Failed to compile VRL script:\n{}", script);
+            bail!("failed to compile VRL script:\n{}", script);
         }
     }
 }
