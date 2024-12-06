@@ -158,7 +158,7 @@ impl WorkflowStep {
 
                         match response {
                             QueryResponse::Logs(stream) => {
-                                stream_to_tx(stream, tx, &format!("scan({i})")).await?
+                                stream_to_tx(stream, tx, &format!("scan({i})")).await?;
                             }
                             QueryResponse::Count(count) => return Ok(Some(count)),
                         }
