@@ -305,7 +305,7 @@ fn filter_ast_to_query(ast: &FilterAst) -> Option<serde_json::Value> {
     })
 }
 
-#[instrument(name = "GET and parse quickwit begin search results")]
+#[instrument(skip(query), name = "GET and parse quickwit begin search results")]
 async fn begin_search(
     base_url: &str,
     index: &str,
@@ -372,7 +372,7 @@ async fn continue_search(
     ))
 }
 
-#[instrument(name = "GET and parse quickwit count result")]
+#[instrument(skip(query), name = "GET and parse quickwit count result")]
 async fn count(base_url: &str, index: &str, query: Option<serde_json::Value>) -> Result<u64> {
     let url = format!("{}/api/v1/_elastic/{}/_count", base_url, index);
     let client = Client::new();
@@ -396,7 +396,7 @@ async fn count(base_url: &str, index: &str, query: Option<serde_json::Value>) ->
     Ok(data.count)
 }
 
-#[instrument(name = "GET and parse quickwit search aggregation results")]
+#[instrument(skip(query), name = "GET and parse quickwit search aggregation results")]
 async fn search_aggregation(
     base_url: &str,
     index: &str,
