@@ -2,9 +2,9 @@ use std::{sync::Arc, time::Instant};
 
 use async_stream::stream;
 use color_eyre::eyre::{bail, Context, Result};
+use futures_core::Future;
 use futures_util::{future::try_join_all, stream::FuturesUnordered, StreamExt};
 use kinded::Kinded;
-use serde_json::to_string;
 use summarize::{summarize_stream, Summarize};
 use tokio::{spawn, sync::mpsc, task::JoinHandle};
 use topn::topn_stream;
@@ -303,7 +303,11 @@ impl Workflow {
         Ok((tasks, rx.unwrap()))
     }
 
-    pub async fn execute_and_print(self) -> Result<()> {
+    pub async fn execute<F, Fut>(self, on_log: F) -> Result<()>
+    where
+        F: Fn(Log) -> Fut + Send + 'static,
+        Fut: Future<Output = Result<()>> + Send + 'static,
+    {
         if self.steps.is_empty() {
             return Ok(());
         }
@@ -311,7 +315,7 @@ impl Workflow {
         let (tasks, mut rx) = self.create_tasks()?;
         tasks.push(spawn(async move {
             while let Some(log) = rx.recv().await {
-                println!("{}", to_string(&log).context("log to string")?);
+                on_log(log).await?;
             }
             Ok(())
         }));

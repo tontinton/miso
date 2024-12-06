@@ -7,15 +7,16 @@ use axum::{
     routing::post,
     Extension, Json, Router,
 };
-use color_eyre::Result;
+use color_eyre::{eyre::Context, Result};
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+use serde_json::{json, to_string};
 use tokio::sync::RwLock;
 use tracing::{debug, error, info, span, Level};
 use uuid::Uuid;
 
 use crate::{
     connector::Connector,
+    log::Log,
     optimizations::Optimizer,
     quickwit_connector::QuickwitConnector,
     workflow::{
@@ -192,7 +193,13 @@ async fn post_query_handler(
     let workflow = to_workflow(state, req.query).await?;
 
     debug!(?workflow, "Executing workflow");
-    if let Err(err) = workflow.execute_and_print().await {
+
+    let print_log = |log: Log| async move {
+        println!("{}", to_string(&log).context("log to string")?);
+        Ok(())
+    };
+
+    if let Err(err) = workflow.execute(print_log).await {
         return Err(HttpError::new(
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("failed to execute workflow: {:?}", err),
