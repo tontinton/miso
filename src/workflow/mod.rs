@@ -1,12 +1,12 @@
 use std::sync::Arc;
 
 use async_stream::stream;
-use color_eyre::eyre::{bail, Context, Result};
-use futures_util::{pin_mut, stream::FuturesUnordered, StreamExt};
+use color_eyre::eyre::{Context, Result};
+use futures_util::{stream::FuturesUnordered, StreamExt};
 use kinded::Kinded;
 use serde_json::to_string;
 use summarize::{summarize_stream, Summarize};
-use tokio::{select, spawn, sync::mpsc};
+use tokio::{spawn, sync::mpsc};
 use topn::topn_stream;
 use tracing::debug;
 
@@ -184,43 +184,27 @@ impl Workflow {
             (tx, next_rx) = mpsc::channel(1);
         }
 
-        let print_future = async {
+        handles.push(spawn(async move {
             let mut rx = rx.unwrap();
             while let Some(log) = rx.recv().await {
                 println!("{}", to_string(&log).context("log to string")?);
             }
             Ok::<(), color_eyre::eyre::Error>(())
-        };
-        pin_mut!(print_future);
+        }));
 
         debug!("Starting to print logs");
 
-        loop {
-            select! {
-                result = &mut print_future => {
-                    for handle in handles {
-                        handle.abort();
-                    }
-                    result?;
+        while let Some(join_result) = handles.next().await {
+            let result = join_result?;
+            if let Err(e) = result {
+                for handle in &handles {
+                    handle.abort();
                 }
-                maybe_result = handles.next() => {
-                    if let Some(result) = maybe_result {
-                        if let Err(e) = result {
-                            for handle in handles {
-                                handle.abort();
-                            }
-                            bail!("Failed one of the workflow step tasks: {}", e);
-                        }
-                        continue;
-                    } else {
-                        print_future.await?;
-                    }
-                }
+                return Err(e.wrap_err("failed one of the workflow steps"));
             }
-
-            debug!("Printing finished successfully");
-            break;
         }
+
+        debug!("Done printing logs");
 
         Ok(())
     }
