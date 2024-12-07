@@ -29,7 +29,7 @@ pub enum FilterAst {
     Lte(/*field=*/ String, /*value=*/ String),         // <=
 }
 
-fn binop_to_vrl(exprs: &[FilterAst], join: &str) -> String {
+fn group_to_vrl(exprs: &[FilterAst], join: &str) -> String {
     let mut result = String::new();
     if exprs.is_empty() {
         return result;
@@ -46,20 +46,30 @@ fn binop_to_vrl(exprs: &[FilterAst], join: &str) -> String {
     result
 }
 
+fn binop_compare_to_vrl(field: &str, value: &str, compare: &str) -> String {
+    let stripped = value.trim();
+    let cast = if stripped.starts_with('"') && stripped.starts_with('"') {
+        "to_string!"
+    } else {
+        "to_int!"
+    };
+    format!("{cast}(.{field}) {compare} {stripped}")
+}
+
 fn filter_ast_to_vrl(ast: &FilterAst) -> String {
     match ast {
-        FilterAst::And(exprs) => binop_to_vrl(exprs, " && "),
-        FilterAst::Or(exprs) => binop_to_vrl(exprs, " || "),
-        FilterAst::Contains(field, word) => format!("contains(string!(.{field}), \"{word}\")"),
+        FilterAst::And(exprs) => group_to_vrl(exprs, " && "),
+        FilterAst::Or(exprs) => group_to_vrl(exprs, " || "),
+        FilterAst::Contains(field, word) => format!("contains(to_string!(.{field}), \"{word}\")"),
         FilterAst::StartsWith(field, prefix) => {
-            format!("starts_with(string!(.{field}), \"{prefix}\")")
+            format!("starts_with(to_string!(.{field}), \"{prefix}\")")
         }
-        FilterAst::Eq(field, word) => format!(".{field} == {word}"),
-        FilterAst::Ne(field, word) => format!(".{field} != {word}"),
-        FilterAst::Gt(field, word) => format!(".{field} > {word}"),
-        FilterAst::Gte(field, word) => format!(".{field} >= {word}"),
-        FilterAst::Lt(field, word) => format!(".{field} < {word}"),
-        FilterAst::Lte(field, word) => format!(".{field} <= {word}"),
+        FilterAst::Eq(field, value) => binop_compare_to_vrl(field, value, "=="),
+        FilterAst::Ne(field, value) => binop_compare_to_vrl(field, value, "!="),
+        FilterAst::Gt(field, value) => binop_compare_to_vrl(field, value, ">"),
+        FilterAst::Gte(field, value) => binop_compare_to_vrl(field, value, ">="),
+        FilterAst::Lt(field, value) => binop_compare_to_vrl(field, value, "<"),
+        FilterAst::Lte(field, value) => binop_compare_to_vrl(field, value, "<="),
     }
 }
 
