@@ -219,7 +219,13 @@ async fn query_stream(
                 }
                 result = &mut workflow_task => {
                     match result {
-                        Ok(Ok(())) => break,
+                        Ok(Ok(())) => {
+                            // Finish reading whatever is left in the channel.
+                            while let Some(log) = rx.recv().await {
+                                yield Event::default().json_data(log);
+                            }
+                            break;
+                        },
                         Ok(Err(e)) => {
                             error!("Workflow error: {e}");
                             yield Event::default().json_data(INTERNAL_SERVER_ERROR);
