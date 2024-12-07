@@ -227,12 +227,12 @@ async fn query_stream(
                             break;
                         },
                         Ok(Err(e)) => {
-                            error!("Workflow error: {e}");
+                            error!("Workflow error: {e:?}");
                             yield Event::default().json_data(INTERNAL_SERVER_ERROR);
                             break;
                         }
                         Err(e) => {
-                            error!("Task join error: {e}");
+                            error!("Task join error: {e:?}");
                             yield Event::default().json_data(INTERNAL_SERVER_ERROR);
                             break;
                         }
