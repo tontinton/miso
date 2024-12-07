@@ -100,31 +100,31 @@ fn rx_stream(mut rx: mpsc::Receiver<Log>) -> LogStream {
     })
 }
 
-async fn count_to_tx(count: i64, tx: mpsc::Sender<Log>) -> Result<()> {
+async fn count_to_tx(count: i64, tx: mpsc::Sender<Log>) {
     let mut count_log = Log::new();
     count_log.insert(COUNT_LOG_FIELD_NAME.into(), Value::Integer(count));
-    tx.send(count_log).await.context("send count to tx")?;
-    Ok(())
+    if let Err(e) = tx.send(count_log).await {
+        debug!("Not sending count: {:?}", e);
+    }
 }
 
 async fn stream_to_tx(mut stream: LogTryStream, tx: mpsc::Sender<Log>, tag: &str) -> Result<()> {
     while let Some(log) = stream.next().await {
         if let Err(e) = tx.send(log.context(format!("tx {tag}"))?).await {
-            debug!("Closing {} step: {}", tag, e);
+            debug!("Closing {} step: {:?}", tag, e);
             break;
         }
     }
     Ok(())
 }
 
-async fn logs_vec_to_tx(logs: Vec<Log>, tx: mpsc::Sender<Log>, tag: &str) -> Result<()> {
+async fn logs_vec_to_tx(logs: Vec<Log>, tx: mpsc::Sender<Log>, tag: &str) {
     for log in logs {
         if let Err(e) = tx.send(log).await {
-            debug!("Closing {} step: {}", tag, e);
+            debug!("Closing {} step: {:?}", tag, e);
             break;
         }
     }
-    Ok(())
 }
 
 impl WorkflowStep {
@@ -183,9 +183,7 @@ impl WorkflowStep {
                 }
 
                 if let Some(inner) = count {
-                    count_to_tx(inner, tx)
-                        .await
-                        .context("send count from scan")?;
+                    count_to_tx(inner, tx).await;
                 }
             }
             WorkflowStep::Filter(ast) => {
@@ -202,15 +200,15 @@ impl WorkflowStep {
             }
             WorkflowStep::Sort(sorts) => {
                 let logs = sort_stream(sorts, rx_stream(rx.unwrap())).await?;
-                logs_vec_to_tx(logs, tx, "sort").await?;
+                logs_vec_to_tx(logs, tx, "sort").await;
             }
             WorkflowStep::TopN(sorts, limit) => {
                 let logs = topn_stream(sorts, limit, rx_stream(rx.unwrap())).await?;
-                logs_vec_to_tx(logs, tx, "top-n").await?;
+                logs_vec_to_tx(logs, tx, "top-n").await;
             }
             WorkflowStep::Summarize(config) => {
                 let logs = summarize_stream(config, rx_stream(rx.unwrap())).await?;
-                logs_vec_to_tx(logs, tx, "summarize").await?;
+                logs_vec_to_tx(logs, tx, "summarize").await;
             }
             WorkflowStep::Union(workflow) => {
                 if workflow.steps.is_empty() {
@@ -222,7 +220,9 @@ impl WorkflowStep {
                 let union_tx = tx.clone();
                 tasks.push(spawn(async move {
                     while let Some(log) = union_rx.recv().await {
-                        union_tx.send(log).await.context("union send to tx")?;
+                        if union_tx.send(log).await.is_err() {
+                            break;
+                        }
                     }
                     Ok(())
                 }));
@@ -230,7 +230,9 @@ impl WorkflowStep {
                 let mut rx = rx.unwrap();
                 tasks.push(spawn(async move {
                     while let Some(log) = rx.recv().await {
-                        tx.send(log).await.context("union passthrough send to tx")?;
+                        if tx.send(log).await.is_err() {
+                            break;
+                        }
                     }
                     Ok(())
                 }));
@@ -245,9 +247,7 @@ impl WorkflowStep {
                     count += 1;
                 }
 
-                count_to_tx(count, tx)
-                    .await
-                    .context("send count from count")?;
+                count_to_tx(count, tx).await;
             }
         }
 
