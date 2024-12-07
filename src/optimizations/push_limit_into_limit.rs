@@ -13,7 +13,7 @@ impl Optimization for PushLimitIntoLimit {
         let WorkflowStep::Limit(a) = &steps[0] else {
             return None;
         };
-        let WorkflowStep::Limit(b) = &steps[1].clone() else {
+        let WorkflowStep::Limit(b) = &steps[1] else {
             return None;
         };
         Some(vec![WorkflowStep::Limit(std::cmp::min(*a, *b))])
