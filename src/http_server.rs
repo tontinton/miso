@@ -30,6 +30,8 @@ use crate::{
     },
 };
 
+const INTERNAL_SERVER_ERROR: &str = "Internal server error";
+
 struct State {
     connectors: HashMap<String, Arc<dyn Connector>>,
     optimizer: Arc<Optimizer>,
@@ -169,7 +171,7 @@ impl IntoResponse for HttpError {
     fn into_response(self) -> Response {
         let body = if self.status.is_server_error() {
             error!("Internal server error: {}", self.message);
-            Json(json!({"error": "Internal server error"}))
+            Json(json!({"error": INTERNAL_SERVER_ERROR}))
         } else {
             error!("User error: {}", self.message);
             Json(json!({"error": self.message}))
@@ -203,14 +205,35 @@ async fn query_stream(
         }
     };
 
-    // TODO: propagate error to user.
-    let workflow_task = spawn(workflow.execute(send_log_to_sse_tx));
+    let mut workflow_task = spawn(workflow.execute(send_log_to_sse_tx));
 
     Ok(Sse::new(stream! {
-        while let Some(log) = rx.recv().await {
-            yield Event::default().json_data(log);
+        loop {
+            tokio::select! {
+                log = rx.recv() => {
+                    if let Some(log) = log {
+                        yield Event::default().json_data(log);
+                    } else {
+                        break;
+                    }
+                }
+                result = &mut workflow_task => {
+                    match result {
+                        Ok(Ok(())) => break,
+                        Ok(Err(e)) => {
+                            error!("Workflow error: {e}");
+                            yield Event::default().json_data(INTERNAL_SERVER_ERROR);
+                            break;
+                        }
+                        Err(e) => {
+                            error!("Task join error: {e}");
+                            yield Event::default().json_data(INTERNAL_SERVER_ERROR);
+                            break;
+                        }
+                    }
+                }
+            }
         }
-        let _ = workflow_task.await;
     }))
 }
 
