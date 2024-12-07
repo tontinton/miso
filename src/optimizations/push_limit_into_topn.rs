@@ -2,9 +2,9 @@ use crate::{pattern, workflow::WorkflowStep};
 
 use super::{Group, Optimization, Pattern};
 
-pub struct PushTopNIntoLimit;
+pub struct PushLimitIntoTopN;
 
-impl Optimization for PushTopNIntoLimit {
+impl Optimization for PushLimitIntoTopN {
     fn pattern(&self) -> Pattern {
         pattern!(TopN Limit)
     }
