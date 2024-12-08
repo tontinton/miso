@@ -167,19 +167,24 @@ impl Optimizer {
         let mut kinded_steps = to_kind(&steps);
         let mut already_ran = BTreeSet::new();
 
-        let mut optimized_in_loop = true;
-        while optimized_in_loop {
-            optimized_in_loop = false;
-
+        'passes: loop {
             for (optimizations, patterns) in self.optimizations.iter().zip(&self.patterns) {
-                optimized_in_loop |= run_optimization_pass(
+                let something_was_optimized = run_optimization_pass(
                     optimizations,
                     patterns,
                     &mut steps,
                     &mut kinded_steps,
                     &mut already_ran,
                 );
+
+                if something_was_optimized {
+                    // Restart from beginning.
+                    continue 'passes;
+                }
             }
+
+            // Nothing left to optimize.
+            break;
         }
 
         // Don't forget to optimize union steps too!
