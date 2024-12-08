@@ -1,4 +1,4 @@
-use std::sync::atomic::{self, AtomicBool};
+use std::collections::BTreeSet;
 
 use convert_sort_limit_to_topn::ConvertSortLimitToTopN;
 use pattern::{Group, Pattern};
@@ -29,17 +29,20 @@ mod remove_redundant_sorts_before_count;
 #[macro_export]
 macro_rules! opt {
     ($optimization:ident) => {
-        Box::new($optimization) as Box<dyn Optimization>
+        OptimizationStep {
+            optimization: Box::new($optimization) as Box<dyn Optimization>,
+            run_once: false,
+        }
     };
 }
 
 #[macro_export]
 macro_rules! opt_once {
     ($optimization:ident) => {
-        Box::new(OptimizeOnce {
-            optimization: Box::new($optimization),
-            ran: AtomicBool::new(false),
-        })
+        OptimizationStep {
+            optimization: Box::new($optimization) as Box<dyn Optimization>,
+            run_once: true,
+        }
     };
 }
 
@@ -48,27 +51,15 @@ pub trait Optimization: Send + Sync {
     fn apply(&self, steps: &[WorkflowStep], groups: &[Group]) -> Option<Vec<WorkflowStep>>;
 }
 
-struct OptimizeOnce {
+struct OptimizationStep {
     optimization: Box<dyn Optimization>,
-    ran: AtomicBool,
-}
 
-impl Optimization for OptimizeOnce {
-    fn pattern(&self) -> Pattern {
-        self.optimization.pattern()
-    }
-
-    fn apply(&self, steps: &[WorkflowStep], groups: &[Group]) -> Option<Vec<WorkflowStep>> {
-        let already_ran = self.ran.fetch_or(true, atomic::Ordering::Relaxed);
-        if already_ran {
-            return None;
-        }
-        self.optimization.apply(steps, groups)
-    }
+    /// Runs the optimization just once in the currently running optimization pass.
+    run_once: bool,
 }
 
 pub struct Optimizer {
-    optimizations: Vec<Vec<Box<dyn Optimization>>>,
+    optimizations: Vec<Vec<OptimizationStep>>,
     patterns: Vec<Vec<Pattern>>,
 }
 
@@ -104,7 +95,7 @@ impl Default for Optimizer {
 
         let patterns = optimizations
             .iter()
-            .map(|opts| opts.iter().map(|o| o.pattern()).collect())
+            .map(|opts| opts.iter().map(|x| x.optimization.pattern()).collect())
             .collect();
 
         Self {
@@ -114,11 +105,12 @@ impl Default for Optimizer {
     }
 }
 
-pub fn run_optimization_pass(
-    optimizations: &[Box<dyn Optimization>],
+fn run_optimization_pass(
+    optimizations: &[OptimizationStep],
     patterns: &[Pattern],
     steps: &mut Vec<WorkflowStep>,
     kinded_steps: &mut Vec<WorkflowStepKind>,
+    already_ran: &mut BTreeSet<usize>,
 ) -> bool {
     let mut optimized = false;
     let mut optimized_in_loop = true;
@@ -126,7 +118,14 @@ pub fn run_optimization_pass(
     while optimized_in_loop {
         optimized_in_loop = false;
 
-        for (optimization, pattern) in optimizations.iter().zip(patterns) {
+        for (i, (optimization_step, pattern)) in optimizations.iter().zip(patterns).enumerate() {
+            if optimization_step.run_once {
+                if already_ran.contains(&i) {
+                    continue;
+                }
+                already_ran.insert(i);
+            }
+
             let mut groups = Vec::new();
 
             let mut last_found_end = 0;
@@ -138,7 +137,9 @@ pub fn run_optimization_pass(
                 last_found_end = end;
 
                 let matched_groups = std::mem::take(&mut groups);
-                let Some(new_steps) = optimization.apply(&steps[start..end], &matched_groups)
+                let Some(new_steps) = optimization_step
+                    .optimization
+                    .apply(&steps[start..end], &matched_groups)
                 else {
                     continue;
                 };
@@ -164,14 +165,20 @@ pub fn run_optimization_pass(
 impl Optimizer {
     pub fn optimize(&self, mut steps: Vec<WorkflowStep>) -> Vec<WorkflowStep> {
         let mut kinded_steps = to_kind(&steps);
+        let mut already_ran = BTreeSet::new();
 
         let mut optimized_in_loop = true;
         while optimized_in_loop {
             optimized_in_loop = false;
 
             for (optimizations, patterns) in self.optimizations.iter().zip(&self.patterns) {
-                optimized_in_loop |=
-                    run_optimization_pass(optimizations, patterns, &mut steps, &mut kinded_steps);
+                optimized_in_loop |= run_optimization_pass(
+                    optimizations,
+                    patterns,
+                    &mut steps,
+                    &mut kinded_steps,
+                    &mut already_ran,
+                );
             }
         }
 
