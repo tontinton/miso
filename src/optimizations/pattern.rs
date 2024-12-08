@@ -169,16 +169,6 @@ impl Default for VecCollector {
     }
 }
 
-impl VecCollector {
-    fn into_with_offset(self, offset: usize) -> Vec<Group> {
-        self.groups
-            .take()
-            .into_iter()
-            .map(|(start, end)| (start + offset, end + offset))
-            .collect()
-    }
-}
-
 impl GroupCollector for VecCollector {
     fn stage_start(&self, start: usize) {
         if DEBUG_GROUPS_PRINTS {
@@ -243,7 +233,7 @@ impl Pattern {
     ) -> Option<Group> {
         let collector = VecCollector::default();
         let result = Self::search_first_on_collector(pattern, input, &collector)?;
-        *groups = collector.into_with_offset(result.0);
+        *groups = collector.groups.take().into_iter().collect();
         Some(result)
     }
 
@@ -651,7 +641,7 @@ mod tests {
             ),
             Some((1, 4))
         );
-        assert_eq!(&groups, &[(2, 3)]);
+        assert_eq!(&groups, &[(1, 2)]);
 
         groups.clear();
         assert_eq!(
@@ -667,7 +657,7 @@ mod tests {
             ),
             Some((1, 4))
         );
-        assert_eq!(&groups, &[(1, 2), (2, 4)]);
+        assert_eq!(&groups, &[(0, 1), (1, 3)]);
 
         groups.clear();
         assert_eq!(
@@ -685,7 +675,7 @@ mod tests {
             ),
             Some((1, 5))
         );
-        assert_eq!(&groups, &[(2, 5)]);
+        assert_eq!(&groups, &[(1, 4)]);
 
         groups.clear();
         assert_eq!(
@@ -737,7 +727,7 @@ mod tests {
             ),
             Some((2, 5))
         );
-        assert_eq!(&groups, &[(3, 4)]);
+        assert_eq!(&groups, &[(1, 2)]);
     }
 
     #[test]
