@@ -14,7 +14,7 @@ use serde::Deserialize;
 use serde_json::json;
 use tokio::{
     spawn,
-    sync::{mpsc, RwLock},
+    sync::{mpsc, watch, RwLock},
 };
 use tracing::{debug, error, info, span, Level};
 use uuid::Uuid;
@@ -181,6 +181,15 @@ impl IntoResponse for HttpError {
     }
 }
 
+struct NotifyOnDrop(watch::Sender<()>);
+
+impl Drop for NotifyOnDrop {
+    fn drop(&mut self) {
+        debug!("Notify on drop");
+        let _ = self.0.send(());
+    }
+}
+
 /// Starts running a new query.
 async fn query_stream(
     Extension(state): Extension<SharedState>,
@@ -197,7 +206,7 @@ async fn query_stream(
     debug!(?workflow, "Executing workflow");
 
     let (tx, mut rx) = mpsc::channel(1);
-    let send_log_to_sse_tx = move |log: Log| {
+    let send_log_to_sse = move |log: Log| {
         let tx = tx.clone();
         async move {
             tx.send(log).await.context("log to SSE tx")?;
@@ -205,9 +214,13 @@ async fn query_stream(
         }
     };
 
-    let mut workflow_task = spawn(workflow.execute(send_log_to_sse_tx));
+    let (cancel_tx, cancel_rx) = watch::channel(());
+
+    let mut workflow_task = spawn(workflow.execute(send_log_to_sse, cancel_rx));
 
     Ok(Sse::new(stream! {
+        let _notify_on_drop = NotifyOnDrop(cancel_tx);
+
         loop {
             tokio::select! {
                 log = rx.recv() => {

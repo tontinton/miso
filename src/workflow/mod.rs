@@ -6,7 +6,11 @@ use futures_core::Future;
 use futures_util::{future::try_join_all, stream::FuturesUnordered, StreamExt};
 use kinded::Kinded;
 use summarize::{summarize_stream, Summarize};
-use tokio::{spawn, sync::mpsc, task::JoinHandle};
+use tokio::{
+    spawn,
+    sync::{mpsc, watch},
+    task::JoinHandle,
+};
 use topn::topn_stream;
 use tracing::{debug, info, instrument};
 use vrl::core::Value;
@@ -133,6 +137,7 @@ impl WorkflowStep {
         self: WorkflowStep,
         rx: Option<mpsc::Receiver<Log>>,
         tx: mpsc::Sender<Log>,
+        cancel_rx: watch::Receiver<()>,
     ) -> Result<()> {
         let start = Instant::now();
 
@@ -215,7 +220,7 @@ impl WorkflowStep {
                     return Ok(());
                 }
 
-                let (tasks, mut union_rx) = workflow.create_tasks()?;
+                let (tasks, mut union_rx) = workflow.create_tasks(cancel_rx.clone())?;
 
                 let union_tx = tx.clone();
                 tasks.push(spawn(async move {
@@ -237,7 +242,7 @@ impl WorkflowStep {
                     Ok(())
                 }));
 
-                execute_tasks(tasks).await?;
+                execute_tasks(tasks, cancel_rx).await?;
             }
             WorkflowStep::Count => {
                 let mut rx = rx.unwrap();
@@ -259,16 +264,31 @@ impl WorkflowStep {
 }
 
 #[instrument(skip_all)]
-async fn execute_tasks(mut tasks: WorkflowTasks) -> Result<()> {
+async fn execute_tasks(mut tasks: WorkflowTasks, mut cancel_rx: watch::Receiver<()>) -> Result<()> {
     let start = Instant::now();
 
-    while let Some(join_result) = tasks.next().await {
-        let result = join_result?;
-        if let Err(e) = result {
-            for handle in &tasks {
-                handle.abort();
+    loop {
+        tokio::select! {
+            task_result = tasks.next() => {
+                let Some(join_result) = task_result else {
+                    break;
+                };
+
+                let result = join_result?;
+                if let Err(e) = result {
+                    for handle in &tasks {
+                        handle.abort();
+                    }
+                    return Err(e.wrap_err("failed one of the workflow steps"));
+                }
             }
-            return Err(e.wrap_err("failed one of the workflow steps"));
+            _ = cancel_rx.changed() => {
+                info!("Workflow cancelled");
+                for handle in &tasks {
+                    handle.abort();
+                }
+                break;
+            }
         }
     }
 
@@ -283,7 +303,10 @@ impl Workflow {
         Self { steps }
     }
 
-    fn create_tasks(self) -> Result<(WorkflowTasks, mpsc::Receiver<Log>)> {
+    fn create_tasks(
+        self,
+        cancel_rx: watch::Receiver<()>,
+    ) -> Result<(WorkflowTasks, mpsc::Receiver<Log>)> {
         assert!(!self.steps.is_empty());
 
         let (mut tx, mut next_rx) = mpsc::channel(1);
@@ -294,7 +317,11 @@ impl Workflow {
         for step in self.steps {
             debug!("Spawning step: {:?}", step);
 
-            tasks.push(spawn(step.execute(rx.take(), tx.clone())));
+            tasks.push(spawn(step.execute(
+                rx.take(),
+                tx.clone(),
+                cancel_rx.clone(),
+            )));
 
             rx = Some(next_rx);
             (tx, next_rx) = mpsc::channel(1);
@@ -303,7 +330,7 @@ impl Workflow {
         Ok((tasks, rx.unwrap()))
     }
 
-    pub async fn execute<F, Fut>(self, on_log: F) -> Result<()>
+    pub async fn execute<F, Fut>(self, on_log: F, cancel_rx: watch::Receiver<()>) -> Result<()>
     where
         F: Fn(Log) -> Fut + Send + 'static,
         Fut: Future<Output = Result<()>> + Send + 'static,
@@ -312,7 +339,7 @@ impl Workflow {
             return Ok(());
         }
 
-        let (tasks, mut rx) = self.create_tasks()?;
+        let (tasks, mut rx) = self.create_tasks(cancel_rx.clone())?;
         tasks.push(spawn(async move {
             while let Some(log) = rx.recv().await {
                 on_log(log).await?;
@@ -320,7 +347,7 @@ impl Workflow {
             Ok(())
         }));
 
-        execute_tasks(tasks).await?;
+        execute_tasks(tasks, cancel_rx).await?;
         Ok(())
     }
 }
