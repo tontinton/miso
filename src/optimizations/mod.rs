@@ -11,6 +11,7 @@ use push_stuff_into_union::PushStuffIntoUnion;
 use push_summarize_into_scan::PushSummarizeIntoScan;
 use push_topn_into_scan::PushTopNIntoScan;
 use remove_redundant_sorts_before_count::RemoveRedundantSortsBeforeCount;
+use push_filter_before_sort::PushFilterBeforeSort;
 
 use crate::workflow::{WorkflowStep, WorkflowStepKind};
 
@@ -25,6 +26,7 @@ mod push_stuff_into_union;
 mod push_summarize_into_scan;
 mod push_topn_into_scan;
 mod remove_redundant_sorts_before_count;
+mod push_filter_before_sort;
 
 #[macro_export]
 macro_rules! opt {
@@ -80,6 +82,7 @@ impl Default for Optimizer {
                 opt!(ConvertSortLimitToTopN),
                 opt!(PushLimitIntoTopN),
                 opt!(PushTopNIntoScan),
+                opt!(PushFilterBeforeSort),
                 // Count.
                 opt!(PushCountIntoScan),
                 opt!(RemoveRedundantSortsBeforeCount),
