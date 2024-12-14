@@ -339,11 +339,7 @@ impl Workflow {
         for step in self.steps {
             debug!("Spawning step: {:?}", step);
 
-            tasks.push(spawn(step.execute(
-                rx.take(),
-                tx.clone(),
-                cancel_rx.clone(),
-            )));
+            tasks.push(spawn(step.execute(rx.take(), tx, cancel_rx.clone())));
 
             rx = Some(next_rx);
             (tx, next_rx) = mpsc::channel(1);
