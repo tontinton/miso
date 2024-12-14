@@ -4,6 +4,7 @@ use async_stream::stream;
 use color_eyre::eyre::{bail, Context, Result};
 use futures_core::Future;
 use futures_util::{future::try_join_all, stream::FuturesUnordered, StreamExt};
+use join::{join_streams, Join, JoinType};
 use kinded::Kinded;
 use summarize::{summarize_stream, Summarize};
 use tokio::{
@@ -26,6 +27,7 @@ use crate::{
 use self::{filter::FilterAst, project::ProjectField, sort::Sort};
 
 pub mod filter;
+pub mod join;
 pub mod limit;
 pub mod project;
 pub mod sort;
@@ -71,6 +73,9 @@ pub enum WorkflowStep {
     /// Union results from another query.
     Union(Workflow),
 
+    /// Join results from another query.
+    Join((Join, Workflow)),
+
     /// The number of records. Only works as the last step.
     Count,
 }
@@ -86,6 +91,7 @@ impl std::fmt::Display for WorkflowStep {
             WorkflowStep::TopN(.., limit) => write!(f, "top-n({})", limit),
             WorkflowStep::Summarize(..) => write!(f, "summarize"),
             WorkflowStep::Union(..) => write!(f, "union"),
+            WorkflowStep::Join(..) => write!(f, "join"),
             WorkflowStep::Count => write!(f, "count"),
         }
     }
@@ -129,6 +135,19 @@ async fn logs_vec_to_tx(logs: Vec<Log>, tx: mpsc::Sender<Log>, tag: &str) {
             break;
         }
     }
+}
+
+async fn pipe(mut rx: mpsc::Receiver<Log>, tx: mpsc::Sender<Log>) {
+    while let Some(log) = rx.recv().await {
+        if tx.send(log).await.is_err() {
+            break;
+        }
+    }
+}
+
+async fn pipe_task(rx: mpsc::Receiver<Log>, tx: mpsc::Sender<Log>) -> Result<()> {
+    pipe(rx, tx).await;
+    Ok(())
 }
 
 impl WorkflowStep {
@@ -220,25 +239,27 @@ impl WorkflowStep {
                     return Ok(());
                 }
 
-                let (tasks, mut union_rx) = workflow.create_tasks(cancel_rx.clone())?;
+                let (tasks, union_rx) = workflow.create_tasks(cancel_rx.clone())?;
 
-                let union_tx = tx.clone();
-                tasks.push(spawn(async move {
-                    while let Some(log) = union_rx.recv().await {
-                        if union_tx.send(log).await.is_err() {
-                            break;
-                        }
-                    }
-                    Ok(())
-                }));
+                tasks.push(spawn(pipe_task(union_rx, tx.clone())));
+                tasks.push(spawn(pipe_task(rx.unwrap(), tx)));
 
-                let mut rx = rx.unwrap();
-                tasks.push(spawn(async move {
-                    while let Some(log) = rx.recv().await {
-                        if tx.send(log).await.is_err() {
-                            break;
-                        }
+                execute_tasks(tasks, cancel_rx).await?;
+            }
+            WorkflowStep::Join((config, workflow)) => {
+                if workflow.steps.is_empty() {
+                    if matches!(config.type_, JoinType::Left | JoinType::Outer) {
+                        pipe(rx.unwrap(), tx).await;
                     }
+                    return Ok(());
+                }
+
+                let (tasks, join_rx) = workflow.create_tasks(cancel_rx.clone())?;
+
+                tasks.push(spawn(async move {
+                    let stream =
+                        join_streams(config, rx_stream(rx.unwrap()), rx_stream(join_rx)).await;
+                    stream_to_tx(stream, tx, "join").await?;
                     Ok(())
                 }));
 
