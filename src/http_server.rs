@@ -40,10 +40,10 @@ struct State {
 type SharedState = Arc<RwLock<State>>;
 
 #[async_recursion]
-async fn to_workflow(
+async fn to_workflow_steps(
     state: SharedState,
     query_steps: Vec<QueryStep>,
-) -> Result<Workflow, HttpError> {
+) -> Result<Vec<WorkflowStep>, HttpError> {
     if query_steps.is_empty() {
         return Err(HttpError::new(
             StatusCode::BAD_REQUEST,
@@ -113,14 +113,14 @@ async fn to_workflow(
                 steps.push(WorkflowStep::Summarize(config));
             }
             QueryStep::Union(inner_steps) => {
-                steps.push(WorkflowStep::Union(
-                    to_workflow(state.clone(), inner_steps).await?,
-                ));
+                steps.push(WorkflowStep::Union(Workflow::new(
+                    to_workflow_steps(state.clone(), inner_steps).await?,
+                )));
             }
             QueryStep::Join((config, inner_steps)) => {
                 steps.push(WorkflowStep::Join((
                     config,
-                    to_workflow(state.clone(), inner_steps).await?,
+                    Workflow::new(to_workflow_steps(state.clone(), inner_steps).await?),
                 )));
             }
             QueryStep::Count => {
@@ -135,8 +135,7 @@ async fn to_workflow(
         }
     }
 
-    let optimizer = state.read().await.optimizer.clone();
-    Ok(Workflow::new(optimizer.optimize(steps).await))
+    Ok(steps)
 }
 
 #[derive(Debug, Deserialize)]
@@ -208,7 +207,11 @@ async fn query_stream(
     let _enter = span.enter();
 
     info!(?req.query, "Starting to run a new query");
-    let workflow = to_workflow(state, req.query).await?;
+    let workflow = {
+        let steps = to_workflow_steps(state.clone(), req.query).await?;
+        let optimizer = state.read().await.optimizer.clone();
+        Workflow::new(optimizer.optimize(steps).await)
+    };
 
     debug!(?workflow, "Executing workflow");
 
