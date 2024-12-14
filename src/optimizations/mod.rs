@@ -196,17 +196,23 @@ impl Optimizer {
             break;
         }
 
-        // Don't forget to optimize union steps too!
-        let mut post_union_steps = Vec::with_capacity(steps.len());
+        // Don't forget to optimize union & join steps too!
+        let mut optimized_inner_steps = Vec::with_capacity(steps.len());
         for step in steps {
-            let post_union_step = if let WorkflowStep::Union(mut workflow) = step {
-                workflow.steps = self.optimize(workflow.steps).await;
-                WorkflowStep::Union(workflow)
-            } else {
-                step
+            let optimized_inner_step = match step {
+                WorkflowStep::Union(mut workflow) => {
+                    workflow.steps = self.optimize(workflow.steps).await;
+                    WorkflowStep::Union(workflow)
+                }
+                WorkflowStep::Join((config, mut workflow)) => {
+                    workflow.steps = self.optimize(workflow.steps).await;
+                    WorkflowStep::Join((config, workflow))
+                }
+                _ => step,
             };
-            post_union_steps.push(post_union_step);
+
+            optimized_inner_steps.push(optimized_inner_step);
         }
-        post_union_steps
+        optimized_inner_steps
     }
 }
