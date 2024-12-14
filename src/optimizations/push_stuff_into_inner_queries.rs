@@ -2,15 +2,15 @@ use crate::{pattern, workflow::WorkflowStep};
 
 use super::{Group, Optimization, Pattern};
 
-pub struct PushStuffIntoUnion;
+pub struct PushStuffIntoInnerQueries;
 
-/// Some steps after unions, when inserted as a step into the subquery, can allow for predicate
-/// pushdowns to limit the amount of results.
-/// Also insert these steps right before the union, for the same reasons, just for
-/// the query before the union.
-impl Optimization for PushStuffIntoUnion {
+/// Some steps after unions / joins, when inserted as a step into the subquery, can allow for
+/// predicate pushdowns to limit the amount of results.
+/// Also insert these steps right before the union / join, for the same reasons, just for
+/// the outer query before the union / join step.
+impl Optimization for PushStuffIntoInnerQueries {
     fn pattern(&self) -> Pattern {
-        pattern!((Union+) (Filter* [Limit TopN]))
+        pattern!(([Union Join]+) (Filter* [Limit TopN]))
     }
 
     fn apply(&self, steps: &[WorkflowStep], groups: &[Group]) -> Option<Vec<WorkflowStep>> {
@@ -27,10 +27,11 @@ impl Optimization for PushStuffIntoUnion {
         new_steps.extend(steps.to_vec());
 
         for step in &mut new_steps[offset + unions_start..offset + unions_end] {
-            let WorkflowStep::Union(ref mut workflow) = step else {
-                continue;
-            };
-            workflow.steps.extend(push_steps.clone());
+            if let WorkflowStep::Union(ref mut workflow)
+            | WorkflowStep::Join((_, ref mut workflow)) = step
+            {
+                workflow.steps.extend(push_steps.clone());
+            }
         }
 
         Some(new_steps)
