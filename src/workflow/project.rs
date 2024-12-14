@@ -28,8 +28,6 @@ pub enum TransformAst {
     Minus(Box<TransformAst>, Box<TransformAst>),
 }
 
-// table | project x=y*2 | filter x>50
-
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ProjectField {
     from: TransformAst,
