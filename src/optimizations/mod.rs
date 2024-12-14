@@ -11,6 +11,7 @@ use push_stuff_into_inner_queries::PushStuffIntoInnerQueries;
 use push_summarize_into_scan::PushSummarizeIntoScan;
 use push_topn_into_scan::PushTopNIntoScan;
 use remove_redundant_sorts_before_count::RemoveRedundantSortsBeforeCount;
+use reorder_filter_before_sort::ReorderFilterBeforeSort;
 
 use crate::workflow::{WorkflowStep, WorkflowStepKind};
 
@@ -25,6 +26,7 @@ mod push_stuff_into_inner_queries;
 mod push_summarize_into_scan;
 mod push_topn_into_scan;
 mod remove_redundant_sorts_before_count;
+mod reorder_filter_before_sort;
 
 #[macro_export]
 macro_rules! opt {
@@ -73,6 +75,7 @@ impl Default for Optimizer {
             // First pass.
             vec![
                 // Filter.
+                opt!(ReorderFilterBeforeSort),
                 opt!(PushFilterIntoScan),
                 // Limit.
                 opt!(PushLimitIntoLimit),
