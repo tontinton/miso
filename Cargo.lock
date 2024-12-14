@@ -1696,6 +1696,7 @@ dependencies = [
  "futures-core",
  "futures-util",
  "humantime",
+ "itertools 0.13.0",
  "kinded",
  "parking_lot",
  "reqwest",

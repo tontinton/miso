@@ -17,7 +17,7 @@ use vrl::{core::Value, value::KeyString};
 
 use crate::log::{Log, LogStream};
 
-use super::vrl_utils::partial_cmp_values;
+use super::{sortable_value::SortableValue, vrl_utils::partial_cmp_values};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "snake_case")]
@@ -109,28 +109,6 @@ impl Aggregate for MinMax {
     }
 }
 
-struct Sortable(Value);
-
-impl Ord for Sortable {
-    fn cmp(&self, other: &Self) -> Ordering {
-        partial_cmp_values(&self.0, &other.0).unwrap_or(Ordering::Less)
-    }
-}
-
-impl PartialOrd for Sortable {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Eq for Sortable {}
-
-impl PartialEq for Sortable {
-    fn eq(&self, other: &Self) -> bool {
-        self.cmp(other) == Ordering::Equal
-    }
-}
-
 fn create_aggregate(aggregation: Aggregation) -> Arc<dyn Aggregate> {
     match aggregation {
         Aggregation::Count => Arc::new(Count::default()),
@@ -173,7 +151,8 @@ async fn summarize_group_by(
     // be unchanging, so having types with interior mutability is a bad idea.
     // We don't mutate the key, so we ignore the lint error here.
     #[allow(clippy::mutable_key_type)]
-    let mut group_aggregates: BTreeMap<Vec<Sortable>, Vec<Arc<dyn Aggregate>>> = BTreeMap::new();
+    let mut group_aggregates: BTreeMap<Vec<SortableValue>, Vec<Arc<dyn Aggregate>>> =
+        BTreeMap::new();
 
     let mut tracked_types = vec![None; by.len()];
 
@@ -183,7 +162,7 @@ async fn summarize_group_by(
         for (tracked_type, key) in tracked_types.iter_mut().zip(&by) {
             let value = log.get(key).unwrap_or_else(|| &Value::Null);
             if value == &Value::Null {
-                group_keys.push(Sortable(value.clone()));
+                group_keys.push(SortableValue(value.clone()));
                 continue;
             }
 
@@ -201,7 +180,7 @@ async fn summarize_group_by(
                 *tracked_type = Some(value_type);
             }
 
-            group_keys.push(Sortable(value.clone()));
+            group_keys.push(SortableValue(value.clone()));
         }
 
         let entry = group_aggregates

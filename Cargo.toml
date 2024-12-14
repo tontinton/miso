@@ -20,6 +20,7 @@ color-eyre = { version = "0.6.3", default-features = false }
 futures-core = "0.3.31"
 futures-util = "0.3.31"
 humantime = "2.1.0"
+itertools = "0.13.0"
 kinded = "0.3.0"
 parking_lot = "0.12.3"
 reqwest = { version = "0.12.9", features = ["json"] }
