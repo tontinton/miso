@@ -136,7 +136,7 @@ async fn to_workflow(
     }
 
     let optimizer = state.read().await.optimizer.clone();
-    Ok(Workflow::new(optimizer.optimize(steps)))
+    Ok(Workflow::new(optimizer.optimize(steps).await))
 }
 
 #[derive(Debug, Deserialize)]

@@ -1,5 +1,6 @@
 use std::collections::BTreeSet;
 
+use async_recursion::async_recursion;
 use convert_sort_limit_to_topn::ConvertSortLimitToTopN;
 use pattern::{Group, Pattern};
 use push_count_into_scan::PushCountIntoScan;
@@ -12,6 +13,7 @@ use push_summarize_into_scan::PushSummarizeIntoScan;
 use push_topn_into_scan::PushTopNIntoScan;
 use remove_redundant_sorts_before_count::RemoveRedundantSortsBeforeCount;
 use reorder_filter_before_sort::ReorderFilterBeforeSort;
+use tokio::task::yield_now;
 
 use crate::workflow::{WorkflowStep, WorkflowStepKind};
 
@@ -166,7 +168,8 @@ fn run_optimization_pass(
 }
 
 impl Optimizer {
-    pub fn optimize(&self, mut steps: Vec<WorkflowStep>) -> Vec<WorkflowStep> {
+    #[async_recursion]
+    pub async fn optimize(&self, mut steps: Vec<WorkflowStep>) -> Vec<WorkflowStep> {
         let mut kinded_steps = to_kind(&steps);
         let mut already_ran = BTreeSet::new();
 
@@ -181,6 +184,9 @@ impl Optimizer {
                 );
 
                 if something_was_optimized {
+                    // Let's be good neighbours and allow other tasks to run for a bit.
+                    yield_now().await;
+
                     // Restart from beginning.
                     continue 'passes;
                 }
@@ -191,16 +197,16 @@ impl Optimizer {
         }
 
         // Don't forget to optimize union steps too!
-        steps
-            .into_iter()
-            .map(|step| {
-                if let WorkflowStep::Union(mut workflow) = step {
-                    workflow.steps = self.optimize(workflow.steps);
-                    WorkflowStep::Union(workflow)
-                } else {
-                    step
-                }
-            })
-            .collect()
+        let mut post_union_steps = Vec::with_capacity(steps.len());
+        for step in steps {
+            let post_union_step = if let WorkflowStep::Union(mut workflow) = step {
+                workflow.steps = self.optimize(workflow.steps).await;
+                WorkflowStep::Union(workflow)
+            } else {
+                step
+            };
+            post_union_steps.push(post_union_step);
+        }
+        post_union_steps
     }
 }
