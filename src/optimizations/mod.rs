@@ -4,11 +4,11 @@ use async_recursion::async_recursion;
 use convert_sort_limit_to_topn::ConvertSortLimitToTopN;
 use pattern::{Group, Pattern};
 use push_count_into_scan::PushCountIntoScan;
+use push_filter_and_limit_into_union::PushFilterAndLimitIntoUnion;
 use push_filter_into_scan::PushFilterIntoScan;
 use push_limit_into_limit::PushLimitIntoLimit;
 use push_limit_into_scan::PushLimitIntoScan;
 use push_limit_into_topn::PushLimitIntoTopN;
-use push_stuff_into_inner_queries::PushStuffIntoInnerQueries;
 use push_summarize_into_scan::PushSummarizeIntoScan;
 use push_topn_into_scan::PushTopNIntoScan;
 use remove_redundant_sorts_before_count::RemoveRedundantSortsBeforeCount;
@@ -20,11 +20,11 @@ use crate::workflow::{WorkflowStep, WorkflowStepKind};
 mod convert_sort_limit_to_topn;
 mod pattern;
 mod push_count_into_scan;
+mod push_filter_and_limit_into_union;
 mod push_filter_into_scan;
 mod push_limit_into_limit;
 mod push_limit_into_scan;
 mod push_limit_into_topn;
-mod push_stuff_into_inner_queries;
 mod push_summarize_into_scan;
 mod push_topn_into_scan;
 mod remove_redundant_sorts_before_count;
@@ -94,7 +94,7 @@ impl Default for Optimizer {
             // Second pass - runs only after nothing to do on first pass.
             vec![
                 // Union.
-                opt_once!(PushStuffIntoInnerQueries),
+                opt_once!(PushFilterAndLimitIntoUnion),
             ],
         ];
 
