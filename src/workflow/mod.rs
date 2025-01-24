@@ -311,6 +311,16 @@ async fn execute_tasks(mut tasks: WorkflowTasks, mut cancel_rx: watch::Receiver<
 
     loop {
         tokio::select! {
+            // First select cancel, and only then the tasks.
+            biased;
+
+            _ = cancel_rx.changed() => {
+                info!("Workflow cancelled");
+                for handle in &tasks {
+                    handle.abort();
+                }
+                break;
+            }
             task_result = tasks.next() => {
                 let Some(join_result) = task_result else {
                     break;
@@ -323,13 +333,6 @@ async fn execute_tasks(mut tasks: WorkflowTasks, mut cancel_rx: watch::Receiver<
                     }
                     return Err(e.wrap_err("failed one of the workflow steps"));
                 }
-            }
-            _ = cancel_rx.changed() => {
-                info!("Workflow cancelled");
-                for handle in &tasks {
-                    handle.abort();
-                }
-                break;
             }
         }
     }
