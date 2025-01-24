@@ -139,7 +139,7 @@ fn run_optimization_pass(
                 &kinded_steps[last_found_end..],
                 &mut groups,
             ) {
-                last_found_end = end;
+                last_found_end += end - start;
 
                 let matched_groups = std::mem::take(&mut groups);
                 let Some(new_steps) = optimization_step
