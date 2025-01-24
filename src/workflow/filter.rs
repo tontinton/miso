@@ -122,7 +122,10 @@ mod tests {
             ]
         }"#;
         let result = filter_ast_to_vrl(&serde_json::from_str(ast_raw)?);
-        assert_eq!(result, "((.a == 1 && (.b == 2)) && (.c == 3 || .d == 4))");
+        assert_eq!(
+            result,
+            "((to_int!(.a) == 1 && (to_int!(.b) == 2)) && (to_int!(.c) == 3 || to_int!(.d) == 4))"
+        );
         Ok(())
     }
 }
