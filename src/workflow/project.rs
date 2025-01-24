@@ -12,7 +12,7 @@ use crate::{
 
 use super::vrl_utils::run_vrl;
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum TransformAst {
     Value(String),
@@ -28,7 +28,7 @@ pub enum TransformAst {
     Minus(Box<TransformAst>, Box<TransformAst>),
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct ProjectField {
     from: TransformAst,
     to: String,

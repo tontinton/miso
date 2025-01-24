@@ -14,7 +14,7 @@ use super::sortable_value::SortableValue;
 
 type JoinMap = BTreeMap<SortableValue, Vec<Log>>;
 
-#[derive(Debug, Serialize, Deserialize, Default, Clone)]
+#[derive(Debug, Serialize, Deserialize, Default, Clone, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum JoinType {
     #[default]
@@ -24,7 +24,7 @@ pub enum JoinType {
     Right,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, PartialEq)]
 pub struct Join {
     pub on: (String, String),
 

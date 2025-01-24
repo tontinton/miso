@@ -19,7 +19,7 @@ use crate::log::{Log, LogStream};
 
 use super::{sortable_value::SortableValue, vrl_utils::partial_cmp_values};
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum Aggregation {
     Count,
@@ -27,7 +27,7 @@ pub enum Aggregation {
     Max(/*field=*/ String),
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct Summarize {
     pub aggs: HashMap<String, Aggregation>,
     pub by: Vec<String>,

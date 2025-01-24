@@ -48,7 +48,14 @@ pub struct Scan {
     pub handle: Arc<dyn QueryHandle>,
 }
 
-#[derive(Kinded, Clone, Debug)]
+impl PartialEq for Scan {
+    fn eq(&self, other: &Self) -> bool {
+        // Only checking the collection for now.
+        self.collection == other.collection
+    }
+}
+
+#[derive(Kinded, Clone, Debug, PartialEq)]
 pub enum WorkflowStep {
     /// Run a search query.
     Scan(Scan),
@@ -98,7 +105,7 @@ impl std::fmt::Display for WorkflowStep {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Workflow {
     pub steps: Vec<WorkflowStep>,
 }

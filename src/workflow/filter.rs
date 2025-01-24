@@ -14,7 +14,7 @@ use crate::{
     workflow::vrl_utils::{compile_pretty_print_errors, run_vrl},
 };
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum FilterAst {
     Or(Vec<FilterAst>),                                // ||

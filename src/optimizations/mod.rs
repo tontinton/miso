@@ -30,6 +30,9 @@ mod push_topn_into_scan;
 mod remove_redundant_sorts_before_count;
 mod reorder_filter_before_sort;
 
+#[cfg(test)]
+mod tests;
+
 #[macro_export]
 macro_rules! opt {
     ($optimization:ident) => {
