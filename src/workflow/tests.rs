@@ -123,3 +123,16 @@ async fn simple_scan() -> Result<()> {
 
     Ok(())
 }
+
+#[tokio::test]
+async fn cancel() -> Result<()> {
+    let workflow = Workflow::new(vec![]);
+
+    let (cancel_tx, cancel_rx) = watch::channel(());
+    cancel_tx.send(())?;
+
+    let mut logs_stream = workflow.execute(cancel_rx).context("workflow execute")?;
+    assert!(matches!(logs_stream.try_next().await, Ok(None)));
+
+    Ok(())
+}
