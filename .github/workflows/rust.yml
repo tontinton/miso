@@ -24,6 +24,20 @@ jobs:
       - name: Build
         run: cargo build --verbose
 
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Cache setup
+        uses: ./.github/actions/cache-setup
+
+      - name: DB tests
+        run: RUST_BACKTRACE=1 cargo test
+
   lint:
     name: rustfmt + clippy
     runs-on: ubuntu-latest
