@@ -35,6 +35,9 @@ pub mod summarize;
 pub mod topn;
 mod vrl_utils;
 
+#[cfg(test)]
+mod tests;
+
 const COUNT_LOG_FIELD_NAME: &str = "count";
 
 type WorkflowTasks = FuturesUnordered<JoinHandle<Result<()>>>;
