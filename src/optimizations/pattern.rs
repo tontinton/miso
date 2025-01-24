@@ -371,12 +371,19 @@ impl Pattern {
                 match inner_pattern.as_ref() {
                     Pattern::ZeroOrMore(inner_pattern) => {
                         // Lazy (*?).
+
+                        groups.commit();
+
                         if let Some(result) = continue_match(p_idx + 1, i_idx) {
                             return Some(result);
                         }
+                        groups.discard();
+
                         if let Some(end) = match_inner_pattern(inner_pattern, i_idx) {
                             return continue_match(p_idx, i_idx + end);
                         }
+                        groups.discard();
+
                         None
                     }
                     Pattern::OneOrMore(inner_pattern) => {
