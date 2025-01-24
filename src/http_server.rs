@@ -1,4 +1,4 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::BTreeMap, sync::Arc};
 
 use async_recursion::async_recursion;
 use async_stream::stream;
@@ -8,20 +8,17 @@ use axum::{
     routing::post,
     Extension, Json, Router,
 };
-use color_eyre::{eyre::Context, Result};
+use color_eyre::Result;
 use futures_core::Stream;
+use futures_util::TryStreamExt;
 use serde::Deserialize;
 use serde_json::json;
-use tokio::{
-    spawn,
-    sync::{mpsc, watch, RwLock},
-};
+use tokio::sync::{watch, RwLock};
 use tracing::{debug, error, info, span, Level};
 use uuid::Uuid;
 
 use crate::{
     connector::Connector,
-    log::Log,
     optimizations::Optimizer,
     quickwit_connector::QuickwitConnector,
     workflow::{
@@ -32,16 +29,18 @@ use crate::{
 
 const INTERNAL_SERVER_ERROR: &str = "Internal server error";
 
+type ConnectorsMap = BTreeMap<String, Arc<dyn Connector>>;
+
 struct State {
-    connectors: HashMap<String, Arc<dyn Connector>>,
+    connectors: ConnectorsMap,
     optimizer: Arc<Optimizer>,
 }
 
 type SharedState = Arc<RwLock<State>>;
 
 #[async_recursion]
-async fn to_workflow_steps(
-    state: SharedState,
+pub(crate) async fn to_workflow_steps(
+    connectors: &ConnectorsMap,
     query_steps: Vec<QueryStep>,
 ) -> Result<Vec<WorkflowStep>, HttpError> {
     if query_steps.is_empty() {
@@ -70,8 +69,7 @@ async fn to_workflow_steps(
                 ));
             }
             QueryStep::Scan(connector_name, collection) => {
-                let Some(connector) = state.read().await.connectors.get(&connector_name).cloned()
-                else {
+                let Some(connector) = connectors.get(&connector_name).cloned() else {
                     return Err(HttpError::new(
                         StatusCode::NOT_FOUND,
                         format!("connector '{}' not found", connector_name),
@@ -87,12 +85,9 @@ async fn to_workflow_steps(
                     ));
                 }
 
-                steps.push(WorkflowStep::Scan(Scan {
-                    collection,
-                    connector: connector.clone(),
-                    splits: connector.clone().get_splits().await,
-                    handle: connector.get_handle().into(),
-                }));
+                steps.push(WorkflowStep::Scan(
+                    Scan::from_connector(connector.clone(), collection).await,
+                ));
             }
             QueryStep::Filter(ast) => {
                 steps.push(WorkflowStep::Filter(ast));
@@ -114,13 +109,13 @@ async fn to_workflow_steps(
             }
             QueryStep::Union(inner_steps) => {
                 steps.push(WorkflowStep::Union(Workflow::new(
-                    to_workflow_steps(state.clone(), inner_steps).await?,
+                    to_workflow_steps(connectors, inner_steps).await?,
                 )));
             }
             QueryStep::Join((config, inner_steps)) => {
                 steps.push(WorkflowStep::Join((
                     config,
-                    Workflow::new(to_workflow_steps(state.clone(), inner_steps).await?),
+                    Workflow::new(to_workflow_steps(connectors, inner_steps).await?),
                 )));
             }
             QueryStep::Count => {
@@ -140,7 +135,7 @@ async fn to_workflow_steps(
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "snake_case")]
-enum QueryStep {
+pub(crate) enum QueryStep {
     Scan(/*connector=*/ String, /*collection=*/ String),
     Filter(FilterAst),
     Project(Vec<ProjectField>),
@@ -162,7 +157,8 @@ struct QueryRequest {
     query: Vec<QueryStep>,
 }
 
-struct HttpError {
+#[derive(Debug)]
+pub(crate) struct HttpError {
     status: StatusCode,
     message: String,
 }
@@ -208,58 +204,34 @@ async fn query_stream(
 
     info!(?req.query, "Starting to run a new query");
     let workflow = {
-        let steps = to_workflow_steps(state.clone(), req.query).await?;
+        let steps = to_workflow_steps(&state.read().await.connectors.clone(), req.query).await?;
         let optimizer = state.read().await.optimizer.clone();
         Workflow::new(optimizer.optimize(steps).await)
     };
 
     debug!(?workflow, "Executing workflow");
 
-    let (tx, mut rx) = mpsc::channel(1);
-    let send_log_to_sse = move |log: Log| {
-        let tx = tx.clone();
-        async move {
-            tx.send(log).await.context("log to SSE tx")?;
-            Ok(())
-        }
-    };
-
     let (cancel_tx, cancel_rx) = watch::channel(());
-
-    let mut workflow_task = spawn(workflow.execute(send_log_to_sse, cancel_rx));
+    let mut logs_stream = workflow.execute(cancel_rx).map_err(|e| {
+        HttpError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("failed to execute workflow: {}", e),
+        )
+    })?;
 
     Ok(Sse::new(stream! {
         let _notify_on_drop = NotifyOnDrop(cancel_tx);
 
         loop {
-            tokio::select! {
-                log = rx.recv() => {
-                    if let Some(log) = log {
-                        yield Event::default().json_data(log);
-                    } else {
-                        break;
-                    }
-                }
-                result = &mut workflow_task => {
-                    match result {
-                        Ok(Ok(())) => {
-                            // Finish reading whatever is left in the channel.
-                            while let Some(log) = rx.recv().await {
-                                yield Event::default().json_data(log);
-                            }
-                            break;
-                        },
-                        Ok(Err(e)) => {
-                            error!("Workflow error: {e:?}");
-                            yield Event::default().json_data(INTERNAL_SERVER_ERROR);
-                            break;
-                        }
-                        Err(e) => {
-                            error!("Task join error: {e:?}");
-                            yield Event::default().json_data(INTERNAL_SERVER_ERROR);
-                            break;
-                        }
-                    }
+            match logs_stream.try_next().await {
+                Ok(None) => break,
+                Ok(log) => {
+                    yield Event::default().json_data(log);
+                },
+                Err(e) => {
+                    error!("Workflow error: {e:?}");
+                    yield Event::default().json_data(INTERNAL_SERVER_ERROR);
+                    break;
                 }
             }
         }
@@ -267,7 +239,7 @@ async fn query_stream(
 }
 
 pub fn create_axum_app() -> Result<Router> {
-    let mut connectors = HashMap::new();
+    let mut connectors = BTreeMap::new();
     connectors.insert(
         "tony".to_string(),
         Arc::new(QuickwitConnector::new(serde_json::from_str(

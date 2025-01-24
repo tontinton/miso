@@ -1,8 +1,7 @@
 use std::{sync::Arc, time::Instant};
 
-use async_stream::stream;
+use async_stream::{stream, try_stream};
 use color_eyre::eyre::{bail, Context, Result};
-use futures_core::Future;
 use futures_util::{future::try_join_all, stream::FuturesUnordered, StreamExt};
 use join::{join_streams, Join, JoinType};
 use kinded::Kinded;
@@ -52,6 +51,17 @@ impl PartialEq for Scan {
     fn eq(&self, other: &Self) -> bool {
         // Only checking the collection for now.
         self.collection == other.collection
+    }
+}
+
+impl Scan {
+    pub async fn from_connector(connector: Arc<dyn Connector>, collection: String) -> Self {
+        Self {
+            collection,
+            connector: connector.clone(),
+            splits: connector.clone().get_splits().await,
+            handle: connector.get_handle().into(),
+        }
     }
 }
 
@@ -355,24 +365,47 @@ impl Workflow {
         Ok((tasks, rx.unwrap()))
     }
 
-    pub async fn execute<F, Fut>(self, on_log: F, cancel_rx: watch::Receiver<()>) -> Result<()>
-    where
-        F: Fn(Log) -> Fut + Send + 'static,
-        Fut: Future<Output = Result<()>> + Send + 'static,
-    {
+    pub fn execute(self, cancel_rx: watch::Receiver<()>) -> Result<LogTryStream> {
         if self.steps.is_empty() {
-            return Ok(());
+            return Ok(Box::pin(futures_util::stream::empty()));
         }
 
         let (tasks, mut rx) = self.create_tasks(cancel_rx.clone())?;
-        tasks.push(spawn(async move {
-            while let Some(log) = rx.recv().await {
-                on_log(log).await?;
-            }
-            Ok(())
-        }));
+        let mut task = spawn(execute_tasks(tasks, cancel_rx));
 
-        execute_tasks(tasks, cancel_rx).await?;
-        Ok(())
+        Ok(Box::pin(try_stream! {
+            let task_alive = loop {
+                tokio::select! {
+                    log = rx.recv() => {
+                        if let Some(log) = log {
+                            yield log;
+                        } else {
+                            break Ok(true);
+                        }
+                    }
+                    result = &mut task => {
+                        match result {
+                            Ok(Ok(())) => {
+                                // Finish reading whatever is left in the channel.
+                                while let Some(log) = rx.recv().await {
+                                    yield log;
+                                }
+                                break Ok(false);
+                            },
+                            Ok(Err(e)) => {
+                                break Err(e);
+                            }
+                            Err(e) => {
+                                break Err(e.into());
+                            }
+                        }
+                    }
+                }
+            }?;
+
+            if task_alive {
+                task.await??;
+            }
+        }))
     }
 }
