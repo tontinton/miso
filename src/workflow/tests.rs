@@ -6,6 +6,7 @@ use color_eyre::{
     eyre::{Context, ContextCompat},
     Result,
 };
+use ctor::ctor;
 use futures_util::TryStreamExt;
 use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
@@ -90,6 +91,12 @@ impl Connector for TestConnector {
     }
 
     async fn close(self) {}
+}
+
+#[ctor]
+fn init() {
+    color_eyre::install().unwrap();
+    tracing_subscriber::fmt::init();
 }
 
 #[tokio::test]
