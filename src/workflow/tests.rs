@@ -336,3 +336,16 @@ async fn sort_nulls_order() -> Result<()> {
     )
     .await
 }
+
+#[tokio::test]
+async fn limit() -> Result<()> {
+    check(
+        r#"[
+            {"scan": ["test", "c"]},
+            {"limit": 2}
+        ]"#,
+        r#"[{"hello": "world"}, {"world": 1}, {"world": 2}, {"world": 3}]"#,
+        r#"[{"hello": "world"}, {"world": 1}]"#,
+    )
+    .await
+}
