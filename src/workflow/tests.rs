@@ -288,3 +288,19 @@ async fn filter_starts_with() -> Result<()> {
     )
     .await
 }
+
+#[tokio::test]
+async fn project_add() -> Result<()> {
+    // This test proves that project needs some more work:
+    //  * Field "world" doesn't exist should not set null.
+    //  * Field "test" doesn't exist should not set 2.
+    check(
+        r#"[
+            {"scan": ["test", "c"]},
+            {"project": [{"to": "world", "from": {"field": "world"}}, {"to": "test", "from": {"+": [{"field": "world"}, {"value": "2"}]}}]}
+        ]"#,
+        r#"[{"world": 2}, {"world": 1}, {"hello": "world"}]"#,
+        r#"[{"world": 2, "test": 4}, {"world": 1, "test": 3}, {"world": null, "test": 2}]"#,
+    )
+    .await
+}
