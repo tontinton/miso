@@ -46,7 +46,7 @@ fn transform_binop_ast_to_vrl(left: &ProjectAst, right: &ProjectAst, op: &str) -
 fn transform_ast_to_vrl(ast: &ProjectAst, binop: bool) -> String {
     match ast {
         ProjectAst::Value(value) => value.to_string(),
-        ProjectAst::Field(name) if binop => format!("to_int!(.{name})"),
+        ProjectAst::Field(name) if binop => format!("to_float!(.{name})"),
         ProjectAst::Field(name) => format!(".{name}"),
         ProjectAst::Mul(left, right) => transform_binop_ast_to_vrl(left, right, "*"),
         ProjectAst::Div(left, right) => transform_binop_ast_to_vrl(left, right, "/"),
@@ -115,7 +115,7 @@ mod tests {
         let result = project_fields_to_vrl(&project_fields);
         assert_eq!(
             result,
-            r#". = {"test1": (to_int!(.name) * 100), "test2": (to_int!(.left) + to_int!(.right))}"#
+            r#". = {"test1": (to_float!(.name) * 100), "test2": (to_float!(.left) + to_float!(.right))}"#
         );
         Ok(())
     }
