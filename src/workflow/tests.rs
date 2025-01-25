@@ -518,3 +518,13 @@ async fn join_right() -> Result<()> {
     )
     .await
 }
+
+#[tokio::test]
+async fn count() -> Result<()> {
+    check(
+        r#"[{"scan": ["test", "c"]}, "count"]"#,
+        r#"[{"world": 3}, {"test": 1}, {"world": 2, "test": 3}, {"world": 2, "test": 6}]"#,
+        r#"[{"count": 4}]"#,
+    )
+    .await
+}
