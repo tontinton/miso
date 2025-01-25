@@ -362,3 +362,25 @@ async fn topn() -> Result<()> {
     )
     .await
 }
+
+#[tokio::test]
+async fn summarize() -> Result<()> {
+    check(
+        r#"[
+            {"scan": ["test", "c"]},
+            {
+                "summarize": {
+                    "aggs": {
+                        "max_x": {"max": "x"},
+                        "min_x": {"min": "x"},
+                        "c": "count"
+                    },
+                    "by": ["y"]
+                }
+            }
+        ]"#,
+        r#"[{"x": 3, "y": 3}, {"x": 5, "y": 6}, {"x": 1, "y": 3}, {"x": 9, "y": 6}]"#,
+        r#"[{"max_x": 3, "min_x": 1, "c": 2, "y": 3}, {"max_x": 9, "min_x": 5, "c": 2, "y": 6}]"#,
+    )
+    .await
+}
