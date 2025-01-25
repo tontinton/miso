@@ -53,7 +53,7 @@ fn binop_compare_to_vrl(field: &str, value: &str, compare: &str) -> String {
     } else {
         "to_int!"
     };
-    format!("{cast}(.{field}) {compare} {stripped}")
+    format!("(exists(.{field}) && {cast}(.{field}) {compare} {stripped})")
 }
 
 fn filter_ast_to_vrl(ast: &FilterAst) -> String {
@@ -124,7 +124,7 @@ mod tests {
         let result = filter_ast_to_vrl(&serde_json::from_str(ast_raw)?);
         assert_eq!(
             result,
-            "((to_int!(.a) == 1 && (to_int!(.b) == 2)) && (to_int!(.c) == 3 || to_int!(.d) == 4))"
+            "(((exists(.a) && to_int!(.a) == 1) && ((exists(.b) && to_int!(.b) == 2))) && ((exists(.c) && to_int!(.c) == 3) || (exists(.d) && to_int!(.d) == 4)))"
         );
         Ok(())
     }
