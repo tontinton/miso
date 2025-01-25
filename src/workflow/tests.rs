@@ -304,3 +304,29 @@ async fn project_add() -> Result<()> {
     )
     .await
 }
+
+#[tokio::test]
+async fn sort_asc_then_desc() -> Result<()> {
+    check(
+        r#"[
+            {"scan": ["test", "c"]},
+            {"sort": [{"by": "world"}, {"by": "test", "order": "desc"}]}
+        ]"#,
+        r#"[{"world": 3, "test": 1}, {"world": 2, "test": 3}, {"world": 2, "test": 6}]"#,
+        r#"[{"world": 2, "test": 6}, {"world": 2, "test": 3}, {"world": 3, "test": 1}]"#,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn sort_nulls_order() -> Result<()> {
+    check(
+        r#"[
+            {"scan": ["test", "c"]},
+            {"sort": [{"by": "world"}, {"by": "test", "nulls": "first"}]}
+        ]"#,
+        r#"[{"world": 4, "test": 1}, {}, {"world": 3, "test": 1}, {"world": null, "test": 1}, {"world": 4, "test": null}]"#,
+        r#"[{"world": 3, "test": 1}, {"world": 4, "test": null}, {"world": 4, "test": 1}, {}, {"world": null, "test": 1}]"#,
+    )
+    .await
+}
