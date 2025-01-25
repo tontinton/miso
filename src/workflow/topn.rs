@@ -76,9 +76,5 @@ pub async fn topn_stream(
         }
     }
 
-    let mut logs = Vec::with_capacity(heap.len());
-    while let Some(sortable) = heap.pop() {
-        logs.push(sortable.log);
-    }
-    Ok(logs)
+    Ok(heap.into_sorted_vec().into_iter().map(|x| x.log).collect())
 }
