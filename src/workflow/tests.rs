@@ -137,12 +137,18 @@ async fn check(query: &str, input: &str, expected: &str) -> Result<()> {
 
     let mut logs_stream = workflow.execute(cancel_rx).context("workflow execute")?;
 
+    let mut i = 0;
     let mut expected_logs_iter = expected_logs.into_iter();
     while let Some(log) = logs_stream.try_next().await? {
         let test_log = expected_logs_iter
             .next()
             .expect("to there be more logs to test");
-        assert_eq!(test_log, log);
+        assert_eq!(
+            test_log, log,
+            "logs[{i}] not equal (left is expected, right is what we received)"
+        );
+
+        i += 1;
     }
 
     assert!(
