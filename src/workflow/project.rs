@@ -14,9 +14,20 @@ use super::vrl_utils::run_vrl;
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "snake_case")]
+pub enum CastType {
+    Bool,
+    Float,
+    Int,
+    String,
+    // Regex is not yet supported.
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[serde(rename_all = "snake_case")]
 pub enum ProjectAst {
     Value(String),
     Field(String),
+    Cast(CastType, Box<ProjectAst>),
 
     #[serde(rename = "*")]
     Mul(Box<ProjectAst>, Box<ProjectAst>),
@@ -37,17 +48,26 @@ pub struct ProjectField {
 fn transform_binop_ast_to_vrl(left: &ProjectAst, right: &ProjectAst, op: &str) -> String {
     format!(
         "({} {} {})",
-        transform_ast_to_vrl(left, true),
+        transform_ast_to_vrl(left),
         op,
-        transform_ast_to_vrl(right, true)
+        transform_ast_to_vrl(right)
     )
 }
 
-fn transform_ast_to_vrl(ast: &ProjectAst, binop: bool) -> String {
+fn transform_ast_to_vrl(ast: &ProjectAst) -> String {
     match ast {
         ProjectAst::Value(value) => value.to_string(),
-        ProjectAst::Field(name) if binop => format!("to_float!(.{name})"),
         ProjectAst::Field(name) => format!(".{name}"),
+        ProjectAst::Cast(cast_type, inner_ast) => {
+            let cast_func = match cast_type {
+                CastType::Bool => "bool",
+                CastType::Float => "float",
+                CastType::Int => "int",
+                CastType::String => "string",
+            };
+            let inner = transform_ast_to_vrl(inner_ast);
+            format!("to_{cast_func}!({inner})")
+        }
         ProjectAst::Mul(left, right) => transform_binop_ast_to_vrl(left, right, "*"),
         ProjectAst::Div(left, right) => transform_binop_ast_to_vrl(left, right, "/"),
         ProjectAst::Plus(left, right) => transform_binop_ast_to_vrl(left, right, "+"),
@@ -61,7 +81,7 @@ fn project_fields_to_vrl(fields: &[ProjectField]) -> String {
         items.push(format!(
             "\"{}\": {}",
             field.to,
-            transform_ast_to_vrl(&field.from, false)
+            transform_ast_to_vrl(&field.from)
         ));
     }
     format!(". = {{{}}}", items.join(", "))
@@ -100,7 +120,7 @@ mod tests {
         let project_fields_raw = r#"[
             {
                 "from": {
-                    "*": [{"field": "name"}, {"value": "100"}]
+                    "*": [{"cast": ["float", {"field": "name"}]}, {"value": "100"}]
                 },
                 "to": "test1"
             },
@@ -115,7 +135,7 @@ mod tests {
         let result = project_fields_to_vrl(&project_fields);
         assert_eq!(
             result,
-            r#". = {"test1": (to_float!(.name) * 100), "test2": (to_float!(.left) + to_float!(.right))}"#
+            r#". = {"test1": (to_float!(.name) * 100), "test2": (.left + .right)}"#
         );
         Ok(())
     }

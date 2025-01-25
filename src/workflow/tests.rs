@@ -327,7 +327,20 @@ async fn project_add() -> Result<()> {
     check(
         r#"[
             {"scan": ["test", "c"]},
-            {"project": [{"to": "world", "from": {"field": "world"}}, {"to": "test", "from": {"+": [{"field": "world"}, {"value": "2"}]}}]}
+            {
+                "project": [
+                    {"to": "world", "from": {"field": "world"}},
+                    {
+                        "to": "test",
+                        "from": {
+                            "+": [
+                                {"cast": ["float", {"field": "world"}]},
+                                {"value": "2"}
+                            ]
+                        }
+                    }
+                ]
+            }
         ]"#,
         r#"[{"world": 2}, {"world": 1}, {"hello": "world"}]"#,
         r#"[{"world": 2, "test": 4.0}, {"world": 1, "test": 3.0}, {"world": null, "test": 2.0}]"#,
