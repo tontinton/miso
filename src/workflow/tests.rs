@@ -112,21 +112,31 @@ async fn cancel() -> Result<()> {
     Ok(())
 }
 
-/// Creates a test connector named 'test' and a collection named 'c' which will include logs
-/// given by |input|. Tests that the logs returned by running |query| are equal to |expected|.
-async fn check(query: &str, input: &str, expected: &str) -> Result<()> {
-    let input_logs: Vec<Log> = serde_json::from_str(input).context("parse input logs from json")?;
+async fn check_multi_connectors(
+    query: &str,
+    input: BTreeMap<&str, BTreeMap<&str, &str>>,
+    expected: &str,
+) -> Result<()> {
     let expected_logs: Vec<Log> =
         serde_json::from_str(expected).context("parse expected output logs from json")?;
 
-    let mut connector = TestConnector::default();
-    connector.insert("c".to_string(), input_logs);
-    let connectors = btreemap! {
-        "test".to_string() => Arc::new(connector) as Arc<dyn Connector>,
-    };
+    let mut connectors = BTreeMap::new();
+    for (connector_name, collections) in input {
+        for (collection, raw_logs) in collections {
+            let input_logs: Vec<Log> =
+                serde_json::from_str(raw_logs).context("parse input logs from json")?;
+            connectors
+                .entry(connector_name.to_string())
+                .or_insert_with(TestConnector::default)
+                .insert(collection.to_string(), input_logs);
+        }
+    }
 
     let steps = to_workflow_steps(
-        &connectors,
+        &connectors
+            .into_iter()
+            .map(|(name, connector)| (name, Arc::new(connector) as Arc<dyn Connector>))
+            .collect(),
         serde_json::from_str(query).context("parse query steps from json")?,
     )
     .await
@@ -142,7 +152,7 @@ async fn check(query: &str, input: &str, expected: &str) -> Result<()> {
     while let Some(log) = logs_stream.try_next().await? {
         let test_log = expected_logs_iter
             .next()
-            .expect("to there be more logs to test");
+            .expect("expected there to be more logs to test");
         assert_eq!(
             test_log, log,
             "logs[{i}] not equal (left is expected, right is what we received)"
@@ -157,6 +167,20 @@ async fn check(query: &str, input: &str, expected: &str) -> Result<()> {
     );
 
     Ok(())
+}
+
+async fn check_multi_collection(
+    query: &str,
+    input: BTreeMap<&str, &str>,
+    expected: &str,
+) -> Result<()> {
+    check_multi_connectors(query, btreemap! {"test" => input}, expected).await
+}
+
+/// Creates a test connector named 'test' and a collection named 'c' which will include logs
+/// given by |input|. Tests that the logs returned by running |query| are equal to |expected|.
+async fn check(query: &str, input: &str, expected: &str) -> Result<()> {
+    check_multi_collection(query, btreemap! {"c" => input}, expected).await
 }
 
 #[tokio::test]
@@ -381,6 +405,106 @@ async fn summarize() -> Result<()> {
         ]"#,
         r#"[{"x": 3, "y": 3}, {"x": 5, "y": 6}, {"x": 1, "y": 3}, {"x": 9, "y": 6}]"#,
         r#"[{"max_x": 3, "min_x": 1, "c": 2, "y": 3}, {"max_x": 9, "min_x": 5, "c": 2, "y": 6}]"#,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn join_inner() -> Result<()> {
+    check_multi_collection(
+        r#"[
+            {"scan": ["test", "left"]},
+            {
+                "join": [
+                    {"on": ["id", "id"]},
+                    [{"scan": ["test", "right"]}]
+                ]
+            }
+        ]"#,
+        btreemap!{
+            "left"  => r#"[{"id": 1, "value": "one"}, {"id": 2, "value": "two"}, {"id": 3, "value": "three"}]"#,
+            "right" => r#"[{"id": 1, "value": "ONE"}, {"id": 2, "value": "TWO"}, {"id": 4, "value": "FOUR"}]"#,
+        },
+        r#"[
+            {"id": 1, "value_left": "one", "value_right": "ONE"},
+            {"id": 2, "value_left": "two", "value_right": "TWO"}
+        ]"#,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn join_outer() -> Result<()> {
+    check_multi_collection(
+        r#"[
+            {"scan": ["test", "left"]},
+            {
+                "join": [
+                    {"on": ["id", "id"], "type": "outer"},
+                    [{"scan": ["test", "right"]}]
+                ]
+            }
+        ]"#,
+        btreemap!{
+            "left"  => r#"[{"id": 1, "value": "one"}, {"id": 2, "value": "two"}, {"id": 3, "value": "three"}]"#,
+            "right" => r#"[{"id": 1, "value": "ONE"}, {"id": 2, "value": "TWO"}, {"id": 4, "value": "FOUR"}]"#,
+        },
+        r#"[
+            {"id": 1, "value_left": "one", "value_right": "ONE"},
+            {"id": 2, "value_left": "two", "value_right": "TWO"},
+            {"id": 3, "value": "three"},
+            {"id": 4, "value": "FOUR"}
+        ]"#,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn join_left() -> Result<()> {
+    check_multi_collection(
+        r#"[
+            {"scan": ["test", "left"]},
+            {
+                "join": [
+                    {"on": ["id", "id"], "type": "left"},
+                    [{"scan": ["test", "right"]}]
+                ]
+            }
+        ]"#,
+        btreemap!{
+            "left"  => r#"[{"id": 1, "value": "one"}, {"id": 2, "value": "two"}, {"id": 3, "value": "three"}]"#,
+            "right" => r#"[{"id": 1, "value": "ONE"}, {"id": 2, "value": "TWO"}, {"id": 4, "value": "FOUR"}]"#,
+        },
+        r#"[
+            {"id": 1, "value": "one"},
+            {"id": 2, "value": "two"},
+            {"id": 3, "value": "three"}
+        ]"#,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn join_right() -> Result<()> {
+    check_multi_collection(
+        r#"[
+            {"scan": ["test", "left"]},
+            {
+                "join": [
+                    {"on": ["id", "id"], "type": "right"},
+                    [{"scan": ["test", "right"]}]
+                ]
+            }
+        ]"#,
+        btreemap!{
+            "left"  => r#"[{"id": 1, "value": "one"}, {"id": 2, "value": "two"}, {"id": 3, "value": "three"}]"#,
+            "right" => r#"[{"id": 1, "value": "ONE"}, {"id": 2, "value": "TWO"}, {"id": 4, "value": "FOUR"}]"#,
+        },
+        r#"[
+            {"id": 1, "value": "ONE"},
+            {"id": 2, "value": "TWO"},
+            {"id": 4, "value": "FOUR"}
+        ]"#,
     )
     .await
 }
