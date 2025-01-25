@@ -7,13 +7,13 @@ use std::{
     },
 };
 
-use futures_util::StreamExt;
-
+use atomic_float::AtomicF64;
 use color_eyre::{eyre::bail, Result};
+use futures_util::StreamExt;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use tracing::info;
-use vrl::{core::Value, value::KeyString};
+use vrl::{core::Value, prelude::NotNan, value::KeyString};
 
 use crate::log::{Log, LogStream};
 
@@ -23,6 +23,7 @@ use super::{sortable_value::SortableValue, vrl_utils::partial_cmp_values};
 #[serde(rename_all = "snake_case")]
 pub enum Aggregation {
     Count,
+    Sum(/*field=*/ String),
     Min(/*field=*/ String),
     Max(/*field=*/ String),
 }
@@ -50,6 +51,44 @@ impl Aggregate for Count {
 
     fn value(&self) -> Value {
         Value::Integer(self.0.load(atomic::Ordering::Relaxed))
+    }
+}
+
+struct Sum {
+    field: KeyString,
+    value: AtomicF64,
+}
+
+impl Sum {
+    fn new(field: KeyString) -> Self {
+        Self {
+            field,
+            value: AtomicF64::new(0.0),
+        }
+    }
+}
+
+impl Aggregate for Sum {
+    fn input(&self, log: &Log) {
+        let Some(value) = log.get(&self.field) else {
+            return;
+        };
+        match value {
+            Value::Float(v) => {
+                self.value.fetch_add(**v, atomic::Ordering::Relaxed);
+            }
+            Value::Integer(v) => {
+                self.value.fetch_add(*v as f64, atomic::Ordering::Relaxed);
+            }
+            _ => {}
+        }
+    }
+
+    fn value(&self) -> Value {
+        Value::Float(
+            NotNan::new(self.value.load(atomic::Ordering::Relaxed))
+                .expect("aggregated sum float value to not be NaN"),
+        )
     }
 }
 
@@ -112,6 +151,7 @@ impl Aggregate for MinMax {
 fn create_aggregate(aggregation: Aggregation) -> Arc<dyn Aggregate> {
     match aggregation {
         Aggregation::Count => Arc::new(Count::default()),
+        Aggregation::Sum(field) => Arc::new(Sum::new(field.into())),
         Aggregation::Min(field) => Arc::new(MinMax::new_min(field.into())),
         Aggregation::Max(field) => Arc::new(MinMax::new_max(field.into())),
     }
