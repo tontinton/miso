@@ -259,6 +259,13 @@ fn filter_ast_to_query(ast: &FilterAst) -> Option<serde_json::Value> {
                 }
             })
         }
+        FilterAst::Exists(field) => {
+            json!({
+                "exists": {
+                    "field": field
+                }
+            })
+        }
         FilterAst::StartsWith(field, prefix) => {
             json!({
                 "match_phrase_prefix": {
