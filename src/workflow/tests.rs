@@ -100,38 +100,6 @@ fn init() {
 }
 
 #[tokio::test]
-async fn simple_scan() -> Result<()> {
-    let logs = vec![btreemap! {"hello" => "world"}];
-
-    let mut connector = TestConnector::default();
-    connector.insert("test".to_string(), logs.clone());
-    let connectors = btreemap! {
-        "c".to_string() => Arc::new(connector) as Arc<dyn Connector>,
-    };
-
-    let steps = to_workflow_steps(
-        &connectors,
-        serde_json::from_str(r#"[{"scan": ["c", "test"]}]"#).expect("parse query steps from json"),
-    )
-    .await
-    .expect("workflow steps to compile");
-    let workflow = Workflow::new(steps);
-
-    let (_, cancel_rx) = watch::channel(());
-
-    let mut logs_stream = workflow.execute(cancel_rx).context("workflow execute")?;
-
-    let mut logs_iter = logs.into_iter();
-    while let Some(log) = logs_stream.try_next().await? {
-        let test_log = logs_iter.next().expect("to there be more logs to test");
-        assert_eq!(test_log, log);
-    }
-    assert!(logs_iter.next().is_none(), "expected no more logs to test");
-
-    Ok(())
-}
-
-#[tokio::test]
 async fn cancel() -> Result<()> {
     let workflow = Workflow::new(vec![]);
 
@@ -142,4 +110,181 @@ async fn cancel() -> Result<()> {
     assert!(matches!(logs_stream.try_next().await, Ok(None)));
 
     Ok(())
+}
+
+/// Creates a test connector named 'test' and a collection named 'c' which will include logs
+/// given by |input|. Tests that the logs returned by running |query| are equal to |expected|.
+async fn check(query: &str, input: &str, expected: &str) -> Result<()> {
+    let input_logs: Vec<Log> = serde_json::from_str(input).context("parse input logs from json")?;
+    let expected_logs: Vec<Log> =
+        serde_json::from_str(expected).context("parse expected output logs from json")?;
+
+    let mut connector = TestConnector::default();
+    connector.insert("c".to_string(), input_logs);
+    let connectors = btreemap! {
+        "test".to_string() => Arc::new(connector) as Arc<dyn Connector>,
+    };
+
+    let steps = to_workflow_steps(
+        &connectors,
+        serde_json::from_str(query).context("parse query steps from json")?,
+    )
+    .await
+    .expect("workflow steps to compile");
+    let workflow = Workflow::new(steps);
+
+    let (_cancel_tx, cancel_rx) = watch::channel(());
+
+    let mut logs_stream = workflow.execute(cancel_rx).context("workflow execute")?;
+
+    let mut expected_logs_iter = expected_logs.into_iter();
+    while let Some(log) = logs_stream.try_next().await? {
+        let test_log = expected_logs_iter
+            .next()
+            .expect("to there be more logs to test");
+        assert_eq!(test_log, log);
+    }
+
+    assert!(
+        expected_logs_iter.next().is_none(),
+        "expected no more logs to test"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn scan() -> Result<()> {
+    let logs = r#"[{"hello": "world"}]"#;
+    check(r#"[{"scan": ["test", "c"]}]"#, logs, logs).await
+}
+
+#[tokio::test]
+async fn filter_eq() -> Result<()> {
+    check(
+        r#"[
+            {"scan": ["test", "c"]},
+            {"filter": {"eq": ["world", "2"]}}
+        ]"#,
+        r#"[{"hello": "world"}, {"world": 1}, {"world": 2}]"#,
+        r#"[{"world": 2}]"#,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn filter_ne() -> Result<()> {
+    check(
+        r#"[
+            {"scan": ["test", "c"]},
+            {"filter": {"ne": ["world", "2"]}}
+        ]"#,
+        r#"[{"hello": "world"}, {"world": 1}, {"world": 2}]"#,
+        r#"[{"world": 1}]"#,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn filter_gt() -> Result<()> {
+    check(
+        r#"[
+            {"scan": ["test", "c"]},
+            {"filter": {"gt": ["world", "1"]}}
+        ]"#,
+        r#"[{"hello": "world"}, {"world": 2}, {"world": 1}]"#,
+        r#"[{"world": 2}]"#,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn filter_lt() -> Result<()> {
+    check(
+        r#"[
+            {"scan": ["test", "c"]},
+            {"filter": {"lt": ["world", "3"]}}
+        ]"#,
+        r#"[{"hello": "world"}, {"world": 2}, {"world": 3}]"#,
+        r#"[{"world": 2}]"#,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn filter_gte() -> Result<()> {
+    check(
+        r#"[
+            {"scan": ["test", "c"]},
+            {"filter": {"gte": ["world", "2"]}}
+        ]"#,
+        r#"[{"hello": "world"}, {"world": 1}, {"world": 2}, {"world": 3}]"#,
+        r#"[{"world": 2}, {"world": 3}]"#,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn filter_lte() -> Result<()> {
+    check(
+        r#"[
+            {"scan": ["test", "c"]},
+            {"filter": {"lte": ["world", "3"]}}
+        ]"#,
+        r#"[{"hello": "world"}, {"world": 2}, {"world": 3}, {"world": 4}]"#,
+        r#"[{"world": 2}, {"world": 3}]"#,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn filter_and() -> Result<()> {
+    check(
+        r#"[
+            {"scan": ["test", "c"]},
+            {"filter": {"and": [{"eq": ["world", "3"]}, {"eq": ["hello", "\"world\""]}]}}
+        ]"#,
+        r#"[{"hello": "world", "world": 3}, {"hello": "woold", "world": 3}, {"hello": "world", "world": 2}]"#,
+        r#"[{"hello": "world", "world": 3}]"#,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn filter_or() -> Result<()> {
+    check(
+        r#"[
+            {"scan": ["test", "c"]},
+            {"filter": {"or": [{"eq": ["world", "3"]}, {"eq": ["hello", "\"world\""]}]}}
+        ]"#,
+        r#"[{"hello": "world", "world": 3}, {"hello": "woold", "world": 3}, {"hello": "world", "world": 2}, {"hello": "woold", "world": 4}]"#,
+        r#"[{"hello": "world", "world": 3}, {"hello": "woold", "world": 3}, {"hello": "world", "world": 2}]"#,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn filter_contains() -> Result<()> {
+    check(
+        r#"[
+            {"scan": ["test", "c"]},
+            {"filter": {"contains": ["hello", "wor"]}}
+        ]"#,
+        r#"[{"hello": "world"}, {"world": 2}, {"hello": "aaawora"}, {"hello": "woold"}]"#,
+        r#"[{"hello": "world"}, {"hello": "aaawora"}]"#,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn filter_starts_with() -> Result<()> {
+    check(
+        r#"[
+            {"scan": ["test", "c"]},
+            {"filter": {"starts_with": ["hello", "wor"]}}
+        ]"#,
+        r#"[{"hello": "world"}, {"world": 2}, {"hello": "aaawora"}, {"hello": "woold"}]"#,
+        r#"[{"hello": "world"}]"#,
+    )
+    .await
 }
