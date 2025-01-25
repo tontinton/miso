@@ -36,12 +36,12 @@ fn merge_two_logs(join_value: &Value, left: Log, right: Log) -> Log {
     let mut merged = left;
 
     for (key, value) in right {
-        if let Some(existing_value) = merged.get_mut(&key) {
-            if join_value == existing_value {
+        if let Some(existing_value) = merged.remove(&key) {
+            if join_value == &existing_value {
+                merged.insert(key, existing_value);
                 continue;
             }
 
-            let existing_value = existing_value.clone();
             merged.insert((key.as_str().to_string() + "_left").into(), existing_value);
             merged.insert((key.as_str().to_string() + "_right").into(), value);
         } else {
