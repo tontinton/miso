@@ -14,27 +14,27 @@ use super::vrl_utils::run_vrl;
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "snake_case")]
-pub enum TransformAst {
+pub enum ProjectAst {
     Value(String),
     Field(String),
 
     #[serde(rename = "*")]
-    Mul(Box<TransformAst>, Box<TransformAst>),
+    Mul(Box<ProjectAst>, Box<ProjectAst>),
     #[serde(rename = "/")]
-    Div(Box<TransformAst>, Box<TransformAst>),
+    Div(Box<ProjectAst>, Box<ProjectAst>),
     #[serde(rename = "+")]
-    Plus(Box<TransformAst>, Box<TransformAst>),
+    Plus(Box<ProjectAst>, Box<ProjectAst>),
     #[serde(rename = "-")]
-    Minus(Box<TransformAst>, Box<TransformAst>),
+    Minus(Box<ProjectAst>, Box<ProjectAst>),
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct ProjectField {
-    from: TransformAst,
+    from: ProjectAst,
     to: String,
 }
 
-fn transform_binop_ast_to_vrl(left: &TransformAst, right: &TransformAst, op: &str) -> String {
+fn transform_binop_ast_to_vrl(left: &ProjectAst, right: &ProjectAst, op: &str) -> String {
     format!(
         "({} {} {})",
         transform_ast_to_vrl(left, true),
@@ -43,15 +43,15 @@ fn transform_binop_ast_to_vrl(left: &TransformAst, right: &TransformAst, op: &st
     )
 }
 
-fn transform_ast_to_vrl(ast: &TransformAst, binop: bool) -> String {
+fn transform_ast_to_vrl(ast: &ProjectAst, binop: bool) -> String {
     match ast {
-        TransformAst::Value(value) => value.to_string(),
-        TransformAst::Field(name) if binop => format!("to_int!(.{name})"),
-        TransformAst::Field(name) => format!(".{name}"),
-        TransformAst::Mul(left, right) => transform_binop_ast_to_vrl(left, right, "*"),
-        TransformAst::Div(left, right) => transform_binop_ast_to_vrl(left, right, "/"),
-        TransformAst::Plus(left, right) => transform_binop_ast_to_vrl(left, right, "+"),
-        TransformAst::Minus(left, right) => transform_binop_ast_to_vrl(left, right, "-"),
+        ProjectAst::Value(value) => value.to_string(),
+        ProjectAst::Field(name) if binop => format!("to_int!(.{name})"),
+        ProjectAst::Field(name) => format!(".{name}"),
+        ProjectAst::Mul(left, right) => transform_binop_ast_to_vrl(left, right, "*"),
+        ProjectAst::Div(left, right) => transform_binop_ast_to_vrl(left, right, "/"),
+        ProjectAst::Plus(left, right) => transform_binop_ast_to_vrl(left, right, "+"),
+        ProjectAst::Minus(left, right) => transform_binop_ast_to_vrl(left, right, "-"),
     }
 }
 
