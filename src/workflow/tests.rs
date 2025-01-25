@@ -420,6 +420,7 @@ async fn summarize() -> Result<()> {
                     "aggs": {
                         "max_x": {"max": "x"},
                         "min_x": {"min": "x"},
+                        "sum_x": {"sum": "x"},
                         "c": "count"
                     },
                     "by": ["y"]
@@ -427,7 +428,7 @@ async fn summarize() -> Result<()> {
             }
         ]"#,
         r#"[{"x": 3, "y": 3}, {"x": 5, "y": 6}, {"x": 1, "y": 3}, {"x": 9, "y": 6}]"#,
-        r#"[{"max_x": 3, "min_x": 1, "c": 2, "y": 3}, {"max_x": 9, "min_x": 5, "c": 2, "y": 6}]"#,
+        r#"[{"max_x": 3, "min_x": 1, "sum_x": 4.0, "c": 2, "y": 3}, {"max_x": 9, "min_x": 5, "sum_x": 14.0, "c": 2, "y": 6}]"#,
     )
     .await
 }
