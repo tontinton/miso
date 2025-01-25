@@ -1,6 +1,7 @@
 use async_stream::try_stream;
 use color_eyre::eyre::{bail, Context, Result};
 use futures_util::StreamExt;
+use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use tracing::info;
 use vrl::{compiler::Program, core::Value};
@@ -45,19 +46,27 @@ pub struct ProjectField {
     to: String,
 }
 
-fn transform_binop_ast_to_vrl(left: &ProjectAst, right: &ProjectAst, op: &str) -> String {
+fn transform_binop_ast_to_vrl(
+    left: &ProjectAst,
+    right: &ProjectAst,
+    op: &str,
+    fields: &mut Vec<String>,
+) -> String {
     format!(
         "({} {} {})",
-        transform_ast_to_vrl(left),
+        transform_ast_to_vrl(left, fields),
         op,
-        transform_ast_to_vrl(right)
+        transform_ast_to_vrl(right, fields)
     )
 }
 
-fn transform_ast_to_vrl(ast: &ProjectAst) -> String {
+fn transform_ast_to_vrl(ast: &ProjectAst, fields: &mut Vec<String>) -> String {
     match ast {
         ProjectAst::Value(value) => value.to_string(),
-        ProjectAst::Field(name) => format!(".{name}"),
+        ProjectAst::Field(name) => {
+            fields.push(name.clone());
+            format!(".{name}")
+        }
         ProjectAst::Cast(cast_type, inner_ast) => {
             let cast_func = match cast_type {
                 CastType::Bool => "bool",
@@ -65,26 +74,39 @@ fn transform_ast_to_vrl(ast: &ProjectAst) -> String {
                 CastType::Int => "int",
                 CastType::String => "string",
             };
-            let inner = transform_ast_to_vrl(inner_ast);
+            let inner = transform_ast_to_vrl(inner_ast, fields);
             format!("to_{cast_func}!({inner})")
         }
-        ProjectAst::Mul(left, right) => transform_binop_ast_to_vrl(left, right, "*"),
-        ProjectAst::Div(left, right) => transform_binop_ast_to_vrl(left, right, "/"),
-        ProjectAst::Plus(left, right) => transform_binop_ast_to_vrl(left, right, "+"),
-        ProjectAst::Minus(left, right) => transform_binop_ast_to_vrl(left, right, "-"),
+        ProjectAst::Mul(left, right) => transform_binop_ast_to_vrl(left, right, "*", fields),
+        ProjectAst::Div(left, right) => transform_binop_ast_to_vrl(left, right, "/", fields),
+        ProjectAst::Plus(left, right) => transform_binop_ast_to_vrl(left, right, "+", fields),
+        ProjectAst::Minus(left, right) => transform_binop_ast_to_vrl(left, right, "-", fields),
     }
 }
 
 fn project_fields_to_vrl(fields: &[ProjectField]) -> String {
     let mut items = Vec::with_capacity(fields.len());
     for field in fields {
-        items.push(format!(
-            "\"{}\": {}",
-            field.to,
-            transform_ast_to_vrl(&field.from)
-        ));
+        let mut must_exist_fields = Vec::new();
+        let from = transform_ast_to_vrl(&field.from, &mut must_exist_fields);
+        let to = &field.to;
+
+        if must_exist_fields.is_empty() {
+            items.push(format!("x.{to} = {from}"));
+        } else {
+            let must_exist_fields_str = must_exist_fields
+                .into_iter()
+                .map(|x| format!("exists(.{x})"))
+                .join(" && ");
+            items.push(format!("if {must_exist_fields_str} {{ x.{to} = {from} }}"));
+        }
     }
-    format!(". = {{{}}}", items.join(", "))
+    format!(
+        r#"x = {{}}
+{}
+. = x"#,
+        items.join("\n")
+    )
 }
 
 fn run_vrl_project(program: &Program, log: Log) -> Result<Log> {
@@ -135,7 +157,10 @@ mod tests {
         let result = project_fields_to_vrl(&project_fields);
         assert_eq!(
             result,
-            r#". = {"test1": (to_float!(.name) * 100), "test2": (.left + .right)}"#
+            r#"x = {}
+if exists(.name) { x.test1 = (to_float!(.name) * 100) }
+if exists(.left) && exists(.right) { x.test2 = (.left + .right) }
+. = x"#
         );
         Ok(())
     }
