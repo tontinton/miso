@@ -349,3 +349,16 @@ async fn limit() -> Result<()> {
     )
     .await
 }
+
+#[tokio::test]
+async fn topn() -> Result<()> {
+    check(
+        r#"[
+            {"scan": ["test", "c"]},
+            {"top": [[{"by": "world"}, {"by": "test", "order": "desc"}], 2]}
+        ]"#,
+        r#"[{"world": 3, "test": 1}, {"world": 2, "test": 3}, {"world": 2, "test": 6}]"#,
+        r#"[{"world": 2, "test": 6}, {"world": 2, "test": 3}]"#,
+    )
+    .await
+}
