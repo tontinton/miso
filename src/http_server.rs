@@ -112,11 +112,11 @@ pub(crate) async fn to_workflow_steps(
                     to_workflow_steps(connectors, inner_steps).await?,
                 )));
             }
-            QueryStep::Join((config, inner_steps)) => {
-                steps.push(WorkflowStep::Join((
+            QueryStep::Join(config, inner_steps) => {
+                steps.push(WorkflowStep::Join(
                     config,
                     Workflow::new(to_workflow_steps(connectors, inner_steps).await?),
-                )));
+                ));
             }
             QueryStep::Count => {
                 if i != num_steps - 1 {
@@ -144,7 +144,7 @@ pub(crate) enum QueryStep {
     Top(Vec<Sort>, u32),
     Summarize(Summarize),
     Union(Vec<QueryStep>),
-    Join((Join, Vec<QueryStep>)),
+    Join(Join, Vec<QueryStep>),
     Count,
 }
 

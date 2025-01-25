@@ -207,9 +207,9 @@ impl Optimizer {
                     workflow.steps = self.optimize(workflow.steps).await;
                     WorkflowStep::Union(workflow)
                 }
-                WorkflowStep::Join((config, mut workflow)) => {
+                WorkflowStep::Join(config, mut workflow) => {
                     workflow.steps = self.optimize(workflow.steps).await;
-                    WorkflowStep::Join((config, workflow))
+                    WorkflowStep::Join(config, workflow)
                 }
                 _ => step,
             };

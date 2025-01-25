@@ -95,7 +95,7 @@ pub enum WorkflowStep {
     Union(Workflow),
 
     /// Join results from another query.
-    Join((Join, Workflow)),
+    Join(Join, Workflow),
 
     /// The number of records. Only works as the last step.
     Count,
@@ -267,7 +267,7 @@ impl WorkflowStep {
 
                 execute_tasks(tasks, cancel_rx).await?;
             }
-            WorkflowStep::Join((config, workflow)) => {
+            WorkflowStep::Join(config, workflow) => {
                 if workflow.steps.is_empty() {
                     if matches!(config.type_, JoinType::Left | JoinType::Outer) {
                         pipe(rx.unwrap(), tx).await;
