@@ -320,6 +320,19 @@ async fn filter_starts_with() -> Result<()> {
 }
 
 #[tokio::test]
+async fn filter_exists() -> Result<()> {
+    check(
+        r#"[
+            {"scan": ["test", "c"]},
+            {"filter": {"exists": "hello"}}
+        ]"#,
+        r#"[{"hello": "world"}, {"world": 2}, {"hello": "woold"}]"#,
+        r#"[{"hello": "world"}, {"hello": "woold"}]"#,
+    )
+    .await
+}
+
+#[tokio::test]
 async fn project_add() -> Result<()> {
     check(
         r#"[
