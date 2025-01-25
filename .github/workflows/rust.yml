@@ -4,11 +4,15 @@ on:
   push:
     branches: [ "main" ]
     paths:
+      - "Cargo.toml"
+      - "Cargo.lock"
       - "src/**"
       - ".github/workflows/rust.yml"
   pull_request:
     branches: [ "main" ]
     paths:
+      - "Cargo.toml"
+      - "Cargo.lock"
       - "src/**"
       - ".github/workflows/rust.yml"
 
