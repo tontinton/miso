@@ -410,7 +410,7 @@ impl Workflow {
             }?;
 
             if task_alive {
-                task.await??;
+                task.await.context("join workflow task")?.context("run workflow task")?;
             }
         }))
     }
