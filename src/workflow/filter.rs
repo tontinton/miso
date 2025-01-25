@@ -19,6 +19,7 @@ use crate::{
 pub enum FilterAst {
     Or(Vec<FilterAst>),                                // ||
     And(Vec<FilterAst>),                               // &&
+    Exists(/*field=*/ String),                         // field exists
     Contains(/*field=*/ String, /*word=*/ String),     // word in field
     StartsWith(/*field=*/ String, /*prefix=*/ String), // field starts with prefix
     Eq(/*field=*/ String, /*value=*/ String),          // ==
@@ -53,13 +54,14 @@ fn binop_compare_to_vrl(field: &str, value: &str, compare: &str) -> String {
     } else {
         "to_float!"
     };
-    format!("(exists(.{field}) && {cast}(.{field}) {compare} {stripped})")
+    format!("(!exists(.{field}) || {cast}(.{field}) {compare} {stripped})")
 }
 
 fn filter_ast_to_vrl(ast: &FilterAst) -> String {
     match ast {
-        FilterAst::And(exprs) => group_to_vrl(exprs, " && "),
         FilterAst::Or(exprs) => group_to_vrl(exprs, " || "),
+        FilterAst::And(exprs) => group_to_vrl(exprs, " && "),
+        FilterAst::Exists(field) => format!("exists(.{field})"),
         FilterAst::Contains(field, word) => format!("contains(to_string!(.{field}), \"{word}\")"),
         FilterAst::StartsWith(field, prefix) => {
             format!("starts_with(to_string!(.{field}), \"{prefix}\")")
@@ -124,7 +126,7 @@ mod tests {
         let result = filter_ast_to_vrl(&serde_json::from_str(ast_raw)?);
         assert_eq!(
             result,
-            "(((exists(.a) && to_float!(.a) == 1) && ((exists(.b) && to_float!(.b) == 2))) && ((exists(.c) && to_float!(.c) == 3) || (exists(.d) && to_float!(.d) == 4)))"
+            "(((!exists(.a) || to_float!(.a) == 1) && ((!exists(.b) || to_float!(.b) == 2))) && ((!exists(.c) || to_float!(.c) == 3) || (!exists(.d) || to_float!(.d) == 4)))"
         );
         Ok(())
     }
