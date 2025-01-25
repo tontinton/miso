@@ -51,7 +51,7 @@ fn binop_compare_to_vrl(field: &str, value: &str, compare: &str) -> String {
     let cast = if stripped.starts_with('"') && stripped.starts_with('"') {
         "to_string!"
     } else {
-        "to_int!"
+        "to_float!"
     };
     format!("(exists(.{field}) && {cast}(.{field}) {compare} {stripped})")
 }
@@ -124,7 +124,7 @@ mod tests {
         let result = filter_ast_to_vrl(&serde_json::from_str(ast_raw)?);
         assert_eq!(
             result,
-            "(((exists(.a) && to_int!(.a) == 1) && ((exists(.b) && to_int!(.b) == 2))) && ((exists(.c) && to_int!(.c) == 3) || (exists(.d) && to_int!(.d) == 4)))"
+            "(((exists(.a) && to_float!(.a) == 1) && ((exists(.b) && to_float!(.b) == 2))) && ((exists(.c) && to_float!(.c) == 3) || (exists(.d) && to_float!(.d) == 4)))"
         );
         Ok(())
     }
