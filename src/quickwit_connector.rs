@@ -902,7 +902,6 @@ impl Connector for QuickwitConnector {
 
         for (output_field, agg) in &config.aggs {
             let value = match agg {
-                #[allow(unreachable_patterns)]
                 Aggregation::Min(agg_field) => {
                     json!({
                         "min": {
@@ -917,14 +916,17 @@ impl Connector for QuickwitConnector {
                         }
                     })
                 }
+                Aggregation::Sum(agg_field) => {
+                    json!({
+                        "sum": {
+                            "field": agg_field,
+                        }
+                    })
+                }
                 Aggregation::Count => {
                     // Count is always returned in doc_count.
                     count_fields.push(output_field.clone());
                     continue;
-                }
-                _ => {
-                    // Unsupported aggregation.
-                    return None;
                 }
             };
 
