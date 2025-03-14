@@ -1,6 +1,6 @@
 use std::{
     cmp::Ordering,
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, BTreeSet, HashMap},
     sync::{
         atomic::{self, AtomicI64},
         Arc,
@@ -26,6 +26,16 @@ pub enum Aggregation {
     Sum(/*field=*/ String),
     Min(/*field=*/ String),
     Max(/*field=*/ String),
+}
+
+impl Aggregation {
+    #[must_use]
+    fn field(&self) -> Option<String> {
+        match self {
+            Self::Count => None,
+            Self::Sum(field) | Self::Min(field) | Self::Max(field) => Some(field.clone()),
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -185,6 +195,15 @@ async fn summarize_group_by(
     output_fields: Vec<KeyString>,
     aggregations: Vec<Aggregation>,
 ) -> Result<Vec<Log>> {
+    let agg_fields: BTreeSet<String> = aggregations.iter().flat_map(Aggregation::field).collect();
+    let get_value_fn = if group_by.iter().any(|x| agg_fields.contains(x)) {
+        |log: &mut Log, key: &KeyString| log.get(key).cloned().unwrap_or_else(|| Value::Null)
+    } else {
+        // Optimization: remove item from map instead of cloning when no aggregation references
+        // a field that is grouped by.
+        |log: &mut Log, key: &KeyString| log.remove(key).unwrap_or_else(|| Value::Null)
+    };
+
     let by: Vec<KeyString> = group_by.into_iter().map(|x| x.into()).collect();
 
     // All of HashMap, HashSet, BTreeMap and BtreeSet rely on either the hash or the order of keys
@@ -196,17 +215,17 @@ async fn summarize_group_by(
 
     let mut tracked_types = vec![None; by.len()];
 
-    while let Some(log) = input_stream.next().await {
+    while let Some(mut log) = input_stream.next().await {
         let mut group_keys = Vec::with_capacity(by.len());
 
         for (tracked_type, key) in tracked_types.iter_mut().zip(&by) {
-            let value = log.get(key).unwrap_or_else(|| &Value::Null);
-            if value == &Value::Null {
-                group_keys.push(SortableValue(value.clone()));
+            let value = get_value_fn(&mut log, key);
+            if value == Value::Null {
+                group_keys.push(SortableValue(value));
                 continue;
             }
 
-            let value_type = std::mem::discriminant(value);
+            let value_type = std::mem::discriminant(&value);
             if let Some(t) = tracked_type {
                 if *t != value_type {
                     bail!(
@@ -220,7 +239,7 @@ async fn summarize_group_by(
                 *tracked_type = Some(value_type);
             }
 
-            group_keys.push(SortableValue(value.clone()));
+            group_keys.push(SortableValue(value));
         }
 
         let entry = group_aggregates
