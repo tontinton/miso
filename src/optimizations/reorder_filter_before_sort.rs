@@ -2,6 +2,10 @@ use crate::{pattern, workflow::WorkflowStep};
 
 use super::{Group, Optimization, Pattern};
 
+/// Allows for:
+///  * Sorting less items.
+///  * Filter predicate pushdown.
+///  * Sort to be converted to top-n.
 pub struct ReorderFilterBeforeSort;
 
 impl Optimization for ReorderFilterBeforeSort {

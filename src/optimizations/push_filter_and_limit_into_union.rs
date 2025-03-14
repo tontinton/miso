@@ -2,12 +2,12 @@ use crate::{pattern, workflow::WorkflowStep};
 
 use super::{Group, Optimization, Pattern};
 
-pub struct PushFilterAndLimitIntoUnion;
-
 /// Some steps after unions, when inserted as a step into the subquery, can allow for
 /// predicate pushdowns to limit the amount of results.
 /// Also insert these steps right before the union, for the same reasons, just for
 /// the outer query before the union step.
+pub struct PushFilterAndLimitIntoUnion;
+
 impl Optimization for PushFilterAndLimitIntoUnion {
     fn pattern(&self) -> Pattern {
         pattern!((Union+) (Filter* [Limit TopN]))
