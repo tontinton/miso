@@ -204,7 +204,7 @@ where
 }
 
 fn default_scroll_size() -> u16 {
-    5000
+    10000
 }
 
 #[derive(Debug, Clone, Deserialize)]
