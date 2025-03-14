@@ -45,7 +45,7 @@ jobs:
       - name: Cache setup
         uses: ./.github/actions/cache-setup
 
-      - name: DB tests
+      - name: Tests
         run: RUST_BACKTRACE=1 cargo test
 
   lint:
