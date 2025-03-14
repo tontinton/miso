@@ -52,7 +52,41 @@ fn merge_two_logs(join_value: &Value, left: Log, right: Log) -> Log {
     merged
 }
 
-fn two_sided_join(keys: Vec<SortableValue>, mut left: JoinMap, mut right: JoinMap) -> LogTryStream {
+fn inner_join(left: JoinMap, right: JoinMap) -> LogTryStream {
+    Box::pin(try_stream! {
+        let mut left_iter = left.into_iter();
+        let mut right_iter = right.into_iter();
+        let mut left_tuple = left_iter.next();
+        let mut right_tuple = right_iter.next();
+
+        while let (Some((left_key, left_logs)), Some((right_key, right_logs))) =
+            (left_tuple, right_tuple)
+        {
+            match left_key.cmp(&right_key) {
+                std::cmp::Ordering::Less => {
+                    left_tuple = left_iter.next();
+                    right_tuple = Some((right_key, right_logs));
+                }
+                std::cmp::Ordering::Greater => {
+                    left_tuple = Some((left_key, left_logs));
+                    right_tuple = right_iter.next();
+                }
+                std::cmp::Ordering::Equal => {
+                    for (left_log, right_log) in iproduct!(left_logs, right_logs) {
+                        yield merge_two_logs(&left_key, left_log, right_log);
+                    }
+                    left_tuple = left_iter.next();
+                    right_tuple = right_iter.next();
+                }
+            };
+        }
+    })
+}
+
+fn outer_join(mut left: JoinMap, mut right: JoinMap) -> LogTryStream {
+    let mut keys: Vec<_> = left.keys().chain(right.keys()).cloned().collect();
+    keys.sort();
+    keys.dedup();
     Box::pin(try_stream! {
         for key in keys {
             match (left.remove(&key), right.remove(&key)) {
@@ -75,40 +109,6 @@ fn two_sided_join(keys: Vec<SortableValue>, mut left: JoinMap, mut right: JoinMa
             }
         }
     })
-}
-
-fn inner_join(left: JoinMap, right: JoinMap) -> LogTryStream {
-    let mut keys = Vec::new();
-
-    let mut left_iter = left.keys();
-    let mut right_iter = right.keys();
-    let mut left_key = left_iter.next();
-    let mut right_key = right_iter.next();
-
-    while let (Some(left), Some(right)) = (left_key, right_key) {
-        match left.cmp(right) {
-            std::cmp::Ordering::Less => {
-                left_key = left_iter.next();
-            }
-            std::cmp::Ordering::Greater => {
-                right_key = right_iter.next();
-            }
-            std::cmp::Ordering::Equal => {
-                keys.push(left.clone());
-                left_key = left_iter.next();
-                right_key = right_iter.next();
-            }
-        }
-    }
-
-    two_sided_join(keys, left, right)
-}
-
-fn outer_join(left: JoinMap, right: JoinMap) -> LogTryStream {
-    let mut keys: Vec<_> = left.keys().chain(right.keys()).cloned().collect();
-    keys.sort();
-    keys.dedup();
-    two_sided_join(keys, left, right)
 }
 
 fn left_join(left: JoinMap, mut right: JoinMap) -> LogTryStream {
