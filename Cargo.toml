@@ -21,11 +21,13 @@ atomic_float = "1.1.0"
 axum = { version = "0.7.7", features = ["macros"] }
 clap = { version = "4.5.20", features = ["derive"] }
 color-eyre = { version = "0.6.3", default-features = false }
+cranelift = { version = "0.117.2", features = ["jit", "module", "native"] }
 futures-core = "0.3.31"
 futures-util = "0.3.31"
 humantime = "2.1.0"
 itertools = "0.13.0"
 kinded = "0.3.0"
+memchr = "2.7.4"
 parking_lot = "0.12.3"
 reqwest = { version = "0.12.9", features = ["json"] }
 serde = { version = "1.0.210", features = ["derive"] }

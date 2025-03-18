@@ -26,6 +26,7 @@ use crate::{
 use self::{filter::FilterAst, project::ProjectField, sort::Sort};
 
 pub mod filter;
+mod jit;
 pub mod join;
 pub mod limit;
 pub mod project;
@@ -232,7 +233,7 @@ impl WorkflowStep {
                 }
             }
             WorkflowStep::Filter(ast) => {
-                let stream = filter_stream(&ast, rx_stream(rx.unwrap()))?;
+                let stream = filter_stream(ast.clone(), rx_stream(rx.unwrap())).await?;
                 stream_to_tx(stream, tx, "filter").await?;
             }
             WorkflowStep::Project(fields) => {
