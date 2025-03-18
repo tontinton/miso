@@ -191,7 +191,7 @@ async fn filter_eq() -> Result<()> {
             {"filter": {"eq": ["world", "2"]}}
         ]"#,
         r#"[{"hello": "world"}, {"world": 1}, {"world": 2}]"#,
-        r#"[{"hello": "world"}, {"world": 2}]"#,
+        r#"[{"world": 2}]"#,
     )
     .await
 }
@@ -204,7 +204,7 @@ async fn filter_ne() -> Result<()> {
             {"filter": {"ne": ["world", "2"]}}
         ]"#,
         r#"[{"hello": "world"}, {"world": 1}, {"world": 2}]"#,
-        r#"[{"hello": "world"}, {"world": 1}]"#,
+        r#"[{"world": 1}]"#,
     )
     .await
 }
@@ -217,7 +217,7 @@ async fn filter_gt() -> Result<()> {
             {"filter": {"gt": ["world", "1"]}}
         ]"#,
         r#"[{"hello": "world"}, {"world": 2}, {"world": 1}]"#,
-        r#"[{"hello": "world"}, {"world": 2}]"#,
+        r#"[{"world": 2}]"#,
     )
     .await
 }
@@ -230,7 +230,7 @@ async fn filter_lt() -> Result<()> {
             {"filter": {"lt": ["world", "3"]}}
         ]"#,
         r#"[{"hello": "world"}, {"world": 2}, {"world": 3}]"#,
-        r#"[{"hello": "world"}, {"world": 2}]"#,
+        r#"[{"world": 2}]"#,
     )
     .await
 }
@@ -243,7 +243,7 @@ async fn filter_gte() -> Result<()> {
             {"filter": {"gte": ["world", "2"]}}
         ]"#,
         r#"[{"hello": "world"}, {"world": 1}, {"world": 2}, {"world": 3}]"#,
-        r#"[{"hello": "world"}, {"world": 2}, {"world": 3}]"#,
+        r#"[{"world": 2}, {"world": 3}]"#,
     )
     .await
 }
@@ -256,7 +256,7 @@ async fn filter_lte() -> Result<()> {
             {"filter": {"lte": ["world", "3"]}}
         ]"#,
         r#"[{"hello": "world"}, {"world": 2}, {"world": 3}, {"world": 4}]"#,
-        r#"[{"hello": "world"}, {"world": 2}, {"world": 3}]"#,
+        r#"[{"world": 2}, {"world": 3}]"#,
     )
     .await
 }
@@ -292,7 +292,7 @@ async fn filter_contains() -> Result<()> {
     check(
         r#"[
             {"scan": ["test", "c"]},
-            {"filter": {"contains": ["hello", "wor"]}}
+            {"filter": {"contains": ["hello", "\"wor\""]}}
         ]"#,
         r#"[{"hello": "world"}, {"world": 2}, {"hello": "aaawora"}, {"hello": "woold"}]"#,
         r#"[{"hello": "world"}, {"hello": "aaawora"}]"#,
@@ -305,7 +305,7 @@ async fn filter_starts_with() -> Result<()> {
     check(
         r#"[
             {"scan": ["test", "c"]},
-            {"filter": {"starts_with": ["hello", "wor"]}}
+            {"filter": {"starts_with": ["hello", "\"wor\""]}}
         ]"#,
         r#"[{"hello": "world"}, {"world": 2}, {"hello": "aaawora"}, {"hello": "woold"}]"#,
         r#"[{"hello": "world"}]"#,

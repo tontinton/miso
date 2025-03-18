@@ -270,7 +270,7 @@ fn filter_ast_to_query(ast: &FilterAst) -> Option<serde_json::Value> {
             json!({
                 "match_phrase_prefix": {
                     field: {
-                        "query": prefix
+                        "query": prefix[1..prefix.len() - 1]
                     }
                 }
             })
