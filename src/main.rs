@@ -14,7 +14,7 @@ async fn main() -> Result<()> {
     debug!(?args, "Init");
 
     let listener = TcpListener::bind(&args.listen).await?;
-    let app = create_axum_app()?;
+    let app = create_axum_app(&args)?;
 
     info!("Listening on {}", args.listen);
     axum::serve(listener, app).await?;

@@ -18,6 +18,7 @@ use tracing::{debug, error, info, span, Level};
 use uuid::Uuid;
 
 use crate::{
+    args::Args,
     connector::Connector,
     optimizations::Optimizer,
     quickwit_connector::QuickwitConnector,
@@ -238,7 +239,7 @@ async fn query_stream(
     }))
 }
 
-pub fn create_axum_app() -> Result<Router> {
+pub fn create_axum_app(args: &Args) -> Result<Router> {
     let mut connectors = BTreeMap::new();
     connectors.insert(
         "tony".to_string(),
@@ -249,9 +250,16 @@ pub fn create_axum_app() -> Result<Router> {
             }"#,
         )?)) as Arc<dyn Connector>,
     );
+
+    let optimizer = Arc::new(if args.no_optimizations {
+        Optimizer::empty()
+    } else {
+        Optimizer::default()
+    });
+
     let state = Arc::new(RwLock::new(State {
         connectors,
-        optimizer: Arc::new(Optimizer::default()),
+        optimizer,
     }));
 
     Ok(Router::new()
