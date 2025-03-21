@@ -10,6 +10,13 @@ pub struct Args {
         default_value = "0.0.0.0:8080"
     )]
     pub listen: String,
+
+    #[clap(
+        long,
+        help = "Disable all optimizations (helpful for debugging purposes).",
+        default_value = "false"
+    )]
+    pub no_optimizations: bool,
 }
 
 #[must_use]

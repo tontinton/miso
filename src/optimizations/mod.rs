@@ -74,6 +74,15 @@ fn to_kind(steps: &[WorkflowStep]) -> Vec<WorkflowStepKind> {
     steps.iter().map(|x| x.kind()).collect()
 }
 
+impl Optimizer {
+    pub fn empty() -> Self {
+        Self {
+            optimizations: vec![],
+            patterns: vec![],
+        }
+    }
+}
+
 impl Default for Optimizer {
     fn default() -> Self {
         let optimizations = vec![
@@ -173,6 +182,10 @@ fn run_optimization_pass(
 impl Optimizer {
     #[async_recursion]
     pub async fn optimize(&self, mut steps: Vec<WorkflowStep>) -> Vec<WorkflowStep> {
+        if self.optimizations.is_empty() {
+            return steps;
+        }
+
         let mut kinded_steps = to_kind(&steps);
         let mut already_ran = BTreeSet::new();
 
