@@ -739,130 +739,94 @@ mod tests {
 
     #[test]
     fn matches_sanity() {
-        assert_eq!(
-            Pattern::matches(
-                &pattern!(^Scan Count $),
-                &[WorkflowStepKind::Scan, WorkflowStepKind::Count],
-            ),
-            true
-        );
+        assert!(Pattern::matches(
+            &pattern!(^Scan Count $),
+            &[WorkflowStepKind::Scan, WorkflowStepKind::Count],
+        ));
 
-        assert_eq!(
-            Pattern::matches(
-                &pattern!(Scan Count $),
-                &[WorkflowStepKind::Scan, WorkflowStepKind::Count],
-            ),
-            true
-        );
+        assert!(Pattern::matches(
+            &pattern!(Scan Count $),
+            &[WorkflowStepKind::Scan, WorkflowStepKind::Count],
+        ));
 
-        assert_eq!(
-            Pattern::matches(
-                &pattern!(^Scan Count$),
-                &[
-                    WorkflowStepKind::Scan,
-                    WorkflowStepKind::Count,
-                    WorkflowStepKind::Count
-                ],
-            ),
-            false
-        );
+        assert!(!Pattern::matches(
+            &pattern!(^Scan Count$),
+            &[
+                WorkflowStepKind::Scan,
+                WorkflowStepKind::Count,
+                WorkflowStepKind::Count
+            ],
+        ));
 
-        assert_eq!(
-            Pattern::matches(
-                &pattern!(^Count Scan$),
-                &[WorkflowStepKind::Scan, WorkflowStepKind::Count],
-            ),
-            false
-        );
+        assert!(!Pattern::matches(
+            &pattern!(^Count Scan$),
+            &[WorkflowStepKind::Scan, WorkflowStepKind::Count],
+        ));
 
-        assert_eq!(
-            Pattern::matches(&pattern!(^Scan*$), &[WorkflowStepKind::Scan],),
-            true
-        );
+        assert!(Pattern::matches(
+            &pattern!(^Scan*$),
+            &[WorkflowStepKind::Scan],
+        ));
 
-        assert_eq!(
-            Pattern::matches(
-                &pattern!(^Scan+$),
-                &[WorkflowStepKind::Scan, WorkflowStepKind::Scan],
-            ),
-            true
-        );
+        assert!(Pattern::matches(
+            &pattern!(^Scan+$),
+            &[WorkflowStepKind::Scan, WorkflowStepKind::Scan],
+        ));
 
-        assert_eq!(
-            Pattern::matches(
-                &pattern!(^Scan.*Project$),
-                &[
-                    WorkflowStepKind::Scan,
-                    WorkflowStepKind::Filter,
-                    WorkflowStepKind::TopN,
-                    WorkflowStepKind::Project
-                ],
-            ),
-            true
-        );
+        assert!(Pattern::matches(
+            &pattern!(^Scan.*Project$),
+            &[
+                WorkflowStepKind::Scan,
+                WorkflowStepKind::Filter,
+                WorkflowStepKind::TopN,
+                WorkflowStepKind::Project
+            ],
+        ));
 
-        assert_eq!(
-            Pattern::matches(
-                &pattern!(^Scan [TopN Filter]+ Count$),
-                &[
-                    WorkflowStepKind::Scan,
-                    WorkflowStepKind::Filter,
-                    WorkflowStepKind::TopN,
-                    WorkflowStepKind::TopN,
-                    WorkflowStepKind::Count,
-                ],
-            ),
-            true
-        );
+        assert!(Pattern::matches(
+            &pattern!(^Scan [TopN Filter]+ Count$),
+            &[
+                WorkflowStepKind::Scan,
+                WorkflowStepKind::Filter,
+                WorkflowStepKind::TopN,
+                WorkflowStepKind::TopN,
+                WorkflowStepKind::Count,
+            ],
+        ));
 
-        assert_eq!(
-            Pattern::matches(
-                &pattern!(^Scan [TopN Filter]+ Count$),
-                &[WorkflowStepKind::Scan, WorkflowStepKind::Count],
-            ),
-            false
-        );
+        assert!(!Pattern::matches(
+            &pattern!(^Scan [TopN Filter]+ Count$),
+            &[WorkflowStepKind::Scan, WorkflowStepKind::Count],
+        ));
 
-        assert_eq!(
-            Pattern::matches(
-                &pattern!(^Scan [TopN Filter]* Count$),
-                &[WorkflowStepKind::Scan, WorkflowStepKind::Count],
-            ),
-            true
-        );
+        assert!(Pattern::matches(
+            &pattern!(^Scan [TopN Filter]* Count$),
+            &[WorkflowStepKind::Scan, WorkflowStepKind::Count],
+        ));
 
-        assert_eq!(
-            Pattern::matches(
-                &pattern!(^Scan [TopN Filter]? Count$),
-                &[WorkflowStepKind::Scan, WorkflowStepKind::Count],
-            ),
-            true
-        );
+        assert!(Pattern::matches(
+            &pattern!(^Scan [TopN Filter]? Count$),
+            &[WorkflowStepKind::Scan, WorkflowStepKind::Count],
+        ));
 
-        assert_eq!(
-            Pattern::matches(
-                &pattern!(^Scan+$),
-                &[
-                    WorkflowStepKind::Scan,
-                    WorkflowStepKind::Filter,
-                    WorkflowStepKind::Scan
-                ],
-            ),
-            false
-        );
+        assert!(!Pattern::matches(
+            &pattern!(^Scan+$),
+            &[
+                WorkflowStepKind::Scan,
+                WorkflowStepKind::Filter,
+                WorkflowStepKind::Scan
+            ],
+        ));
 
-        assert_eq!(
-            Pattern::matches(
-                &pattern!(^Scan [^TopN Filter]+ Count$),
-                &[
-                    WorkflowStepKind::Scan,
-                    WorkflowStepKind::Project,
-                    WorkflowStepKind::Project,
-                    WorkflowStepKind::Sort,
-                    WorkflowStepKind::Count,
-                ],
-            ),
-            true
-        );
+        assert!(Pattern::matches(
+            &pattern!(^Scan [^TopN Filter]+ Count$),
+            &[
+                WorkflowStepKind::Scan,
+                WorkflowStepKind::Project,
+                WorkflowStepKind::Project,
+                WorkflowStepKind::Sort,
+                WorkflowStepKind::Count,
+            ],
+        ));
     }
 }
