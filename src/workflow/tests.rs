@@ -40,17 +40,11 @@ impl QueryHandle for TestHandle {
 struct TestHandle {}
 
 #[derive(Debug)]
+#[derive(Default)]
 struct TestConnector {
     collections: BTreeMap<String, Vec<Log>>,
 }
 
-impl Default for TestConnector {
-    fn default() -> Self {
-        Self {
-            collections: BTreeMap::new(),
-        }
-    }
-}
 
 impl TestConnector {
     fn insert(&mut self, collection: String, logs: Vec<Log>) {
