@@ -38,17 +38,17 @@ pub enum Arg {
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum FilterAst {
-    Or(Vec<FilterAst>),                                // ||
-    And(Vec<FilterAst>),                               // &&
-    Exists(/*field=*/ String),                         // field exists
-    Contains(/*field=*/ String, /*word=*/ String),     // word in field
-    StartsWith(/*field=*/ String, /*prefix=*/ String), // field starts with prefix
-    Eq(/*field=*/ String, /*value=*/ String),          // ==
-    Ne(/*field=*/ String, /*value=*/ String),          // !=
-    Gt(/*field=*/ String, /*value=*/ String),          // >
-    Gte(/*field=*/ String, /*value=*/ String),         // >=
-    Lt(/*field=*/ String, /*value=*/ String),          // <
-    Lte(/*field=*/ String, /*value=*/ String),         // <=
+    Or(Vec<FilterAst>),                                   // ||
+    And(Vec<FilterAst>),                                  // &&
+    Exists(/*field=*/ String),                            // field exists
+    Contains(/*field=*/ String, /*word=*/ String),        // word in field
+    StartsWith(/*field=*/ String, /*prefix=*/ String),    // field starts with prefix
+    Eq(/*field=*/ String, /*value=*/ serde_json::Value),  // ==
+    Ne(/*field=*/ String, /*value=*/ serde_json::Value),  // !=
+    Gt(/*field=*/ String, /*value=*/ serde_json::Value),  // >
+    Gte(/*field=*/ String, /*value=*/ serde_json::Value), // >=
+    Lt(/*field=*/ String, /*value=*/ serde_json::Value),  // <
+    Lte(/*field=*/ String, /*value=*/ serde_json::Value), // <=
 }
 
 impl FilterAst {
@@ -179,7 +179,7 @@ impl Compiler<'_> {
             }
             FilterAst::Contains(field, word) => {
                 let (lhs_type, lhs) = self.ident(field)?;
-                let rhs_arg = self.literal(word)?;
+                let rhs_arg = self.str_literal(word);
 
                 let fns: Vec<Box<dyn Fn(&mut Self) -> Result<Value>>> = vec![
                     Box::new(|c: &mut Self| {
@@ -206,7 +206,7 @@ impl Compiler<'_> {
             }
             FilterAst::StartsWith(field, prefix) => {
                 let (lhs_type, lhs) = self.ident(field)?;
-                let rhs_arg = self.literal(prefix)?;
+                let rhs_arg = self.str_literal(prefix);
 
                 let fns: Vec<Box<dyn Fn(&mut Self) -> Result<Value>>> = vec![
                     Box::new(|c: &mut Self| {
@@ -300,7 +300,7 @@ impl Compiler<'_> {
         Ok(self.builder.append_block_param(exit_block, BOOL_TYPE))
     }
 
-    fn cmp(&mut self, cmp: IntCC, field: &str, value: &str) -> Result<Value> {
+    fn cmp(&mut self, cmp: IntCC, field: &str, value: &serde_json::Value) -> Result<Value> {
         let (lhs_type, lhs) = self.ident(field)?;
         let rhs_arg = self.literal(value)?;
 
@@ -390,31 +390,40 @@ impl Compiler<'_> {
         Ok((arg_type, arg_value))
     }
 
-    fn literal(&mut self, value: &str) -> Result<Arg> {
-        if value.starts_with('"') {
-            if !value.ends_with('"') {
-                bail!("'{value}' must begin and end with quotes to be a valid string");
+    fn literal(&mut self, value: &serde_json::Value) -> Result<Arg> {
+        Ok(match value {
+            serde_json::Value::Number(x) => {
+                if let Some(x) = x.as_i64() {
+                    Arg::Int(self.builder.ins().iconst(self.ptr_type, x))
+                } else if let Some(x) = x.as_f64() {
+                    Arg::Float(self.builder.ins().f64const(x))
+                } else {
+                    bail!("'{x}' couldn't be parsed as either an int or a float");
+                }
             }
+            serde_json::Value::String(x) => self.str_literal(x),
+            serde_json::Value::Null => {
+                bail!("null values are currently unsupported");
+            }
+            serde_json::Value::Bool(..) => {
+                bail!("boolean values are currently unsupported");
+            }
+            serde_json::Value::Array(..) => {
+                bail!("array values are currently unsupported");
+            }
+            serde_json::Value::Object(..) => {
+                bail!("object values are currently unsupported");
+            }
+        })
+    }
 
-            return Ok(Arg::Str(
-                self.builder
-                    .ins()
-                    .iconst(self.ptr_type, (value.as_ptr() as i64) + 1),
-                self.builder
-                    .ins()
-                    .iconst(self.ptr_type, (value.len() as i64) - 2),
-            ));
-        }
-
-        if let Ok(x) = value.parse::<i64>() {
-            return Ok(Arg::Int(self.builder.ins().iconst(self.ptr_type, x)));
-        }
-
-        if let Ok(x) = value.parse::<f64>() {
-            return Ok(Arg::Float(self.builder.ins().f64const(x)));
-        }
-
-        bail!("'{value}' is not a valid integer / float / string");
+    fn str_literal(&mut self, value: &str) -> Arg {
+        Arg::Str(
+            self.builder
+                .ins()
+                .iconst(self.ptr_type, value.as_ptr() as i64),
+            self.builder.ins().iconst(self.ptr_type, value.len() as i64),
+        )
     }
 
     fn call_libc(&mut self, sig: Signature, name: &str, args: &[Value]) -> Result<Value> {
