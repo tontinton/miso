@@ -425,40 +425,95 @@ unsafe fn run_code(code_ptr: *const (), args: &[u8]) -> bool {
     code_fn(args.as_ptr())
 }
 
-async fn build_args(log: &Log, fields: &[KeyString]) -> Option<(Vec<u8>, Vec<Box<[u8]>>)> {
+fn push_null(args: &mut Vec<u8>) {
+    args.push(ArgKind::_Null as u8);
+    args.extend(0usize.to_ne_bytes());
+}
+
+async fn build_args(
+    log: &Log,
+    fields_iter: impl Iterator<Item = &[KeyString]>,
+) -> Option<(Vec<u8>, Vec<Box<[u8]>>)> {
+    use vrl::value::Value as V;
+
     let mut args = Vec::new();
     let mut allocs = Vec::new();
 
-    for field in fields {
-        if let Some(value) = log.get(field) {
-            match value {
-                vrl::value::Value::Integer(i) => {
-                    args.push(ArgKind::Int as u8);
-                    args.extend((*i).to_ne_bytes());
-                }
-                vrl::value::Value::Bytes(b) => {
-                    args.push(ArgKind::Str as u8);
-
-                    let mut bytes = Vec::with_capacity(std::mem::size_of::<usize>() * 2);
-                    bytes.extend((b.as_ref().as_ptr() as usize).to_ne_bytes());
-                    bytes.extend(b.len().to_ne_bytes());
-
-                    allocs.push(bytes.into_boxed_slice());
-
-                    let ptr = allocs[allocs.len() - 1].as_ptr();
-                    args.extend((ptr as usize).to_ne_bytes());
-                }
-                _ => {
-                    return None;
-                }
-            };
-        } else {
-            args.push(ArgKind::_Null as u8);
-            args.extend(0usize.to_ne_bytes());
+    'fields_loop: for field_keys in fields_iter {
+        let mut obj = log;
+        for field_key in &field_keys[..field_keys.len() - 1] {
+            if let Some(V::Object(inner)) = obj.get(field_key) {
+                obj = inner;
+            } else {
+                push_null(&mut args);
+                continue 'fields_loop;
+            }
         }
+
+        let Some(value) = obj.get(&field_keys[field_keys.len() - 1]) else {
+            push_null(&mut args);
+            continue;
+        };
+
+        match value {
+            V::Integer(i) => {
+                args.push(ArgKind::Int as u8);
+                args.extend((*i).to_ne_bytes());
+            }
+            V::Bytes(b) => {
+                args.push(ArgKind::Str as u8);
+
+                let mut bytes = Vec::with_capacity(std::mem::size_of::<usize>() * 2);
+                bytes.extend((b.as_ref().as_ptr() as usize).to_ne_bytes());
+                bytes.extend(b.len().to_ne_bytes());
+
+                allocs.push(bytes.into_boxed_slice());
+
+                let ptr = allocs[allocs.len() - 1].as_ptr();
+                args.extend((ptr as usize).to_ne_bytes());
+            }
+            _ => {
+                return None;
+            }
+        };
     }
 
     Some((args, allocs))
+}
+
+/// A sequentially contiguous data structure to hold all fields and their nested keys,
+/// separated by dots.
+struct FlattenedFields {
+    data: Vec<KeyString>,
+    offsets: Vec<usize>,
+}
+
+impl FlattenedFields {
+    fn from_nested(fields: Vec<String>) -> Self {
+        let mut data = Vec::new();
+        let mut offsets = Vec::with_capacity(fields.len());
+
+        for field in fields {
+            offsets.push(data.len());
+            data.extend(field.split('.').map(|k| k.into()));
+        }
+
+        Self { data, offsets }
+    }
+
+    fn get(&self, index: usize) -> &[KeyString] {
+        let start = self.offsets[index];
+        let end = self
+            .offsets
+            .get(index + 1)
+            .copied()
+            .unwrap_or(self.data.len());
+        &self.data[start..end]
+    }
+
+    fn iter(&self) -> impl Iterator<Item = &[KeyString]> {
+        (0..self.offsets.len()).map(move |i| self.get(i))
+    }
 }
 
 pub async fn filter_stream(ast: FilterAst, mut input_stream: LogStream) -> Result<LogTryStream> {
@@ -466,14 +521,14 @@ pub async fn filter_stream(ast: FilterAst, mut input_stream: LogStream) -> Resul
     let ast_clone = ast.clone();
     let (code_ptr, fields) = spawn_blocking(move || filter_ast_to_jit(&ast_clone)).await??;
 
-    let fields: Vec<vrl::value::KeyString> = fields.into_iter().map(|x| x.into()).collect();
+    let flattend_fields = FlattenedFields::from_nested(fields);
 
     Ok(Box::pin(try_stream! {
         // The generated JIT code references strings from inside the AST.
         let _ast_keepalive = ast;
 
         while let Some(log) = input_stream.next().await {
-            let Some((args, _allocs)) = build_args(&log, &fields).await else {
+            let Some((args, _allocs)) = build_args(&log, flattend_fields.iter()).await else {
                 continue;
             };
 
