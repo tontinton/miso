@@ -5,7 +5,7 @@ use cranelift::{
     jit::{JITBuilder, JITModule},
     module::default_libcall_names,
     native,
-    prelude::{settings, Configurable},
+    prelude::{settings, Configurable, FloatCC, IntCC},
 };
 use memchr::memchr_iter;
 
@@ -18,6 +18,19 @@ pub fn new_jit_module() -> Result<JITModule> {
     let isa = isa_builder.finish(settings::Flags::new(flag_builder))?;
     let builder = JITBuilder::with_isa(isa, default_libcall_names());
     Ok(JITModule::new(builder))
+}
+
+pub fn int_cc_to_ordered_float_cc(cc: IntCC) -> FloatCC {
+    match cc {
+        IntCC::Equal => FloatCC::Equal,
+        IntCC::NotEqual => FloatCC::OrderedNotEqual,
+        IntCC::SignedLessThan | IntCC::UnsignedLessThan => FloatCC::LessThan,
+        IntCC::SignedLessThanOrEqual | IntCC::UnsignedLessThanOrEqual => FloatCC::LessThanOrEqual,
+        IntCC::SignedGreaterThan | IntCC::UnsignedGreaterThan => FloatCC::GreaterThan,
+        IntCC::SignedGreaterThanOrEqual | IntCC::UnsignedGreaterThanOrEqual => {
+            FloatCC::GreaterThanOrEqual
+        }
+    }
 }
 
 pub fn starts_with(
