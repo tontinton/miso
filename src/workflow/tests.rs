@@ -221,6 +221,19 @@ async fn filter_eq_string() -> Result<()> {
 }
 
 #[tokio::test]
+async fn filter_eq_null() -> Result<()> {
+    check(
+        r#"[
+            {"scan": ["test", "c"]},
+            {"filter": {"eq": ["world", null]}}
+        ]"#,
+        r#"[{"hello": "world"}, {"world": 1}, {"world": null}]"#,
+        r#"[{"world": null}]"#,
+    )
+    .await
+}
+
+#[tokio::test]
 async fn filter_ne() -> Result<()> {
     check(
         r#"[
@@ -372,6 +385,19 @@ async fn filter_exists_on_object() -> Result<()> {
         ]"#,
         r#"[{"hello": "world"}, {"world": 2}, {"hello": {"there": "abc"}}, {"hello": {"world": "def"}}]"#,
         r#"[{"hello": {"there": "abc"}}]"#,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn filter_exists_null() -> Result<()> {
+    check(
+        r#"[
+            {"scan": ["test", "c"]},
+            {"filter": {"exists": "hello"}}
+        ]"#,
+        r#"[{"hello": "world"}, {"world": 2}, {"hello": null}]"#,
+        r#"[{"hello": "world"}, {"hello": null}]"#,
     )
     .await
 }
