@@ -31,6 +31,7 @@ const BOOL_TYPE: types::Type = types::I8;
 pub enum Arg {
     _Null,             // null
     _NotExists,        // doesn't exist
+    Bool(Value),       // I8
     Int(Value),        // I64
     Float(Value),      // F64
     Str(Value, Value), // *u8, usize
@@ -310,6 +311,10 @@ impl Compiler<'_> {
             Box::new(|c: &mut Self| match rhs_arg {
                 Arg::_Null => Ok(c.builder.ins().iconst(BOOL_TYPE, 1)),
                 Arg::_NotExists => Ok(c.builder.ins().iconst(BOOL_TYPE, 0)),
+                Arg::Bool(rhs) => {
+                    let lhs = c.builder.ins().ireduce(BOOL_TYPE, lhs);
+                    Ok(c.builder.ins().icmp(cmp, lhs, rhs))
+                }
                 Arg::Int(rhs) => Ok(c.builder.ins().icmp(cmp, lhs, rhs)),
                 Arg::Float(rhs) => {
                     let lhs = c.builder.ins().bitcast(types::F64, MemFlags::new(), lhs);
@@ -387,7 +392,7 @@ impl Compiler<'_> {
         let arg_value = self
             .builder
             .ins()
-            .load(types::I64, MemFlags::new(), addr, 1);
+            .load(self.ptr_type, MemFlags::new(), addr, 1);
 
         Ok((arg_type, arg_value))
     }
@@ -405,8 +410,8 @@ impl Compiler<'_> {
                 }
             }
             serde_json::Value::String(x) => self.str_literal(x),
-            serde_json::Value::Bool(..) => {
-                bail!("boolean values are currently unsupported");
+            serde_json::Value::Bool(x) => {
+                Arg::Bool(self.builder.ins().iconst(BOOL_TYPE, if *x { 1 } else { 0 }))
             }
             serde_json::Value::Array(..) => {
                 bail!("array values are currently unsupported");
@@ -479,6 +484,11 @@ async fn build_args(
         match value {
             V::Null => {
                 push_null(&mut args);
+            }
+            V::Boolean(b) => {
+                args.push(ArgKind::Bool as u8);
+                let i: usize = if *b { 1 } else { 0 };
+                args.extend(i.to_ne_bytes());
             }
             V::Integer(i) => {
                 args.push(ArgKind::Int as u8);
