@@ -195,6 +195,19 @@ async fn filter_eq() -> Result<()> {
 }
 
 #[tokio::test]
+async fn filter_eq_float() -> Result<()> {
+    check(
+        r#"[
+            {"scan": ["test", "c"]},
+            {"filter": {"eq": ["world", "2.5"]}}
+        ]"#,
+        r#"[{"hello": "world"}, {"world": 1.5}, {"world": 2.5}]"#,
+        r#"[{"world": 2.5}]"#,
+    )
+    .await
+}
+
+#[tokio::test]
 async fn filter_ne() -> Result<()> {
     check(
         r#"[
