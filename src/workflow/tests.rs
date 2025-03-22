@@ -221,6 +221,19 @@ async fn filter_eq_string() -> Result<()> {
 }
 
 #[tokio::test]
+async fn filter_eq_bool() -> Result<()> {
+    check(
+        r#"[
+            {"scan": ["test", "c"]},
+            {"filter": {"eq": ["world", false]}}
+        ]"#,
+        r#"[{"hello": "world"}, {"world": 5}, {"world": true}, {"world": false}]"#,
+        r#"[{"world": false}]"#,
+    )
+    .await
+}
+
+#[tokio::test]
 async fn filter_eq_null() -> Result<()> {
     check(
         r#"[
