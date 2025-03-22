@@ -23,7 +23,7 @@ use vrl::value::KeyString;
 
 use crate::log::{Log, LogStream, LogTryStream};
 
-use super::jit::{contains, new_jit_module, starts_with};
+use super::jit::{contains, int_cc_to_ordered_float_cc, new_jit_module, starts_with};
 
 const BOOL_TYPE: types::Type = types::I8;
 
@@ -31,6 +31,7 @@ const BOOL_TYPE: types::Type = types::I8;
 pub enum Arg {
     _Null,             // doesn't exist
     Int(Value),        // I64
+    Float(Value),      // F64
     Str(Value, Value), // *u8, usize
 }
 
@@ -308,6 +309,12 @@ impl Compiler<'_> {
             Box::new(|c: &mut Self| match rhs_arg {
                 Arg::_Null => Ok(c.builder.ins().iconst(BOOL_TYPE, 0)),
                 Arg::Int(rhs) => Ok(c.builder.ins().icmp(cmp, lhs, rhs)),
+                Arg::Float(rhs) => {
+                    let lhs = c.builder.ins().bitcast(types::F64, MemFlags::new(), lhs);
+                    Ok(c.builder
+                        .ins()
+                        .fcmp(int_cc_to_ordered_float_cc(cmp), lhs, rhs))
+                }
                 Arg::Str(rhs_ptr, rhs_len) => {
                     let (lhs_ptr, lhs_len) = c.load_str(lhs);
                     c.cmp_strs(cmp, lhs_ptr, lhs_len, rhs_ptr, rhs_len)
@@ -389,20 +396,25 @@ impl Compiler<'_> {
                 bail!("'{value}' must begin and end with quotes to be a valid string");
             }
 
-            Ok(Arg::Str(
+            return Ok(Arg::Str(
                 self.builder
                     .ins()
                     .iconst(self.ptr_type, (value.as_ptr() as i64) + 1),
                 self.builder
                     .ins()
                     .iconst(self.ptr_type, (value.len() as i64) - 2),
-            ))
-        } else {
-            let imm: i64 = value
-                .parse()
-                .with_context(|| format!("'{value}' is not an integer"))?;
-            Ok(Arg::Int(self.builder.ins().iconst(self.ptr_type, imm)))
+            ));
         }
+
+        if let Ok(x) = value.parse::<i64>() {
+            return Ok(Arg::Int(self.builder.ins().iconst(self.ptr_type, x)));
+        }
+
+        if let Ok(x) = value.parse::<f64>() {
+            return Ok(Arg::Float(self.builder.ins().f64const(x)));
+        }
+
+        bail!("'{value}' is not a valid integer / float / string");
     }
 
     fn call_libc(&mut self, sig: Signature, name: &str, args: &[Value]) -> Result<Value> {
@@ -458,6 +470,10 @@ async fn build_args(
         match value {
             V::Integer(i) => {
                 args.push(ArgKind::Int as u8);
+                args.extend((*i).to_ne_bytes());
+            }
+            V::Float(i) => {
+                args.push(ArgKind::Float as u8);
                 args.extend((*i).to_ne_bytes());
             }
             V::Bytes(b) => {
