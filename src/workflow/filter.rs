@@ -29,7 +29,8 @@ const BOOL_TYPE: types::Type = types::I8;
 
 #[derive(Kinded, Debug, Copy, Clone)]
 pub enum Arg {
-    _Null,             // doesn't exist
+    _Null,             // null
+    _NotExists,        // doesn't exist
     Int(Value),        // I64
     Float(Value),      // F64
     Str(Value, Value), // *u8, usize
@@ -175,7 +176,7 @@ impl Compiler<'_> {
             }
             FilterAst::Exists(field) => {
                 let (field_type, _) = self.ident(field)?;
-                Ok(self.cmp_types(IntCC::NotEqual, field_type, ArgKind::_Null))
+                Ok(self.cmp_types(IntCC::NotEqual, field_type, ArgKind::_NotExists))
             }
             FilterAst::Contains(field, word) => {
                 let (lhs_type, lhs) = self.ident(field)?;
@@ -307,7 +308,8 @@ impl Compiler<'_> {
         let cmps: Vec<Box<dyn Fn(&mut Self) -> Result<Value>>> = vec![
             Box::new(|c: &mut Self| Ok(c.cmp_types(IntCC::Equal, lhs_type, rhs_arg.kind()))),
             Box::new(|c: &mut Self| match rhs_arg {
-                Arg::_Null => Ok(c.builder.ins().iconst(BOOL_TYPE, 0)),
+                Arg::_Null => Ok(c.builder.ins().iconst(BOOL_TYPE, 1)),
+                Arg::_NotExists => Ok(c.builder.ins().iconst(BOOL_TYPE, 0)),
                 Arg::Int(rhs) => Ok(c.builder.ins().icmp(cmp, lhs, rhs)),
                 Arg::Float(rhs) => {
                     let lhs = c.builder.ins().bitcast(types::F64, MemFlags::new(), lhs);
@@ -392,6 +394,7 @@ impl Compiler<'_> {
 
     fn literal(&mut self, value: &serde_json::Value) -> Result<Arg> {
         Ok(match value {
+            serde_json::Value::Null => Arg::_Null,
             serde_json::Value::Number(x) => {
                 if let Some(x) = x.as_i64() {
                     Arg::Int(self.builder.ins().iconst(self.ptr_type, x))
@@ -402,9 +405,6 @@ impl Compiler<'_> {
                 }
             }
             serde_json::Value::String(x) => self.str_literal(x),
-            serde_json::Value::Null => {
-                bail!("null values are currently unsupported");
-            }
             serde_json::Value::Bool(..) => {
                 bail!("boolean values are currently unsupported");
             }
@@ -446,6 +446,11 @@ fn push_null(args: &mut Vec<u8>) {
     args.extend(0usize.to_ne_bytes());
 }
 
+fn push_not_exists(args: &mut Vec<u8>) {
+    args.push(ArgKind::_NotExists as u8);
+    args.extend(0usize.to_ne_bytes());
+}
+
 async fn build_args(
     log: &Log,
     fields_iter: impl Iterator<Item = &[KeyString]>,
@@ -461,17 +466,20 @@ async fn build_args(
             if let Some(V::Object(inner)) = obj.get(field_key) {
                 obj = inner;
             } else {
-                push_null(&mut args);
+                push_not_exists(&mut args);
                 continue 'fields_loop;
             }
         }
 
         let Some(value) = obj.get(&field_keys[field_keys.len() - 1]) else {
-            push_null(&mut args);
+            push_not_exists(&mut args);
             continue;
         };
 
         match value {
+            V::Null => {
+                push_null(&mut args);
+            }
             V::Integer(i) => {
                 args.push(ArgKind::Int as u8);
                 args.extend((*i).to_ne_bytes());
