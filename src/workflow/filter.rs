@@ -143,8 +143,8 @@ fn filter_ast_to_jit(ast: &FilterAst) -> Result<(usize, Vec<String>)> {
 
     module.finalize_definitions().context("failed to compile")?;
 
-    let code = module.get_finalized_function(id);
-    Ok((code as usize, fields))
+    let jit_func_addr = module.get_finalized_function(id);
+    Ok((jit_func_addr as usize, fields))
 }
 
 struct Compiler<'a> {
@@ -432,11 +432,6 @@ impl Compiler<'_> {
     }
 }
 
-unsafe fn run_code(code_ptr: *const (), args: &[u8]) -> bool {
-    let code_fn: fn(*const u8) -> bool = std::mem::transmute(code_ptr);
-    code_fn(args.as_ptr())
-}
-
 fn push_null(args: &mut Vec<u8>) {
     args.push(ArgKind::_Null as u8);
     args.extend(0usize.to_ne_bytes());
@@ -532,10 +527,53 @@ impl FlattenedFields {
     }
 }
 
+/// # Safety
+///
+/// - `fn_ptr` must be a valid function pointer to a function with the exact signature:
+///   ```rust
+///   fn(*const u8) -> bool
+///   ```
+///   Invoking a function pointer with an incorrect signature is **undefined behavior**.
+/// - The function `fn_ptr` points to must **not unwind**. If it panics and unwinding is not caught,
+///   this leads to **undefined behavior** since the function is called via `std::mem::transmute`.
+/// - `args` must remain valid for the duration of the function call:
+///   - It must be properly aligned.
+///   - It must not be deallocated while the function executes.
+/// - The function at `fn_ptr` must not assume `args` has a specific length unless that is externally enforced.
+///   Passing an insufficiently sized buffer may cause out-of-bounds reads.
+///
+/// # Undefined Behavior
+///
+/// - If `fn_ptr` is null or not a valid function pointer, the behavior is undefined.
+/// - If `fn_ptr` is a function with a mismatched calling convention, undefined behavior may occur.
+/// - If the function at `fn_ptr` assumes `args` is mutable or writes to it, but `args` is immutable,
+///   this may cause undefined behavior.
+///
+/// # Example Usage
+///
+/// ```rust
+/// unsafe fn example_fn(ptr: *const u8) -> bool {
+///     !ptr.is_null() // Example logic
+/// }
+///
+/// let func_ptr = example_fn as *const ();
+/// let args = [42u8];
+///
+/// let result = unsafe { run_code(func_ptr, &args) };
+/// assert!(result);
+/// ```
+///
+/// If you are unsure whether `fn_ptr` is valid, consider wrapping the function pointer in a higher-level
+/// abstraction to enforce these constraints at runtime.
+unsafe fn run_code(fn_ptr: *const (), args: &[u8]) -> bool {
+    let code_fn: fn(*const u8) -> bool = std::mem::transmute(fn_ptr);
+    code_fn(args.as_ptr())
+}
+
 pub async fn filter_stream(ast: FilterAst, mut input_stream: LogStream) -> Result<LogTryStream> {
     let ast = Arc::new(ast);
     let ast_clone = ast.clone();
-    let (code_ptr, fields) = spawn_blocking(move || filter_ast_to_jit(&ast_clone)).await??;
+    let (jit_fn_ptr, fields) = spawn_blocking(move || filter_ast_to_jit(&ast_clone)).await??;
 
     let flattend_fields = FlattenedFields::from_nested(fields);
 
@@ -548,7 +586,7 @@ pub async fn filter_stream(ast: FilterAst, mut input_stream: LogStream) -> Resul
                 continue;
             };
 
-            let keep: bool = unsafe { run_code(code_ptr as *const (), &args) };
+            let keep: bool = unsafe { run_code(jit_fn_ptr as *const (), &args) };
             if keep {
                 yield log;
             }
