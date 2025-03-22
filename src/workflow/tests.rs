@@ -39,12 +39,10 @@ impl QueryHandle for TestHandle {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 struct TestHandle {}
 
-#[derive(Debug)]
-#[derive(Default)]
+#[derive(Debug, Default)]
 struct TestConnector {
     collections: BTreeMap<String, Vec<Log>>,
 }
-
 
 impl TestConnector {
     fn insert(&mut self, collection: String, logs: Vec<Log>) {
@@ -314,6 +312,19 @@ async fn filter_starts_with() -> Result<()> {
 }
 
 #[tokio::test]
+async fn filter_starts_with_on_object() -> Result<()> {
+    check(
+        r#"[
+            {"scan": ["test", "c"]},
+            {"filter": {"starts_with": ["hello.there", "\"wor\""]}}
+        ]"#,
+        r#"[{"hello": "world"}, {"world": 2}, {"hello": {"there": "woold"}}, {"hello": {"there": "world"}}]"#,
+        r#"[{"hello": {"there": "world"}}]"#,
+    )
+    .await
+}
+
+#[tokio::test]
 async fn filter_exists() -> Result<()> {
     check(
         r#"[
@@ -322,6 +333,19 @@ async fn filter_exists() -> Result<()> {
         ]"#,
         r#"[{"hello": "world"}, {"world": 2}, {"hello": "woold"}]"#,
         r#"[{"hello": "world"}, {"hello": "woold"}]"#,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn filter_exists_on_object() -> Result<()> {
+    check(
+        r#"[
+            {"scan": ["test", "c"]},
+            {"filter": {"exists": "hello.there"}}
+        ]"#,
+        r#"[{"hello": "world"}, {"world": 2}, {"hello": {"there": "abc"}}, {"hello": {"world": "def"}}]"#,
+        r#"[{"hello": {"there": "abc"}}]"#,
     )
     .await
 }
