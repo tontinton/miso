@@ -11,8 +11,8 @@ use cranelift::{
     jit::JITModule,
     module::{Linkage, Module},
     prelude::{
-        types, AbiParam, FunctionBuilder, FunctionBuilderContext, InstBuilder, IntCC, MemFlags,
-        Signature, Value, Variable,
+        types, AbiParam, FloatCC, FunctionBuilder, FunctionBuilderContext, InstBuilder, IntCC,
+        MemFlags, Signature, Value, Variable,
     },
 };
 use futures_util::StreamExt;
@@ -42,6 +42,7 @@ pub enum Arg {
 pub enum FilterAst {
     Or(Vec<FilterAst>),                                   // ||
     And(Vec<FilterAst>),                                  // &&
+    Not(Box<FilterAst>),                                  // !
     Exists(/*field=*/ String),                            // field exists
     Contains(/*field=*/ String, /*word=*/ String),        // word in field
     StartsWith(/*field=*/ String, /*prefix=*/ String),    // field starts with prefix
@@ -60,6 +61,9 @@ impl FilterAst {
                 for expr in exprs {
                     expr._fields(out);
                 }
+            }
+            FilterAst::Not(expr) => {
+                expr._fields(out);
             }
             FilterAst::Exists(f)
             | FilterAst::Contains(f, _)
@@ -133,7 +137,9 @@ fn filter_ast_to_jit(ast: &FilterAst) -> Result<(usize, Vec<String>)> {
         variables,
         module: &mut module,
     };
-    let return_value = compiler.compile(ast)?;
+    let Arg::Bool(return_value) = compiler.compile(ast)? else {
+        bail!("compiled filter function doesn't return bool");
+    };
 
     compiler.builder.ins().return_(&[return_value]);
     compiler.builder.finalize();
@@ -159,7 +165,7 @@ struct Compiler<'a> {
 }
 
 impl Compiler<'_> {
-    fn compile(&mut self, ast: &FilterAst) -> Result<Value> {
+    fn compile(&mut self, ast: &FilterAst) -> Result<Arg> {
         match ast {
             FilterAst::And(exprs) => {
                 let values_fns = exprs
@@ -175,33 +181,68 @@ impl Compiler<'_> {
                     .collect::<Vec<_>>();
                 self.or(&values_fns)
             }
+            FilterAst::Not(expr) => {
+                let arg = self.compile(expr)?;
+                Ok(Arg::Bool(match arg {
+                    Arg::_Null | Arg::_NotExists => self.builder.ins().iconst(BOOL_TYPE, 1),
+                    Arg::Bool(value) => {
+                        let all_ones = self.builder.ins().iconst(BOOL_TYPE, -1);
+                        self.builder.ins().bxor(value, all_ones)
+                    }
+                    Arg::Int(value) | Arg::Str(_, /*len=*/ value) => {
+                        let all_ones = self.builder.ins().iconst(self.ptr_type, -1);
+                        let inverted = self.builder.ins().bxor(value, all_ones);
+                        let zero = self.builder.ins().iconst(self.ptr_type, 0);
+                        self.builder.ins().icmp(IntCC::NotEqual, inverted, zero)
+                    }
+                    Arg::Float(value) => {
+                        let negated = self.builder.ins().fneg(value);
+                        let zero = self.builder.ins().f64const(0.0);
+                        self.builder
+                            .ins()
+                            .fcmp(FloatCC::OrderedNotEqual, negated, zero)
+                    }
+                }))
+            }
             FilterAst::Exists(field) => {
                 let (field_type, _) = self.ident(field)?;
-                Ok(self.cmp_types(IntCC::NotEqual, field_type, ArgKind::_NotExists))
+                Ok(Arg::Bool(self.cmp_types(
+                    IntCC::NotEqual,
+                    field_type,
+                    ArgKind::_NotExists,
+                )))
             }
             FilterAst::Contains(field, word) => {
                 let (lhs_type, lhs) = self.ident(field)?;
                 let rhs_arg = self.str_literal(word);
 
-                let fns: Vec<Box<dyn Fn(&mut Self) -> Result<Value>>> = vec![
+                let fns: Vec<Box<dyn Fn(&mut Self) -> Result<Arg>>> = vec![
                     Box::new(|c: &mut Self| {
-                        Ok(c.cmp_types(IntCC::Equal, lhs_type, rhs_arg.kind()))
+                        Ok(Arg::Bool(c.cmp_types(
+                            IntCC::Equal,
+                            lhs_type,
+                            rhs_arg.kind(),
+                        )))
                     }),
                     Box::new(|c: &mut Self| {
-                        if let Arg::Str(rhs_ptr, rhs_len) = rhs_arg {
-                            let (lhs_ptr, lhs_len) = c.load_str(lhs);
-                            let args = [lhs_ptr, lhs_len, rhs_ptr, rhs_len];
+                        let Arg::Str(rhs_ptr, rhs_len) = rhs_arg else {
+                            return Ok(Arg::Bool(c.builder.ins().iconst(BOOL_TYPE, 0)));
+                        };
 
-                            let mut sig = c.module.make_signature();
-                            for _ in 0..args.len() {
-                                sig.params.push(AbiParam::new(c.ptr_type));
-                            }
-                            sig.returns.push(AbiParam::new(BOOL_TYPE));
+                        let (lhs_ptr, lhs_len) = c.load_str(lhs);
+                        let args = [lhs_ptr, lhs_len, rhs_ptr, rhs_len];
 
-                            c.call_indirect(sig, contains as *const (), &args)
-                        } else {
-                            Ok(c.builder.ins().iconst(BOOL_TYPE, 0))
+                        let mut sig = c.module.make_signature();
+                        for _ in 0..args.len() {
+                            sig.params.push(AbiParam::new(c.ptr_type));
                         }
+                        sig.returns.push(AbiParam::new(BOOL_TYPE));
+
+                        Ok(Arg::Bool(c.call_indirect(
+                            sig,
+                            contains as *const (),
+                            &args,
+                        )?))
                     }),
                 ];
                 Ok(self.and(&fns)?)
@@ -210,25 +251,33 @@ impl Compiler<'_> {
                 let (lhs_type, lhs) = self.ident(field)?;
                 let rhs_arg = self.str_literal(prefix);
 
-                let fns: Vec<Box<dyn Fn(&mut Self) -> Result<Value>>> = vec![
+                let fns: Vec<Box<dyn Fn(&mut Self) -> Result<Arg>>> = vec![
                     Box::new(|c: &mut Self| {
-                        Ok(c.cmp_types(IntCC::Equal, lhs_type, rhs_arg.kind()))
+                        Ok(Arg::Bool(c.cmp_types(
+                            IntCC::Equal,
+                            lhs_type,
+                            rhs_arg.kind(),
+                        )))
                     }),
                     Box::new(|c: &mut Self| {
-                        if let Arg::Str(rhs_ptr, rhs_len) = rhs_arg {
-                            let (lhs_ptr, lhs_len) = c.load_str(lhs);
-                            let args = [lhs_ptr, lhs_len, rhs_ptr, rhs_len];
+                        let Arg::Str(rhs_ptr, rhs_len) = rhs_arg else {
+                            return Ok(Arg::Bool(c.builder.ins().iconst(BOOL_TYPE, 0)));
+                        };
 
-                            let mut sig = c.module.make_signature();
-                            for _ in 0..args.len() {
-                                sig.params.push(AbiParam::new(c.ptr_type));
-                            }
-                            sig.returns.push(AbiParam::new(BOOL_TYPE));
+                        let (lhs_ptr, lhs_len) = c.load_str(lhs);
+                        let args = [lhs_ptr, lhs_len, rhs_ptr, rhs_len];
 
-                            c.call_indirect(sig, starts_with as *const (), &args)
-                        } else {
-                            Ok(c.builder.ins().iconst(BOOL_TYPE, 0))
+                        let mut sig = c.module.make_signature();
+                        for _ in 0..args.len() {
+                            sig.params.push(AbiParam::new(c.ptr_type));
                         }
+                        sig.returns.push(AbiParam::new(BOOL_TYPE));
+
+                        Ok(Arg::Bool(c.call_indirect(
+                            sig,
+                            starts_with as *const (),
+                            &args,
+                        )?))
                     }),
                 ];
                 Ok(self.and(&fns)?)
@@ -242,9 +291,17 @@ impl Compiler<'_> {
         }
     }
 
-    fn and<F>(&mut self, value_fns: &[F]) -> Result<Value>
+    fn arg_to_value_for_if(&mut self, arg: Arg) -> Value {
+        match arg {
+            Arg::_Null | Arg::_NotExists => self.builder.ins().iconst(BOOL_TYPE, 0),
+            Arg::Bool(val) | Arg::Int(val) | Arg::Float(val) => val,
+            Arg::Str(_, len) => len,
+        }
+    }
+
+    fn and<F>(&mut self, value_fns: &[F]) -> Result<Arg>
     where
-        F: Fn(&mut Self) -> Result<Value>,
+        F: Fn(&mut Self) -> Result<Arg>,
     {
         let blocks: Vec<_> = (0..value_fns.len())
             .map(|_| self.builder.create_block())
@@ -252,7 +309,8 @@ impl Compiler<'_> {
         let exit_block = blocks[blocks.len() - 1];
 
         for (i, (value_fn, next_block)) in value_fns.iter().zip(blocks).enumerate() {
-            let value = value_fn(self)?;
+            let arg = value_fn(self)?;
+            let value = self.arg_to_value_for_if(arg);
 
             if i < value_fns.len() - 1 {
                 // If true, test next expr by jumping to the next block.
@@ -269,12 +327,14 @@ impl Compiler<'_> {
             self.builder.seal_block(next_block);
         }
 
-        Ok(self.builder.append_block_param(exit_block, BOOL_TYPE))
+        Ok(Arg::Bool(
+            self.builder.append_block_param(exit_block, BOOL_TYPE),
+        ))
     }
 
-    fn or<F>(&mut self, value_fns: &[F]) -> Result<Value>
+    fn or<F>(&mut self, value_fns: &[F]) -> Result<Arg>
     where
-        F: Fn(&mut Self) -> Result<Value>,
+        F: Fn(&mut Self) -> Result<Arg>,
     {
         let blocks: Vec<_> = (0..value_fns.len())
             .map(|_| self.builder.create_block())
@@ -282,7 +342,8 @@ impl Compiler<'_> {
         let exit_block = blocks[blocks.len() - 1];
 
         for (i, (value_fn, next_block)) in value_fns.iter().zip(blocks).enumerate() {
-            let value = value_fn(self)?;
+            let arg = value_fn(self)?;
+            let value = self.arg_to_value_for_if(arg);
 
             if i < value_fns.len() - 1 {
                 // If true, exit early by jumping to exit block.
@@ -299,28 +360,38 @@ impl Compiler<'_> {
             self.builder.seal_block(next_block);
         }
 
-        Ok(self.builder.append_block_param(exit_block, BOOL_TYPE))
+        Ok(Arg::Bool(
+            self.builder.append_block_param(exit_block, BOOL_TYPE),
+        ))
     }
 
-    fn cmp(&mut self, cmp: IntCC, field: &str, value: &serde_json::Value) -> Result<Value> {
+    fn cmp(&mut self, cmp: IntCC, field: &str, value: &serde_json::Value) -> Result<Arg> {
         let (lhs_type, lhs) = self.ident(field)?;
         let rhs_arg = self.literal(value)?;
 
-        let cmps: Vec<Box<dyn Fn(&mut Self) -> Result<Value>>> = vec![
-            Box::new(|c: &mut Self| Ok(c.cmp_types(IntCC::Equal, lhs_type, rhs_arg.kind()))),
+        let cmps: Vec<Box<dyn Fn(&mut Self) -> Result<Arg>>> = vec![
+            Box::new(|c: &mut Self| {
+                Ok(Arg::Bool(c.cmp_types(
+                    IntCC::Equal,
+                    lhs_type,
+                    rhs_arg.kind(),
+                )))
+            }),
             Box::new(|c: &mut Self| match rhs_arg {
-                Arg::_Null => Ok(c.builder.ins().iconst(BOOL_TYPE, 1)),
-                Arg::_NotExists => Ok(c.builder.ins().iconst(BOOL_TYPE, 0)),
+                Arg::_Null => Ok(Arg::Bool(c.builder.ins().iconst(BOOL_TYPE, 1))),
+                Arg::_NotExists => Ok(Arg::Bool(c.builder.ins().iconst(BOOL_TYPE, 0))),
                 Arg::Bool(rhs) => {
                     let lhs = c.builder.ins().ireduce(BOOL_TYPE, lhs);
-                    Ok(c.builder.ins().icmp(cmp, lhs, rhs))
+                    Ok(Arg::Bool(c.builder.ins().icmp(cmp, lhs, rhs)))
                 }
-                Arg::Int(rhs) => Ok(c.builder.ins().icmp(cmp, lhs, rhs)),
+                Arg::Int(rhs) => Ok(Arg::Bool(c.builder.ins().icmp(cmp, lhs, rhs))),
                 Arg::Float(rhs) => {
                     let lhs = c.builder.ins().bitcast(types::F64, MemFlags::new(), lhs);
-                    Ok(c.builder
-                        .ins()
-                        .fcmp(int_cc_to_ordered_float_cc(cmp), lhs, rhs))
+                    Ok(Arg::Bool(c.builder.ins().fcmp(
+                        int_cc_to_ordered_float_cc(cmp),
+                        lhs,
+                        rhs,
+                    )))
                 }
                 Arg::Str(rhs_ptr, rhs_len) => {
                     let (lhs_ptr, lhs_len) = c.load_str(lhs);
@@ -338,9 +409,15 @@ impl Compiler<'_> {
         lhs_len: Value,
         rhs_ptr: Value,
         rhs_len: Value,
-    ) -> Result<Value> {
-        let cmps: Vec<Box<dyn Fn(&mut Self) -> Result<Value>>> = vec![
-            Box::new(|c: &mut Self| Ok(c.builder.ins().icmp(IntCC::Equal, lhs_len, rhs_len))),
+    ) -> Result<Arg> {
+        let cmps: Vec<Box<dyn Fn(&mut Self) -> Result<Arg>>> = vec![
+            Box::new(|c: &mut Self| {
+                Ok(Arg::Bool(c.builder.ins().icmp(
+                    IntCC::Equal,
+                    lhs_len,
+                    rhs_len,
+                )))
+            }),
             Box::new(|c: &mut Self| {
                 let args = [lhs_ptr, rhs_ptr, rhs_len];
 
@@ -352,7 +429,7 @@ impl Compiler<'_> {
 
                 let result = c.call_libc(sig, "strncmp", &args)?;
                 let zero = c.builder.ins().iconst(c.ptr_type, 0);
-                Ok(c.builder.ins().icmp(cmp, result, zero))
+                Ok(Arg::Bool(c.builder.ins().icmp(cmp, result, zero)))
             }),
         ];
         self.and(&cmps)

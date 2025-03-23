@@ -416,6 +416,19 @@ async fn filter_exists_null() -> Result<()> {
 }
 
 #[tokio::test]
+async fn filter_not_exists() -> Result<()> {
+    check(
+        r#"[
+            {"scan": ["test", "c"]},
+            {"filter": {"not": {"exists": "hello"}}}
+        ]"#,
+        r#"[{"hello": "world"}, {"world": 2}, {"hello": "woold"}]"#,
+        r#"[{"world": 2}]"#,
+    )
+    .await
+}
+
+#[tokio::test]
 async fn project_add() -> Result<()> {
     check(
         r#"[
