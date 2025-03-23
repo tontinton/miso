@@ -259,6 +259,13 @@ fn filter_ast_to_query(ast: &FilterAst) -> Option<serde_json::Value> {
                 }
             })
         }
+        FilterAst::Not(filter) => {
+            json!({
+                "bool": {
+                    "must_not": filter_ast_to_query(filter)?,
+                }
+            })
+        }
         FilterAst::Exists(field) => {
             json!({
                 "exists": {
