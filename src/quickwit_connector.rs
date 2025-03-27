@@ -273,7 +273,10 @@ fn filter_ast_to_query(ast: &FilterAst) -> Option<serde_json::Value> {
                 }
             })
         }
-        FilterAst::StartsWith(field, prefix) => {
+        FilterAst::StartsWith(lhs, rhs) => {
+            let (FilterAst::Id(field), FilterAst::Lit(prefix)) = (&**lhs, &**rhs) else {
+                return None;
+            };
             json!({
                 "match_phrase_prefix": {
                     field: {
@@ -282,7 +285,10 @@ fn filter_ast_to_query(ast: &FilterAst) -> Option<serde_json::Value> {
                 }
             })
         }
-        FilterAst::Eq(field, value) => {
+        FilterAst::Eq(lhs, rhs) => {
+            let (FilterAst::Id(field), FilterAst::Lit(value)) = (&**lhs, &**rhs) else {
+                return None;
+            };
             json!({
                 "term": {
                     field: {
@@ -291,7 +297,10 @@ fn filter_ast_to_query(ast: &FilterAst) -> Option<serde_json::Value> {
                 }
             })
         }
-        FilterAst::Ne(field, value) => {
+        FilterAst::Ne(lhs, rhs) => {
+            let (FilterAst::Id(field), FilterAst::Lit(value)) = (&**lhs, &**rhs) else {
+                return None;
+            };
             json!({
                 "bool": {
                     "must_not": {
@@ -302,7 +311,10 @@ fn filter_ast_to_query(ast: &FilterAst) -> Option<serde_json::Value> {
                 }
             })
         }
-        FilterAst::Gt(field, value) => {
+        FilterAst::Gt(lhs, rhs) => {
+            let (FilterAst::Id(field), FilterAst::Lit(value)) = (&**lhs, &**rhs) else {
+                return None;
+            };
             json!({
                 "range": {
                     field: {
@@ -311,7 +323,10 @@ fn filter_ast_to_query(ast: &FilterAst) -> Option<serde_json::Value> {
                 }
             })
         }
-        FilterAst::Gte(field, value) => {
+        FilterAst::Gte(lhs, rhs) => {
+            let (FilterAst::Id(field), FilterAst::Lit(value)) = (&**lhs, &**rhs) else {
+                return None;
+            };
             json!({
                 "range": {
                     field: {
@@ -320,7 +335,10 @@ fn filter_ast_to_query(ast: &FilterAst) -> Option<serde_json::Value> {
                 }
             })
         }
-        FilterAst::Lt(field, value) => {
+        FilterAst::Lt(lhs, rhs) => {
+            let (FilterAst::Id(field), FilterAst::Lit(value)) = (&**lhs, &**rhs) else {
+                return None;
+            };
             json!({
                 "range": {
                     field: {
@@ -329,7 +347,10 @@ fn filter_ast_to_query(ast: &FilterAst) -> Option<serde_json::Value> {
                 }
             })
         }
-        FilterAst::Lte(field, value) => {
+        FilterAst::Lte(lhs, rhs) => {
+            let (FilterAst::Id(field), FilterAst::Lit(value)) = (&**lhs, &**rhs) else {
+                return None;
+            };
             json!({
                 "range": {
                     field: {
