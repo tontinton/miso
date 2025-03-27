@@ -73,12 +73,12 @@ async fn filter_before_sort() {
         nulls: NullsOrder::Last,
     }]);
     let filter1 = S::Filter(FilterAst::Eq(
-        "a".to_string(),
-        serde_json::Value::String("b".to_string()),
+        Box::new(FilterAst::Id("a".to_string())),
+        Box::new(FilterAst::Lit(serde_json::Value::String("b".to_string()))),
     ));
     let filter2 = S::Filter(FilterAst::Ne(
-        "c".to_string(),
-        serde_json::Value::String("d".to_string()),
+        Box::new(FilterAst::Id("c".to_string())),
+        Box::new(FilterAst::Lit(serde_json::Value::String("d".to_string()))),
     ));
 
     check_default(

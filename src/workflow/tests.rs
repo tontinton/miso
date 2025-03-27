@@ -186,7 +186,7 @@ async fn filter_eq() -> Result<()> {
     check(
         r#"[
             {"scan": ["test", "c"]},
-            {"filter": {"eq": ["world", 2]}}
+            {"filter": {"eq": [{"id": "world"}, {"lit": 2}]}}
         ]"#,
         r#"[{"hello": "world"}, {"world": 1}, {"world": 2}]"#,
         r#"[{"world": 2}]"#,
@@ -199,7 +199,7 @@ async fn filter_eq_float() -> Result<()> {
     check(
         r#"[
             {"scan": ["test", "c"]},
-            {"filter": {"eq": ["world", 2.5]}}
+            {"filter": {"eq": [{"id": "world"}, {"lit": 2.5}]}}
         ]"#,
         r#"[{"hello": "world"}, {"world": 1.5}, {"world": 2.5}]"#,
         r#"[{"world": 2.5}]"#,
@@ -212,7 +212,7 @@ async fn filter_eq_string() -> Result<()> {
     check(
         r#"[
             {"scan": ["test", "c"]},
-            {"filter": {"eq": ["world", "200"]}}
+            {"filter": {"eq": [{"id": "world"}, {"lit": "200"}]}}
         ]"#,
         r#"[{"hello": "world"}, {"world": 1}, {"world": "200"}]"#,
         r#"[{"world": "200"}]"#,
@@ -225,7 +225,7 @@ async fn filter_eq_bool() -> Result<()> {
     check(
         r#"[
             {"scan": ["test", "c"]},
-            {"filter": {"eq": ["world", false]}}
+            {"filter": {"eq": [{"id": "world"}, {"lit": false}]}}
         ]"#,
         r#"[{"hello": "world"}, {"world": 5}, {"world": true}, {"world": false}]"#,
         r#"[{"world": false}]"#,
@@ -238,7 +238,7 @@ async fn filter_eq_null() -> Result<()> {
     check(
         r#"[
             {"scan": ["test", "c"]},
-            {"filter": {"eq": ["world", null]}}
+            {"filter": {"eq": [{"id": "world"}, {"lit": null}]}}
         ]"#,
         r#"[{"hello": "world"}, {"world": 1}, {"world": null}]"#,
         r#"[{"world": null}]"#,
@@ -251,7 +251,7 @@ async fn filter_ne() -> Result<()> {
     check(
         r#"[
             {"scan": ["test", "c"]},
-            {"filter": {"ne": ["world", 2]}}
+            {"filter": {"ne": [{"id": "world"}, {"lit": 2}]}}
         ]"#,
         r#"[{"hello": "world"}, {"world": 1}, {"world": 2}]"#,
         r#"[{"world": 1}]"#,
@@ -264,7 +264,7 @@ async fn filter_gt() -> Result<()> {
     check(
         r#"[
             {"scan": ["test", "c"]},
-            {"filter": {"gt": ["world", 1]}}
+            {"filter": {"gt": [{"id": "world"}, {"lit": 1}]}}
         ]"#,
         r#"[{"hello": "world"}, {"world": 2}, {"world": 1}]"#,
         r#"[{"world": 2}]"#,
@@ -277,7 +277,7 @@ async fn filter_lt() -> Result<()> {
     check(
         r#"[
             {"scan": ["test", "c"]},
-            {"filter": {"lt": ["world", 3]}}
+            {"filter": {"lt": [{"id": "world"}, {"lit": 3}]}}
         ]"#,
         r#"[{"hello": "world"}, {"world": 2}, {"world": 3}]"#,
         r#"[{"world": 2}]"#,
@@ -290,7 +290,7 @@ async fn filter_gte() -> Result<()> {
     check(
         r#"[
             {"scan": ["test", "c"]},
-            {"filter": {"gte": ["world", 2]}}
+            {"filter": {"gte": [{"id": "world"}, {"lit": 2}]}}
         ]"#,
         r#"[{"hello": "world"}, {"world": 1}, {"world": 2}, {"world": 3}]"#,
         r#"[{"world": 2}, {"world": 3}]"#,
@@ -303,7 +303,7 @@ async fn filter_lte() -> Result<()> {
     check(
         r#"[
             {"scan": ["test", "c"]},
-            {"filter": {"lte": ["world", 3]}}
+            {"filter": {"lte": [{"id": "world"}, {"lit": 3}]}}
         ]"#,
         r#"[{"hello": "world"}, {"world": 2}, {"world": 3}, {"world": 4}]"#,
         r#"[{"world": 2}, {"world": 3}]"#,
@@ -316,7 +316,10 @@ async fn filter_and() -> Result<()> {
     check(
         r#"[
             {"scan": ["test", "c"]},
-            {"filter": {"and": [{"eq": ["world", 3]}, {"eq": ["hello", "world"]}]}}
+            {"filter": {"and": [
+                {"eq": [{"id": "world"}, {"lit": 3}]},
+                {"eq": [{"id": "hello"}, {"lit": "world"}]}
+            ]}}
         ]"#,
         r#"[{"hello": "world", "world": 3}, {"hello": "woold", "world": 3}, {"hello": "world", "world": 2}]"#,
         r#"[{"hello": "world", "world": 3}]"#,
@@ -329,7 +332,10 @@ async fn filter_or() -> Result<()> {
     check(
         r#"[
             {"scan": ["test", "c"]},
-            {"filter": {"or": [{"eq": ["world", 3]}, {"eq": ["hello", "world"]}]}}
+            {"filter": {"or": [
+                {"eq": [{"id": "world"}, {"lit": 3}]},
+                {"eq": [{"id": "hello"}, {"lit": "world"}]}
+            ]}}
         ]"#,
         r#"[{"hello": "world", "world": 3}, {"hello": "woold", "world": 3}, {"hello": "world", "world": 2}, {"hello": "woold", "world": 4}]"#,
         r#"[{"hello": "world", "world": 3}, {"hello": "woold", "world": 3}, {"hello": "world", "world": 2}]"#,
@@ -342,7 +348,7 @@ async fn filter_contains() -> Result<()> {
     check(
         r#"[
             {"scan": ["test", "c"]},
-            {"filter": {"contains": ["hello", "wor"]}}
+            {"filter": {"contains": [{"id": "hello"}, {"lit": "wor"}]}}
         ]"#,
         r#"[{"hello": "world"}, {"world": 2}, {"hello": "aaawora"}, {"hello": "woold"}]"#,
         r#"[{"hello": "world"}, {"hello": "aaawora"}]"#,
@@ -355,7 +361,7 @@ async fn filter_starts_with() -> Result<()> {
     check(
         r#"[
             {"scan": ["test", "c"]},
-            {"filter": {"starts_with": ["hello", "wor"]}}
+            {"filter": {"starts_with": [{"id": "hello"}, {"lit": "wor"}]}}
         ]"#,
         r#"[{"hello": "world"}, {"world": 2}, {"hello": "aaawora"}, {"hello": "woold"}]"#,
         r#"[{"hello": "world"}]"#,
@@ -368,7 +374,7 @@ async fn filter_starts_with_on_object() -> Result<()> {
     check(
         r#"[
             {"scan": ["test", "c"]},
-            {"filter": {"starts_with": ["hello.there", "wor"]}}
+            {"filter": {"starts_with": [{"id": "hello.there"}, {"lit": "wor"}]}}
         ]"#,
         r#"[{"hello": "world"}, {"world": 2}, {"hello": {"there": "woold"}}, {"hello": {"there": "world"}}]"#,
         r#"[{"hello": {"there": "world"}}]"#,
