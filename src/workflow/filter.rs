@@ -220,7 +220,10 @@ pub async fn filter_stream(ast: FilterAst, mut input_stream: LogStream) -> Resul
     let ast = Arc::new(ast);
     let ast_clone = ast.clone();
     let (jit_fn_ptr, fields) =
-        run_on_thread_pool(jit_thread_pool(), move || filter_ast_to_jit(&ast_clone)).await??;
+        run_on_thread_pool(jit_thread_pool(), move || filter_ast_to_jit(&ast_clone))
+            .await
+            .context("run on jit thread pool")?
+            .context("filter jit compile")?;
 
     let flattend_fields = FlattenedFields::from_nested(fields);
 
