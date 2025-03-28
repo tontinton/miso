@@ -11,16 +11,17 @@ use cranelift::{
 };
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
-use tokio::task::spawn_blocking;
 use vrl::value::KeyString;
 
 use crate::{
     impl_and, impl_or,
     log::{Log, LogStream, LogTryStream},
+    thread_pool::run_on_thread_pool,
 };
 
 use super::jit::{
-    contains, ends_with, new_jit_module, starts_with, Arg, ArgKind, Compiler, BOOL_TYPE,
+    contains, ends_with, jit_thread_pool, new_jit_module, starts_with, Arg, ArgKind, Compiler,
+    BOOL_TYPE,
 };
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -370,7 +371,8 @@ unsafe fn run_code(fn_ptr: *const (), args: &[u8]) -> bool {
 pub async fn filter_stream(ast: FilterAst, mut input_stream: LogStream) -> Result<LogTryStream> {
     let ast = Arc::new(ast);
     let ast_clone = ast.clone();
-    let (jit_fn_ptr, fields) = spawn_blocking(move || filter_ast_to_jit(&ast_clone)).await??;
+    let (jit_fn_ptr, fields) =
+        run_on_thread_pool(jit_thread_pool(), move || filter_ast_to_jit(&ast_clone)).await??;
 
     let flattend_fields = FlattenedFields::from_nested(fields);
 

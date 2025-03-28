@@ -1,6 +1,6 @@
 #![allow(clippy::type_complexity)]
 
-use std::{collections::BTreeMap, slice::from_raw_parts};
+use std::{collections::BTreeMap, slice::from_raw_parts, sync::OnceLock};
 
 use color_eyre::{
     eyre::{bail, eyre, ContextCompat},
@@ -17,6 +17,7 @@ use cranelift::{
 };
 use kinded::Kinded;
 use memchr::memchr_iter;
+use rayon::{ThreadPool, ThreadPoolBuilder};
 
 #[macro_export]
 macro_rules! impl_and {
@@ -87,6 +88,15 @@ macro_rules! impl_or {
 }
 
 pub const BOOL_TYPE: types::Type = types::I8;
+
+pub fn jit_thread_pool() -> &'static ThreadPool {
+    static JIT_THREAD_POOL: OnceLock<ThreadPool> = OnceLock::new();
+    JIT_THREAD_POOL.get_or_init(|| {
+        ThreadPoolBuilder::new()
+            .build()
+            .expect("failed to create JIT thread pool")
+    })
+}
 
 #[derive(Kinded, Debug, Copy, Clone)]
 pub enum Arg {
