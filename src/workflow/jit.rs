@@ -54,6 +54,27 @@ pub fn starts_with(
     hay.get(0..needle_len) == Some(needle)
 }
 
+pub fn ends_with(
+    hay_ptr: *const u8,
+    hay_len: usize,
+    needle_ptr: *const u8,
+    needle_len: usize,
+) -> bool {
+    if needle_len > hay_len {
+        return false;
+    }
+
+    // Safety: We assume that the pointers are valid and the memory is correctly aligned.
+    let (hay, needle) = unsafe {
+        (
+            from_raw_parts(hay_ptr, hay_len),
+            from_raw_parts(needle_ptr, needle_len),
+        )
+    };
+
+    hay.get(hay_len - needle_len..hay_len) == Some(needle)
+}
+
 pub fn contains(
     hay_ptr: *const u8,
     hay_len: usize,

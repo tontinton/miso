@@ -423,6 +423,19 @@ async fn filter_starts_with_on_object() -> Result<()> {
 }
 
 #[tokio::test]
+async fn filter_ends_with() -> Result<()> {
+    check(
+        r#"[
+            {"scan": ["test", "c"]},
+            {"filter": {"ends_with": [{"id": "hello"}, {"lit": "ora"}]}}
+        ]"#,
+        r#"[{"hello": "world"}, {"world": 2}, {"hello": "aaawora"}, {"hello": "woold"}]"#,
+        r#"[{"hello": "aaawora"}]"#,
+    )
+    .await
+}
+
+#[tokio::test]
 async fn filter_exists() -> Result<()> {
     check(
         r#"[

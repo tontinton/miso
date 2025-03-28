@@ -23,7 +23,7 @@ use vrl::value::KeyString;
 
 use crate::log::{Log, LogStream, LogTryStream};
 
-use super::jit::{contains, int_cc_to_ordered_float_cc, new_jit_module, starts_with};
+use super::jit::{contains, ends_with, int_cc_to_ordered_float_cc, new_jit_module, starts_with};
 
 const BOOL_TYPE: types::Type = types::I8;
 
@@ -49,6 +49,7 @@ pub enum FilterAst {
     Not(Box<FilterAst>),                        // !
     Contains(Box<FilterAst>, Box<FilterAst>),   // right in left
     StartsWith(Box<FilterAst>, Box<FilterAst>), // left starts with right
+    EndsWith(Box<FilterAst>, Box<FilterAst>),   // left ends with right
     Eq(Box<FilterAst>, Box<FilterAst>),         // ==
     Ne(Box<FilterAst>, Box<FilterAst>),         // !=
     Gt(Box<FilterAst>, Box<FilterAst>),         // >
@@ -71,6 +72,7 @@ impl FilterAst {
             }
             FilterAst::Contains(lhs, rhs)
             | FilterAst::StartsWith(lhs, rhs)
+            | FilterAst::EndsWith(lhs, rhs)
             | FilterAst::Eq(lhs, rhs)
             | FilterAst::Ne(lhs, rhs)
             | FilterAst::Gt(lhs, rhs)
@@ -272,6 +274,7 @@ impl Compiler<'_> {
             FilterAst::StartsWith(lhs, rhs) => {
                 self.call_indirect_on_two_strings(lhs, rhs, starts_with)
             }
+            FilterAst::EndsWith(lhs, rhs) => self.call_indirect_on_two_strings(lhs, rhs, ends_with),
             FilterAst::Eq(l, r) => self.cmp(IntCC::Equal, l, r),
             FilterAst::Ne(l, r) => self.cmp(IntCC::NotEqual, l, r),
             FilterAst::Lt(l, r) => self.cmp(IntCC::SignedLessThan, l, r),
