@@ -11,17 +11,16 @@ use cranelift::{
 };
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
-use vrl::value::KeyString;
 
 use crate::{
     impl_and, impl_or,
-    log::{Log, LogStream, LogTryStream},
+    log::{LogStream, LogTryStream},
     thread_pool::run_on_thread_pool,
 };
 
 use super::jit::{
-    contains, ends_with, jit_thread_pool, new_jit_module, starts_with, Arg, ArgKind, Compiler,
-    BOOL_TYPE,
+    build_args, contains, ends_with, jit_thread_pool, new_jit_module, run_code, starts_with, Arg,
+    ArgKind, Compiler, FlattenedFields, BOOL_TYPE,
 };
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -215,157 +214,6 @@ impl FilterCompiler<'_> {
         let rhs = self.compile(rhs_ast)?;
         self.c.cmp(cmp, lhs, rhs)
     }
-}
-
-fn push_null(args: &mut Vec<u8>) {
-    args.push(ArgKind::_Null as u8);
-    args.extend(0usize.to_ne_bytes());
-}
-
-fn push_not_exists(args: &mut Vec<u8>) {
-    args.push(ArgKind::_NotExists as u8);
-    args.extend(0usize.to_ne_bytes());
-}
-
-async fn build_args(
-    log: &Log,
-    fields_iter: impl Iterator<Item = &[KeyString]>,
-) -> Option<(Vec<u8>, Vec<Box<[u8]>>)> {
-    use vrl::value::Value as V;
-
-    let mut args = Vec::new();
-    let mut allocs = Vec::new();
-
-    'fields_loop: for field_keys in fields_iter {
-        let mut obj = log;
-        for field_key in &field_keys[..field_keys.len() - 1] {
-            if let Some(V::Object(inner)) = obj.get(field_key) {
-                obj = inner;
-            } else {
-                push_not_exists(&mut args);
-                continue 'fields_loop;
-            }
-        }
-
-        let Some(value) = obj.get(&field_keys[field_keys.len() - 1]) else {
-            push_not_exists(&mut args);
-            continue;
-        };
-
-        match value {
-            V::Null => {
-                push_null(&mut args);
-            }
-            V::Boolean(b) => {
-                args.push(ArgKind::Bool as u8);
-                let i: usize = if *b { 1 } else { 0 };
-                args.extend(i.to_ne_bytes());
-            }
-            V::Integer(i) => {
-                args.push(ArgKind::Int as u8);
-                args.extend((*i).to_ne_bytes());
-            }
-            V::Float(i) => {
-                args.push(ArgKind::Float as u8);
-                args.extend((*i).to_ne_bytes());
-            }
-            V::Bytes(b) => {
-                args.push(ArgKind::Str as u8);
-
-                let mut bytes = Vec::with_capacity(std::mem::size_of::<usize>() * 2);
-                bytes.extend((b.as_ref().as_ptr() as usize).to_ne_bytes());
-                bytes.extend(b.len().to_ne_bytes());
-
-                allocs.push(bytes.into_boxed_slice());
-
-                let ptr = allocs[allocs.len() - 1].as_ptr();
-                args.extend((ptr as usize).to_ne_bytes());
-            }
-            _ => {
-                return None;
-            }
-        };
-    }
-
-    Some((args, allocs))
-}
-
-/// A sequentially contiguous data structure to hold all fields and their nested keys,
-/// separated by dots.
-struct FlattenedFields {
-    data: Vec<KeyString>,
-    offsets: Vec<usize>,
-}
-
-impl FlattenedFields {
-    fn from_nested(fields: Vec<String>) -> Self {
-        let mut data = Vec::new();
-        let mut offsets = Vec::with_capacity(fields.len());
-
-        for field in fields {
-            offsets.push(data.len());
-            data.extend(field.split('.').map(|k| k.into()));
-        }
-
-        Self { data, offsets }
-    }
-
-    fn get(&self, index: usize) -> &[KeyString] {
-        let start = self.offsets[index];
-        let end = self
-            .offsets
-            .get(index + 1)
-            .copied()
-            .unwrap_or(self.data.len());
-        &self.data[start..end]
-    }
-
-    fn iter(&self) -> impl Iterator<Item = &[KeyString]> {
-        (0..self.offsets.len()).map(move |i| self.get(i))
-    }
-}
-
-/// # Safety
-///
-/// - `fn_ptr` must be a valid function pointer to a function with the exact signature:
-///   ```rust
-///   fn(*const u8) -> bool
-///   ```
-///   Invoking a function pointer with an incorrect signature is **undefined behavior**.
-/// - The function `fn_ptr` points to must **not unwind**. If it panics and unwinding is not caught,
-///   this leads to **undefined behavior** since the function is called via `std::mem::transmute`.
-/// - `args` must remain valid for the duration of the function call:
-///   - It must be properly aligned.
-///   - It must not be deallocated while the function executes.
-/// - The function at `fn_ptr` must not assume `args` has a specific length unless that is externally enforced.
-///   Passing an insufficiently sized buffer may cause out-of-bounds reads.
-///
-/// # Undefined Behavior
-///
-/// - If `fn_ptr` is null or not a valid function pointer, the behavior is undefined.
-/// - If `fn_ptr` is a function with a mismatched calling convention, undefined behavior may occur.
-/// - If the function at `fn_ptr` assumes `args` is mutable or writes to it, but `args` is immutable,
-///   this may cause undefined behavior.
-///
-/// # Example Usage
-///
-/// ```rust
-/// unsafe fn example_fn(ptr: *const u8) -> bool {
-///     !ptr.is_null() // Example logic
-/// }
-///
-/// let func_ptr = example_fn as *const ();
-/// let args = [42u8];
-///
-/// let result = unsafe { run_code(func_ptr, &args) };
-/// assert!(result);
-/// ```
-///
-/// If you are unsure whether `fn_ptr` is valid, consider wrapping the function pointer in a higher-level
-/// abstraction to enforce these constraints at runtime.
-unsafe fn run_code(fn_ptr: *const (), args: &[u8]) -> bool {
-    let code_fn: fn(*const u8) -> bool = std::mem::transmute(fn_ptr);
-    code_fn(args.as_ptr())
 }
 
 pub async fn filter_stream(ast: FilterAst, mut input_stream: LogStream) -> Result<LogTryStream> {
