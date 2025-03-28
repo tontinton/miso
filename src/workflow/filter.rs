@@ -268,56 +268,10 @@ impl Compiler<'_> {
                     ArgKind::_NotExists,
                 )))
             }
-            FilterAst::Contains(lhs, rhs) => self.run_on_two_strings(
-                lhs,
-                rhs,
-                &Box::new(
-                    |c: &mut Self,
-                     lhs_ptr: Value,
-                     lhs_len: Value,
-                     rhs_ptr: Value,
-                     rhs_len: Value| {
-                        let args = [lhs_ptr, lhs_len, rhs_ptr, rhs_len];
-
-                        let mut sig = c.module.make_signature();
-                        for _ in 0..args.len() {
-                            sig.params.push(AbiParam::new(c.ptr_type));
-                        }
-                        sig.returns.push(AbiParam::new(BOOL_TYPE));
-
-                        Ok(Arg::Bool(c.call_indirect(
-                            sig,
-                            contains as *const (),
-                            &args,
-                        )?))
-                    },
-                ),
-            ),
-            FilterAst::StartsWith(lhs, rhs) => self.run_on_two_strings(
-                lhs,
-                rhs,
-                &Box::new(
-                    |c: &mut Self,
-                     lhs_ptr: Value,
-                     lhs_len: Value,
-                     rhs_ptr: Value,
-                     rhs_len: Value| {
-                        let args = [lhs_ptr, lhs_len, rhs_ptr, rhs_len];
-
-                        let mut sig = c.module.make_signature();
-                        for _ in 0..args.len() {
-                            sig.params.push(AbiParam::new(c.ptr_type));
-                        }
-                        sig.returns.push(AbiParam::new(BOOL_TYPE));
-
-                        Ok(Arg::Bool(c.call_indirect(
-                            sig,
-                            starts_with as *const (),
-                            &args,
-                        )?))
-                    },
-                ),
-            ),
+            FilterAst::Contains(lhs, rhs) => self.call_indirect_on_two_strings(lhs, rhs, contains),
+            FilterAst::StartsWith(lhs, rhs) => {
+                self.call_indirect_on_two_strings(lhs, rhs, starts_with)
+            }
             FilterAst::Eq(l, r) => self.cmp(IntCC::Equal, l, r),
             FilterAst::Ne(l, r) => self.cmp(IntCC::NotEqual, l, r),
             FilterAst::Lt(l, r) => self.cmp(IntCC::SignedLessThan, l, r),
@@ -435,17 +389,38 @@ impl Compiler<'_> {
         ))
     }
 
-    fn run_on_two_strings<F>(
+    fn call_indirect_on_two_strings(
         &mut self,
         lhs_ast: &FilterAst,
         rhs_ast: &FilterAst,
-        callback: &F,
-    ) -> Result<Arg>
+        func: fn(*const u8, usize, *const u8, usize) -> bool,
+    ) -> Result<Arg> {
+        let lhs = self.compile(lhs_ast)?;
+        let rhs = self.compile(rhs_ast)?;
+
+        self.run_on_two_strings(
+            lhs,
+            rhs,
+            &Box::new(
+                |c: &mut Self, lhs_ptr: Value, lhs_len: Value, rhs_ptr: Value, rhs_len: Value| {
+                    let args = [lhs_ptr, lhs_len, rhs_ptr, rhs_len];
+
+                    let mut sig = c.module.make_signature();
+                    for _ in 0..args.len() {
+                        sig.params.push(AbiParam::new(c.ptr_type));
+                    }
+                    sig.returns.push(AbiParam::new(BOOL_TYPE));
+
+                    Ok(Arg::Bool(c.call_indirect(sig, func as *const (), &args)?))
+                },
+            ),
+        )
+    }
+
+    fn run_on_two_strings<F>(&mut self, lhs: Arg, rhs: Arg, callback: &F) -> Result<Arg>
     where
         F: Fn(&mut Self, Value, Value, Value, Value) -> Result<Arg>,
     {
-        let lhs = self.compile(lhs_ast)?;
-        let rhs = self.compile(rhs_ast)?;
         let mut fns: Vec<Box<dyn Fn(&mut Self) -> Result<Arg>>> = vec![];
 
         let load_lhs: Box<dyn Fn(&mut Self) -> (Value, Value)> = match lhs {
