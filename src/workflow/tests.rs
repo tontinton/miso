@@ -248,6 +248,45 @@ async fn filter_eq_null() -> Result<()> {
 }
 
 #[tokio::test]
+async fn filter_eq_fields() -> Result<()> {
+    check(
+        r#"[
+            {"scan": ["test", "c"]},
+            {"filter": {"eq": [{"id": "world"}, {"id": "world2"}]}}
+        ]"#,
+        r#"[{"hello": "world"}, {"world": 1, "world2": 1}, {"world": "33", "world2": 33}]"#,
+        r#"[{"world": 1, "world2": 1}]"#,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn filter_eq_not_fields() -> Result<()> {
+    check(
+        r#"[
+            {"scan": ["test", "c"]},
+            {"filter": {"eq": [{"id": "w"}, {"not": {"id": "w2"}}]}}
+        ]"#,
+        r#"[{"hello": "world"}, {"w": true, "w2": 0}, {"w": false, "w2": "a"}, {"w": true, "w2": 22.6}]"#,
+        r#"[{"w": true, "w2": 0}, {"w": false, "w2": "a"}]"#,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn filter_not_eq_fields() -> Result<()> {
+    check(
+        r#"[
+            {"scan": ["test", "c"]},
+            {"filter": {"not": {"eq": [{"id": "w"}, {"id": "w2"}]}}}
+        ]"#,
+        r#"[{"hello": "world"}, {"w": 100, "w2": 0}, {"w": "abc", "w2": "a"}, {"w": 100.3, "w2": 100.3}]"#,
+        r#"[{"hello": "world"}, {"w": 100, "w2": 0}, {"w": "abc", "w2": "a"}]"#,
+    )
+    .await
+}
+
+#[tokio::test]
 async fn filter_ne() -> Result<()> {
     check(
         r#"[
