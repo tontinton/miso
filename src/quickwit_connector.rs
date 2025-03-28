@@ -269,7 +269,7 @@ fn filter_ast_to_query(ast: &FilterAst) -> Option<serde_json::Value> {
         FilterAst::Exists(field) => {
             json!({
                 "exists": {
-                    "field": field
+                    "field": field,
                 }
             })
         }
@@ -280,7 +280,11 @@ fn filter_ast_to_query(ast: &FilterAst) -> Option<serde_json::Value> {
             json!({
                 "match_phrase_prefix": {
                     field: {
-                        "query": prefix
+                        "query": if let serde_json::Value::String(v) = prefix {
+                            v.clone()
+                        } else {
+                            prefix.to_string()
+                        },
                     }
                 }
             })
@@ -292,7 +296,11 @@ fn filter_ast_to_query(ast: &FilterAst) -> Option<serde_json::Value> {
             json!({
                 "term": {
                     field: {
-                        "value": value
+                        "value": if let serde_json::Value::String(v) = value {
+                            v.clone()
+                        } else {
+                            value.to_string()
+                        },
                     }
                 }
             })
@@ -305,7 +313,11 @@ fn filter_ast_to_query(ast: &FilterAst) -> Option<serde_json::Value> {
                 "bool": {
                     "must_not": {
                         "term": {
-                            field: value
+                            field: if let serde_json::Value::String(v) = value {
+                                v.clone()
+                            } else {
+                                value.to_string()
+                            },
                         }
                     }
                 }
@@ -318,7 +330,11 @@ fn filter_ast_to_query(ast: &FilterAst) -> Option<serde_json::Value> {
             json!({
                 "range": {
                     field: {
-                        "gt": value
+                        "gt": if let serde_json::Value::String(v) = value {
+                            v.clone()
+                        } else {
+                            value.to_string()
+                        },
                     }
                 }
             })
@@ -330,7 +346,11 @@ fn filter_ast_to_query(ast: &FilterAst) -> Option<serde_json::Value> {
             json!({
                 "range": {
                     field: {
-                        "gte": value
+                        "gte": if let serde_json::Value::String(v) = value {
+                            v.clone()
+                        } else {
+                            value.to_string()
+                        },
                     }
                 }
             })
@@ -342,7 +362,11 @@ fn filter_ast_to_query(ast: &FilterAst) -> Option<serde_json::Value> {
             json!({
                 "range": {
                     field: {
-                        "lt": value
+                        "lt": if let serde_json::Value::String(v) = value {
+                            v.clone()
+                        } else {
+                            value.to_string()
+                        },
                     }
                 }
             })
@@ -354,7 +378,11 @@ fn filter_ast_to_query(ast: &FilterAst) -> Option<serde_json::Value> {
             json!({
                 "range": {
                     field: {
-                        "lte": value
+                        "lte": if let serde_json::Value::String(v) = value {
+                            v.clone()
+                        } else {
+                            value.to_string()
+                        },
                     }
                 }
             })
