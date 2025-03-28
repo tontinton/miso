@@ -153,9 +153,10 @@ async fn check_multi_connectors(
         i += 1;
     }
 
+    let left: Vec<_> = expected_logs_iter.collect();
     assert!(
-        expected_logs_iter.next().is_none(),
-        "expected no more logs to test"
+        left.is_empty(),
+        "expected no more logs to test, collected: {i}, left: {left:?}",
     );
 
     Ok(())
