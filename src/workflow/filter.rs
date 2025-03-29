@@ -225,18 +225,18 @@ pub async fn filter_stream(ast: FilterAst, mut input_stream: LogStream) -> Resul
             .context("run on jit thread pool")?
             .context("filter jit compile")?;
 
-    let flattend_fields = FlattenedFields::from_nested(fields);
+    let flattened_fields = FlattenedFields::from_nested(&fields);
 
     Ok(Box::pin(try_stream! {
         // The generated JIT code references strings from inside the AST.
         let _ast_keepalive = ast;
 
         while let Some(log) = input_stream.next().await {
-            let Some((args, _allocs)) = build_args(&log, flattend_fields.iter()).await else {
+            let Some((args, _allocs)) = build_args(&log, flattened_fields.iter()).await else {
                 continue;
             };
 
-            let keep: bool = unsafe { run_code(jit_fn_ptr as *const (), &args) };
+            let keep = unsafe { run_code::<bool>(jit_fn_ptr as *const (), &args) };
             if keep {
                 yield log;
             }

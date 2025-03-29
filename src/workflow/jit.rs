@@ -1,6 +1,11 @@
 #![allow(clippy::type_complexity)]
 
-use std::{collections::BTreeMap, slice::from_raw_parts, sync::OnceLock};
+use std::{
+    alloc::{alloc, Layout},
+    collections::BTreeMap,
+    slice::from_raw_parts,
+    sync::OnceLock,
+};
 
 use color_eyre::{
     eyre::{bail, eyre, ContextCompat},
@@ -121,6 +126,23 @@ pub fn new_jit_module() -> Result<JITModule> {
     let isa = isa_builder.finish(settings::Flags::new(flag_builder))?;
     let builder = JITBuilder::with_isa(isa, default_libcall_names());
     Ok(JITModule::new(builder))
+}
+
+pub unsafe fn allocate_string(str_ptr: *const u8, len: usize) -> *mut u8 {
+    let len_size = std::mem::size_of::<usize>();
+    let Ok(layout) = Layout::array::<u8>(len_size + len) else {
+        return std::ptr::null_mut();
+    };
+
+    let ptr = alloc(layout);
+    if ptr.is_null() {
+        return std::ptr::null_mut();
+    }
+
+    std::ptr::write(ptr as *mut usize, len);
+    std::ptr::copy_nonoverlapping(str_ptr, ptr.add(len_size), len);
+
+    ptr
 }
 
 pub fn int_cc_to_ordered_float_cc(cc: IntCC) -> FloatCC {
@@ -245,15 +267,24 @@ impl Compiler<'_> {
     }
 
     #[must_use]
-    fn cast_to_bool(&mut self, value: Value) -> Value {
-        self.builder.ins().ireduce(BOOL_TYPE, value)
+    fn static_cast_to_bool(&mut self, value: Value) -> Value {
+        let ty = self.builder.func.dfg.value_type(value);
+        let zero = self.builder.ins().iconst(ty, 0);
+        self.builder.ins().icmp(IntCC::NotEqual, value, zero)
     }
 
     #[must_use]
-    fn cast_to_float(&mut self, value: Value) -> Value {
+    fn reinterpret_cast_to_float(&mut self, value: Value) -> Value {
         self.builder
             .ins()
             .bitcast(types::F64, MemFlags::new(), value)
+    }
+
+    #[must_use]
+    fn reinterpret_cast_to_int(&mut self, value: Value) -> Value {
+        self.builder
+            .ins()
+            .bitcast(self.ptr_type, MemFlags::new(), value)
     }
 
     #[must_use]
@@ -297,7 +328,7 @@ impl Compiler<'_> {
                 self.builder.ins().jump(return_block, &[not_null]);
 
                 self.switch_to_block(bool_block);
-                let bool_value = self.cast_to_bool(value);
+                let bool_value = self.static_cast_to_bool(value);
                 let not_bool = self.not_bool(bool_value);
                 self.builder.ins().jump(return_block, &[not_bool]);
 
@@ -306,7 +337,7 @@ impl Compiler<'_> {
                 self.builder.ins().jump(return_block, &[not_int]);
 
                 self.switch_to_block(float_block);
-                let float_value = self.cast_to_float(value);
+                let float_value = self.reinterpret_cast_to_float(value);
                 let not_float = self.not_float(float_value);
                 self.builder.ins().jump(return_block, &[not_float]);
 
@@ -428,12 +459,12 @@ impl Compiler<'_> {
             Arg::_Null => Ok(Arg::Bool(self.builder.ins().iconst(BOOL_TYPE, 1))),
             Arg::_NotExists => Ok(Arg::Bool(self.builder.ins().iconst(BOOL_TYPE, 0))),
             Arg::Bool(arg_value) => {
-                let value = self.cast_to_bool(value);
+                let value = self.static_cast_to_bool(value);
                 Ok(Arg::Bool(self.builder.ins().icmp(cmp, value, arg_value)))
             }
             Arg::Int(arg_value) => Ok(Arg::Bool(self.builder.ins().icmp(cmp, value, arg_value))),
             Arg::Float(arg_value) => {
-                let value = self.cast_to_float(value);
+                let value = self.reinterpret_cast_to_float(value);
                 Ok(Arg::Bool(self.builder.ins().fcmp(
                     int_cc_to_ordered_float_cc(cmp),
                     value,
@@ -481,14 +512,14 @@ impl Compiler<'_> {
         self.builder.ins().jump(return_block, &[null_cmp]);
 
         self.switch_to_block(bool_block);
-        let lhs_bool = self.cast_to_bool(lhs);
-        let rhs_bool = self.cast_to_bool(rhs);
+        let lhs_bool = self.static_cast_to_bool(lhs);
+        let rhs_bool = self.static_cast_to_bool(rhs);
         let bool_cmp = self.builder.ins().icmp(cmp, lhs_bool, rhs_bool);
         self.builder.ins().jump(return_block, &[bool_cmp]);
 
         self.switch_to_block(float_block);
-        let lhs_float = self.cast_to_float(lhs);
-        let rhs_float = self.cast_to_float(rhs);
+        let lhs_float = self.reinterpret_cast_to_float(lhs);
+        let rhs_float = self.reinterpret_cast_to_float(rhs);
         let float_cmp =
             self.builder
                 .ins()
@@ -654,6 +685,7 @@ impl Compiler<'_> {
             ),
         )
     }
+
     fn call_libc(&mut self, sig: Signature, name: &str, args: &[Value]) -> Result<Value> {
         let callee = self.module.declare_function(name, Linkage::Import, &sig)?;
         let local_callee = self.module.declare_func_in_func(callee, self.builder.func);
@@ -661,11 +693,102 @@ impl Compiler<'_> {
         Ok(self.builder.inst_results(call)[0])
     }
 
-    fn call_indirect(&mut self, sig: Signature, func: *const (), args: &[Value]) -> Result<Value> {
+    pub fn call_indirect(
+        &mut self,
+        sig: Signature,
+        func: *const (),
+        args: &[Value],
+    ) -> Result<Value> {
         let fn_ptr = self.builder.ins().iconst(self.ptr_type, func as i64);
         let sig_ref = self.builder.import_signature(sig);
         let call = self.builder.ins().call_indirect(sig_ref, fn_ptr, args);
         Ok(self.builder.inst_results(call)[0])
+    }
+
+    fn allocate_string(&mut self, ptr: Value, len: Value) -> Result<Value> {
+        let args = [ptr, len];
+
+        let mut sig = self.module.make_signature();
+        for _ in 0..args.len() {
+            sig.params.push(AbiParam::new(self.ptr_type));
+        }
+        sig.returns.push(AbiParam::new(self.ptr_type));
+
+        self.call_indirect(sig, allocate_string as *const (), &args)
+    }
+
+    fn write_kind_value_to_ptr(&mut self, kind: Value, ptr: *const ArgKind) {
+        let ptr_value = self.builder.ins().iconst(self.ptr_type, ptr as i64);
+        self.builder
+            .ins()
+            .store(MemFlags::new(), kind, ptr_value, 0);
+    }
+
+    fn write_kind_to_ptr(&mut self, kind: ArgKind, ptr: *const ArgKind) {
+        let kind_value = self.builder.ins().iconst(types::I8, kind as i64);
+        self.write_kind_value_to_ptr(kind_value, ptr);
+    }
+
+    pub fn arg_to_value(&mut self, arg: Arg, arg_kind_ptr: *const ArgKind) -> Result<Value> {
+        let value = match arg {
+            Arg::_Null | Arg::_NotExists => {
+                self.write_kind_to_ptr(arg.kind(), arg_kind_ptr);
+                self.builder.ins().iconst(self.ptr_type, 0)
+            }
+            Arg::Bool(v) | Arg::Int(v) | Arg::Float(v) => {
+                self.write_kind_to_ptr(arg.kind(), arg_kind_ptr);
+                v
+            }
+            Arg::Str(ptr, len) => {
+                self.write_kind_to_ptr(arg.kind(), arg_kind_ptr);
+                self.allocate_string(ptr, len)?
+            }
+            Arg::Unresolved(kind, value) => {
+                self.write_kind_value_to_ptr(kind, arg_kind_ptr);
+
+                let passthrough_block = self.builder.create_block();
+                let str_block = self.builder.create_block();
+                let default_block = self.builder.create_block();
+                let return_block = self.builder.create_block();
+
+                let jt_data = JumpTableData::new(
+                    self.builder.func.dfg.block_call(default_block, &[]),
+                    &[
+                        default_block,     // null
+                        default_block,     // not exists
+                        default_block,     // unresolved
+                        passthrough_block, // bool
+                        passthrough_block, // int
+                        passthrough_block, // float
+                        str_block,         // str
+                    ]
+                    .iter()
+                    .map(|block| self.builder.func.dfg.block_call(*block, &[]))
+                    .collect::<Vec<_>>(),
+                );
+
+                let jump_table = self.builder.create_jump_table(jt_data);
+                let br_table_kind = self.builder.ins().uextend(types::I32, kind);
+                self.builder.ins().br_table(br_table_kind, jump_table);
+
+                self.switch_to_block(passthrough_block);
+                self.builder.ins().jump(return_block, &[value]);
+
+                self.switch_to_block(str_block);
+                let (ptr, len) = self.load_str(value);
+                let str_value = self.allocate_string(ptr, len)?;
+                self.builder.ins().jump(return_block, &[str_value]);
+
+                self.switch_to_block(default_block);
+                let default_value = self.builder.ins().iconst(self.ptr_type, 0);
+                self.builder.ins().jump(return_block, &[default_value]);
+
+                self.switch_to_block(return_block);
+                self.builder.append_block_param(return_block, self.ptr_type)
+            }
+        };
+
+        Ok(value)
     }
 }
 
@@ -677,7 +800,7 @@ pub struct FlattenedFields {
 }
 
 impl FlattenedFields {
-    pub fn from_nested(fields: Vec<String>) -> Self {
+    pub fn from_nested(fields: &[String]) -> Self {
         let mut data = Vec::new();
         let mut offsets = Vec::with_capacity(fields.len());
 
@@ -812,7 +935,7 @@ pub async fn build_args(
 /// let result = unsafe { run_code(func_ptr, &args) };
 /// assert!(result);
 /// ```
-pub unsafe fn run_code(fn_ptr: *const (), args: &[u8]) -> bool {
-    let code_fn: fn(*const u8) -> bool = std::mem::transmute(fn_ptr);
+pub unsafe fn run_code<T>(fn_ptr: *const (), args: &[u8]) -> T {
+    let code_fn: fn(*const u8) -> T = std::mem::transmute(fn_ptr);
     code_fn(args.as_ptr())
 }
