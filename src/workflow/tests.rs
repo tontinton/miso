@@ -494,13 +494,13 @@ async fn project_add() -> Result<()> {
             {"scan": ["test", "c"]},
             {
                 "project": [
-                    {"to": "world", "from": {"field": "world"}},
+                    {"to": "world", "from": {"id": "world"}},
                     {
                         "to": "test",
                         "from": {
                             "+": [
-                                {"cast": ["float", {"field": "world"}]},
-                                {"value": "2"}
+                                {"cast": ["float", {"id": "world"}]},
+                                {"lit": 2}
                             ]
                         }
                     }
