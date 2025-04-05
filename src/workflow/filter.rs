@@ -2,7 +2,6 @@ use async_stream::try_stream;
 use color_eyre::Result;
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use tracing::warn;
 
 use crate::log::{Log, LogStream, LogTryStream};
@@ -39,10 +38,10 @@ impl FilterInterpreter {
     }
 
     fn eval<'a>(&'a self, ast: &'a FilterAst) -> Result<Val<'a>> {
-        Ok(match &ast {
-            FilterAst::Id(name) => ident(&self.log, name)?,
-            FilterAst::Lit(value) => Val::borrowed(value),
-            FilterAst::Exists(name) => Val::owned(Value::Bool(ident(&self.log, name)?.0.is_some())),
+        match &ast {
+            FilterAst::Id(name) => ident(&self.log, name),
+            FilterAst::Lit(value) => Ok(Val::borrowed(value)),
+            FilterAst::Exists(name) => Ok(Val::bool(ident(&self.log, name)?.0.is_some())),
             FilterAst::Or(exprs) => {
                 let mut result = false;
                 for expr in exprs {
@@ -51,7 +50,7 @@ impl FilterInterpreter {
                         break;
                     }
                 }
-                Val::bool(result)
+                Ok(Val::bool(result))
             }
             FilterAst::And(exprs) => {
                 let mut result = true;
@@ -61,19 +60,19 @@ impl FilterInterpreter {
                         break;
                     }
                 }
-                Val::bool(result)
+                Ok(Val::bool(result))
             }
-            FilterAst::Not(expr) => Val::bool(!self.eval(expr)?.to_bool()),
-            FilterAst::Contains(lhs, rhs) => self.eval(lhs)?.contains(self.eval(rhs)?)?,
-            FilterAst::StartsWith(lhs, rhs) => self.eval(lhs)?.starts_with(self.eval(rhs)?)?,
-            FilterAst::EndsWith(lhs, rhs) => self.eval(lhs)?.ends_with(self.eval(rhs)?)?,
-            FilterAst::Eq(l, r) => self.eval(l)?.eq(self.eval(r)?)?,
-            FilterAst::Ne(l, r) => self.eval(l)?.ne(self.eval(r)?)?,
-            FilterAst::Gt(l, r) => self.eval(l)?.gt(self.eval(r)?)?,
-            FilterAst::Gte(l, r) => self.eval(l)?.gte(self.eval(r)?)?,
-            FilterAst::Lt(l, r) => self.eval(l)?.lt(self.eval(r)?)?,
-            FilterAst::Lte(l, r) => self.eval(l)?.lte(self.eval(r)?)?,
-        })
+            FilterAst::Not(expr) => Ok(Val::bool(!self.eval(expr)?.to_bool())),
+            FilterAst::Contains(lhs, rhs) => self.eval(lhs)?.contains(self.eval(rhs)?),
+            FilterAst::StartsWith(lhs, rhs) => self.eval(lhs)?.starts_with(self.eval(rhs)?),
+            FilterAst::EndsWith(lhs, rhs) => self.eval(lhs)?.ends_with(self.eval(rhs)?),
+            FilterAst::Eq(l, r) => self.eval(l)?.eq(self.eval(r)?),
+            FilterAst::Ne(l, r) => self.eval(l)?.ne(self.eval(r)?),
+            FilterAst::Gt(l, r) => self.eval(l)?.gt(self.eval(r)?),
+            FilterAst::Gte(l, r) => self.eval(l)?.gte(self.eval(r)?),
+            FilterAst::Lt(l, r) => self.eval(l)?.lt(self.eval(r)?),
+            FilterAst::Lte(l, r) => self.eval(l)?.lte(self.eval(r)?),
+        }
     }
 }
 
