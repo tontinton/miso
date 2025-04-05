@@ -61,7 +61,8 @@ pub fn get_value_kind(value: &Value) -> &'static str {
     match value {
         Value::Null => "null",
         Value::Bool(_) => "bool",
-        Value::Number(_) => "number",
+        Value::Number(x) if x.is_i64() => "integer",
+        Value::Number(_) => "float",
         Value::String(_) => "string",
         Value::Array(_) => "array",
         Value::Object(_) => "object",

@@ -3,7 +3,7 @@ use color_eyre::Result;
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tracing::error;
+use tracing::warn;
 
 use crate::log::{Log, LogStream, LogTryStream};
 
@@ -64,22 +64,15 @@ impl FilterInterpreter {
                 Val::bool(result)
             }
             FilterAst::Not(expr) => Val::bool(!self.eval(expr)?.to_bool()),
-            FilterAst::Contains(lhs, rhs) => {
-                self.eval(lhs)?.contains(&self.eval(rhs)?).map(Val::bool)?
-            }
-            FilterAst::StartsWith(lhs, rhs) => self
-                .eval(lhs)?
-                .starts_with(&self.eval(rhs)?)
-                .map(Val::bool)?,
-            FilterAst::EndsWith(lhs, rhs) => {
-                self.eval(lhs)?.ends_with(&self.eval(rhs)?).map(Val::bool)?
-            }
-            FilterAst::Eq(l, r) => self.eval(l)?.eq(&self.eval(r)?).map(Val::bool)?,
-            FilterAst::Ne(l, r) => self.eval(l)?.ne(&self.eval(r)?).map(Val::bool)?,
-            FilterAst::Gt(l, r) => self.eval(l)?.gt(&self.eval(r)?).map(Val::bool)?,
-            FilterAst::Gte(l, r) => self.eval(l)?.gte(&self.eval(r)?).map(Val::bool)?,
-            FilterAst::Lt(l, r) => self.eval(l)?.lt(&self.eval(r)?).map(Val::bool)?,
-            FilterAst::Lte(l, r) => self.eval(l)?.lte(&self.eval(r)?).map(Val::bool)?,
+            FilterAst::Contains(lhs, rhs) => self.eval(lhs)?.contains(self.eval(rhs)?)?,
+            FilterAst::StartsWith(lhs, rhs) => self.eval(lhs)?.starts_with(self.eval(rhs)?)?,
+            FilterAst::EndsWith(lhs, rhs) => self.eval(lhs)?.ends_with(self.eval(rhs)?)?,
+            FilterAst::Eq(l, r) => self.eval(l)?.eq(self.eval(r)?)?,
+            FilterAst::Ne(l, r) => self.eval(l)?.ne(self.eval(r)?)?,
+            FilterAst::Gt(l, r) => self.eval(l)?.gt(self.eval(r)?)?,
+            FilterAst::Gte(l, r) => self.eval(l)?.gte(self.eval(r)?)?,
+            FilterAst::Lt(l, r) => self.eval(l)?.lt(self.eval(r)?)?,
+            FilterAst::Lte(l, r) => self.eval(l)?.lte(self.eval(r)?)?,
         })
     }
 }
@@ -92,7 +85,7 @@ pub fn filter_stream(ast: FilterAst, mut input_stream: LogStream) -> Result<LogT
             let keep = match interpreter.eval(&ast) {
                 Ok(v) => v.to_bool(),
                 Err(e) => {
-                    error!("Filter error: {e}");
+                    warn!("Filter failed: {e}");
                     false
                 },
             };

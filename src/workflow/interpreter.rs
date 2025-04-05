@@ -12,12 +12,11 @@ macro_rules! impl_two_strs_fn {
     ($l:expr, $r:expr, $func:expr, $op_str:literal) => {{
         let lhs_val = match &$l.0 {
             Some(cow) => cow.as_ref(),
-            None => bail!("LHS of '{}' operation must exist in log", $op_str),
+            None => return Ok(Val::not_exist()),
         };
-
         let rhs_val = match &$r.0 {
             Some(cow) => cow.as_ref(),
-            None => bail!("RHS of '{}' operation must exist in log", $op_str),
+            None => return Ok(Val::not_exist()),
         };
 
         let Value::String(lhs) = lhs_val else {
@@ -28,23 +27,23 @@ macro_rules! impl_two_strs_fn {
             bail!("RHS of '{}' operation must be a string", $op_str);
         };
 
-        if rhs.is_empty() {
+        Ok(Val::bool(if rhs.is_empty() {
             true
         } else {
             $func(lhs, rhs)
-        }
+        }))
     }};
 }
 
 macro_rules! impl_cmp {
     ($self:expr, $other:expr, $cmp:expr, $op:expr) => {
         match (&$self.0, &$other.0) {
-            (None, None) | (None, Some(_)) | (Some(_), None) => false,
+            (None, None) | (None, Some(_)) | (Some(_), None) => Ok(Val::not_exist()),
             (Some(lhs_cow), Some(rhs_cow)) => {
                 let lhs = lhs_cow.as_ref();
                 let rhs = rhs_cow.as_ref();
                 match partial_cmp_values(lhs, rhs) {
-                    Some(ord) => $cmp(ord),
+                    Some(ord) => Ok(Val::bool($cmp(ord))),
                     _ => {
                         let lhs_kind = get_value_kind(lhs);
                         let rhs_kind = get_value_kind(rhs);
@@ -60,12 +59,11 @@ macro_rules! impl_op {
     ($self:expr, $other:expr, $op:expr, $op_str:literal) => {{
         let lhs_val = match &$self.0 {
             Some(cow) => cow.as_ref(),
-            None => bail!("LHS of '{}' operation must exist in log", $op_str),
+            None => return Ok(Val::not_exist()),
         };
-
         let rhs_val = match &$other.0 {
             Some(cow) => cow.as_ref(),
-            None => bail!("RHS of '{}' operation must exist in log", $op_str),
+            None => return Ok(Val::not_exist()),
         };
 
         match (lhs_val, rhs_val) {
@@ -134,55 +132,45 @@ impl<'a> Val<'a> {
         value_to_bool(cow.as_ref())
     }
 
-    pub fn eq(&self, other: &Val) -> Result<bool> {
-        Ok(impl_cmp!(self, other, |o| o == Ordering::Equal, "=="))
+    pub fn eq(self, other: Val) -> Result<Val> {
+        impl_cmp!(self, other, |o| o == Ordering::Equal, "==")
     }
 
-    pub fn ne(&self, other: &Val) -> Result<bool> {
-        Ok(impl_cmp!(self, other, |o| o != Ordering::Equal, "!="))
+    pub fn ne(self, other: Val) -> Result<Val> {
+        impl_cmp!(self, other, |o| o != Ordering::Equal, "!=")
     }
 
-    pub fn gt(&self, other: &Val) -> Result<bool> {
-        Ok(impl_cmp!(self, other, |o| o == Ordering::Greater, ">"))
+    pub fn gt(self, other: Val) -> Result<Val> {
+        impl_cmp!(self, other, |o| o == Ordering::Greater, ">")
     }
 
-    pub fn gte(&self, other: &Val) -> Result<bool> {
-        Ok(impl_cmp!(self, other, |o| o >= Ordering::Equal, ">="))
+    pub fn gte(self, other: Val) -> Result<Val> {
+        impl_cmp!(self, other, |o| o >= Ordering::Equal, ">=")
     }
 
-    pub fn lt(&self, other: &Val) -> Result<bool> {
-        Ok(impl_cmp!(self, other, |o| o == Ordering::Less, "<"))
+    pub fn lt(self, other: Val) -> Result<Val> {
+        impl_cmp!(self, other, |o| o == Ordering::Less, "<")
     }
 
-    pub fn lte(&self, other: &Val) -> Result<bool> {
-        Ok(impl_cmp!(self, other, |o| o <= Ordering::Equal, "<="))
+    pub fn lte(self, other: Val) -> Result<Val> {
+        impl_cmp!(self, other, |o| o <= Ordering::Equal, "<=")
     }
 
-    pub fn contains(&self, other: &Val) -> Result<bool> {
-        Ok(impl_two_strs_fn!(
-            self,
-            other,
-            |x: &str, y: &str| x.contains(y),
-            "contains"
-        ))
+    pub fn contains(self, other: Val) -> Result<Val> {
+        impl_two_strs_fn!(self, other, |x: &str, y: &str| x.contains(y), "contains")
     }
 
-    pub fn starts_with(&self, other: &Val) -> Result<bool> {
-        Ok(impl_two_strs_fn!(
+    pub fn starts_with(self, other: Val) -> Result<Val> {
+        impl_two_strs_fn!(
             self,
             other,
             |x: &str, y: &str| x.starts_with(y),
             "starts_with"
-        ))
+        )
     }
 
-    pub fn ends_with(&self, other: &Val) -> Result<bool> {
-        Ok(impl_two_strs_fn!(
-            self,
-            other,
-            |x: &str, y: &str| x.ends_with(y),
-            "ends_with"
-        ))
+    pub fn ends_with(self, other: Val) -> Result<Val> {
+        impl_two_strs_fn!(self, other, |x: &str, y: &str| x.ends_with(y), "ends_with")
     }
 
     pub fn add(self, other: Val) -> Result<Val> {
