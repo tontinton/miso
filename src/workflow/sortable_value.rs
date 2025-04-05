@@ -1,8 +1,8 @@
 use std::{cmp::Ordering, ops::Deref};
 
-use vrl::core::Value;
+use serde_json::Value;
 
-use super::vrl_utils::partial_cmp_values;
+use super::serde_json_utils::partial_cmp_values;
 
 #[derive(Debug, Clone)]
 pub struct SortableValue(pub Value);

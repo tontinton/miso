@@ -2,6 +2,7 @@ use std::{any::Any, collections::BTreeMap, sync::Arc};
 
 use async_stream::try_stream;
 use axum::async_trait;
+use collection_macros::btreemap;
 use color_eyre::{
     eyre::{Context, ContextCompat},
     Result,
@@ -10,7 +11,6 @@ use ctor::ctor;
 use futures_util::TryStreamExt;
 use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
-use vrl::btreemap;
 
 use crate::{
     connector::{Connector, QueryHandle, QueryResponse, Split},

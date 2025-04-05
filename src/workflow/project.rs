@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use async_stream::try_stream;
 use color_eyre::eyre::Result;
 use futures_util::StreamExt;
@@ -6,7 +8,7 @@ use tracing::error;
 
 use crate::log::{Log, LogStream, LogTryStream};
 
-use super::interpreter::{ident, serde_json_to_val, CastType, Val};
+use super::interpreter::{ident, CastType, Val};
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "snake_case")]
@@ -41,17 +43,17 @@ impl<'a> ProjectInterpreter<'a> {
     }
 }
 
-impl ProjectInterpreter<'_> {
-    fn eval(&self, ast: &ProjectAst) -> Result<Val> {
-        Ok(match ast {
-            ProjectAst::Id(name) => ident(self.log, name)?,
-            ProjectAst::Lit(value) => serde_json_to_val(value)?,
-            ProjectAst::Cast(ty, expr) => self.eval(expr)?.cast(*ty)?,
-            ProjectAst::Mul(l, r) => self.eval(l)?.mul(&self.eval(r)?)?,
-            ProjectAst::Div(l, r) => self.eval(l)?.div(&self.eval(r)?)?,
-            ProjectAst::Plus(l, r) => self.eval(l)?.add(&self.eval(r)?)?,
-            ProjectAst::Minus(l, r) => self.eval(l)?.sub(&self.eval(r)?)?,
-        })
+impl<'a> ProjectInterpreter<'a> {
+    fn eval(&self, ast: &'a ProjectAst) -> Result<Val<'a>> {
+        match ast {
+            ProjectAst::Id(name) => ident(self.log, name),
+            ProjectAst::Lit(value) => Ok(Val::borrowed(value)),
+            ProjectAst::Cast(ty, expr) => self.eval(expr)?.cast(*ty),
+            ProjectAst::Mul(l, r) => self.eval(l)?.mul(self.eval(r)?),
+            ProjectAst::Div(l, r) => self.eval(l)?.div(self.eval(r)?),
+            ProjectAst::Plus(l, r) => self.eval(l)?.add(self.eval(r)?),
+            ProjectAst::Minus(l, r) => self.eval(l)?.sub(self.eval(r)?),
+        }
     }
 }
 
@@ -67,9 +69,13 @@ pub async fn project_stream(
 
             for field in &project_fields {
                 match interpreter.eval(&field.from) {
-                    Ok(Val::NotExist) => {} // Skip.
+                    Ok(Val(None)) => {} // Skip.
                     Ok(v) => {
-                        output.insert(field.to.clone().into(), v.to_vrl());
+                        let owned = match v.0.unwrap() {
+                            Cow::Borrowed(borrowed) => borrowed.clone(),
+                            Cow::Owned(owned) => owned,
+                        };
+                        output.insert(field.to.clone(), owned);
                     }
                     Err(e) => {
                         error!("Project failed: {e}");
