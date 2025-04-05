@@ -11,7 +11,7 @@ use color_eyre::eyre::{bail, Context, Result};
 use futures_util::stream;
 use reqwest::Client;
 use serde::{Deserialize, Deserializer, Serialize};
-use serde_json::{json, to_string};
+use serde_json::{json, to_string, Value};
 use tokio::{
     select, spawn,
     sync::{watch, RwLock},
@@ -19,7 +19,6 @@ use tokio::{
     time::sleep,
 };
 use tracing::{debug, error, info, instrument};
-use vrl::core::Value;
 
 use crate::{
     connector::{Connector, QueryHandle, QueryResponse, Split},
@@ -50,9 +49,9 @@ impl Split for QuickwitSplit {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 struct QuickwitHandle {
-    queries: Vec<serde_json::Value>,
-    sorts: Option<serde_json::Value>,
-    aggs: Option<serde_json::Value>,
+    queries: Vec<Value>,
+    sorts: Option<Value>,
+    aggs: Option<Value>,
     group_by: Vec<String>,
     count_fields: Vec<String>,
     limit: Option<u32>,
@@ -67,7 +66,7 @@ impl QueryHandle for QuickwitHandle {
 }
 
 impl QuickwitHandle {
-    fn with_filter(&self, query: serde_json::Value) -> QuickwitHandle {
+    fn with_filter(&self, query: Value) -> QuickwitHandle {
         let mut handle = self.clone();
         handle.queries.push(query);
         handle
@@ -79,7 +78,7 @@ impl QuickwitHandle {
         handle
     }
 
-    fn with_topn(&self, sort: serde_json::Value, limit: u32) -> QuickwitHandle {
+    fn with_topn(&self, sort: Value, limit: u32) -> QuickwitHandle {
         let mut handle = self.clone();
         handle.limit = Some(limit);
         handle.sorts = Some(sort);
@@ -94,7 +93,7 @@ impl QuickwitHandle {
 
     fn with_summarize(
         &self,
-        aggs: serde_json::Value,
+        aggs: Value,
         group_by: Vec<String>,
         count_fields: Vec<String>,
     ) -> QuickwitHandle {
@@ -238,7 +237,7 @@ pub struct QuickwitConnector {
     client: Client,
 }
 
-fn filter_ast_to_query(ast: &FilterAst) -> Option<serde_json::Value> {
+fn filter_ast_to_query(ast: &FilterAst) -> Option<Value> {
     #[allow(unreachable_patterns)]
     Some(match ast {
         FilterAst::Or(filters) => {
@@ -280,7 +279,7 @@ fn filter_ast_to_query(ast: &FilterAst) -> Option<serde_json::Value> {
             json!({
                 "match_phrase_prefix": {
                     field: {
-                        "query": if let serde_json::Value::String(v) = prefix {
+                        "query": if let Value::String(v) = prefix {
                             v.clone()
                         } else {
                             prefix.to_string()
@@ -296,7 +295,7 @@ fn filter_ast_to_query(ast: &FilterAst) -> Option<serde_json::Value> {
             json!({
                 "term": {
                     field: {
-                        "value": if let serde_json::Value::String(v) = value {
+                        "value": if let Value::String(v) = value {
                             v.clone()
                         } else {
                             value.to_string()
@@ -313,7 +312,7 @@ fn filter_ast_to_query(ast: &FilterAst) -> Option<serde_json::Value> {
                 "bool": {
                     "must_not": {
                         "term": {
-                            field: if let serde_json::Value::String(v) = value {
+                            field: if let Value::String(v) = value {
                                 v.clone()
                             } else {
                                 value.to_string()
@@ -330,7 +329,7 @@ fn filter_ast_to_query(ast: &FilterAst) -> Option<serde_json::Value> {
             json!({
                 "range": {
                     field: {
-                        "gt": if let serde_json::Value::String(v) = value {
+                        "gt": if let Value::String(v) = value {
                             v.clone()
                         } else {
                             value.to_string()
@@ -346,7 +345,7 @@ fn filter_ast_to_query(ast: &FilterAst) -> Option<serde_json::Value> {
             json!({
                 "range": {
                     field: {
-                        "gte": if let serde_json::Value::String(v) = value {
+                        "gte": if let Value::String(v) = value {
                             v.clone()
                         } else {
                             value.to_string()
@@ -362,7 +361,7 @@ fn filter_ast_to_query(ast: &FilterAst) -> Option<serde_json::Value> {
             json!({
                 "range": {
                     field: {
-                        "lt": if let serde_json::Value::String(v) = value {
+                        "lt": if let Value::String(v) = value {
                             v.clone()
                         } else {
                             value.to_string()
@@ -378,7 +377,7 @@ fn filter_ast_to_query(ast: &FilterAst) -> Option<serde_json::Value> {
             json!({
                 "range": {
                     field: {
-                        "lte": if let serde_json::Value::String(v) = value {
+                        "lte": if let Value::String(v) = value {
                             v.clone()
                         } else {
                             value.to_string()
@@ -396,7 +395,7 @@ async fn begin_search(
     client: &Client,
     base_url: &str,
     index: &str,
-    query: Option<serde_json::Value>,
+    query: Option<Value>,
     scroll_timeout: &Duration,
     scroll_size: u16,
 ) -> Result<(Vec<Log>, String)> {
@@ -460,12 +459,7 @@ async fn continue_search(
 }
 
 #[instrument(skip(query), name = "GET and parse quickwit count result")]
-async fn count(
-    client: &Client,
-    base_url: &str,
-    index: &str,
-    query: Option<serde_json::Value>,
-) -> Result<i64> {
+async fn count(client: &Client, base_url: &str, index: &str, query: Option<Value>) -> Result<i64> {
     let url = format!("{}/api/v1/_elastic/{}/_count", base_url, index);
 
     let mut req = client.get(&url);
@@ -495,7 +489,7 @@ async fn search_aggregation(
     client: &Client,
     base_url: &str,
     index: &str,
-    query: Option<serde_json::Value>,
+    query: Option<Value>,
 ) -> Result<SearchAggregationResponse> {
     let url = format!("{}/api/v1/_elastic/{}/_search", base_url, index,);
 
@@ -590,7 +584,7 @@ impl QuickwitConnector {
         client: Client,
         url: String,
         index: String,
-        query: Option<serde_json::Value>,
+        query: Option<Value>,
         scroll_timeout: Duration,
         scroll_size: u16,
         limit: Option<u32>,
@@ -654,17 +648,17 @@ impl QuickwitConnector {
         let mut log = Log::new();
 
         for (key, value) in group_by.iter().zip(keys_stack.iter()) {
-            log.insert(key.clone().into(), value.clone());
+            log.insert(key.clone(), value.clone());
         }
         for key in count_fields {
-            log.insert(key.clone().into(), Value::Integer(doc_count));
+            log.insert(key.clone(), Value::from(doc_count));
         }
 
         for (field, buckets_or_value) in buckets_or_value_wrap {
             let SearchAggregationBucketsOrValue::Value(value_wrap) = buckets_or_value else {
                 bail!("expected value, not bucket");
             };
-            log.insert(field.into(), value_wrap.value);
+            log.insert(field, value_wrap.value);
         }
 
         logs.push(log);
@@ -723,7 +717,7 @@ impl QuickwitConnector {
         client: Client,
         url: String,
         index: String,
-        query: Option<serde_json::Value>,
+        query: Option<Value>,
         group_by: Vec<String>,
         count_fields: Vec<String>,
     ) -> Result<LogTryStream> {
@@ -919,7 +913,7 @@ impl Connector for QuickwitConnector {
             }
         }
 
-        let sorts = serde_json::Value::Array(
+        let sorts = Value::Array(
             sorts
                 .iter()
                 .map(|sort| {

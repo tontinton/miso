@@ -6,7 +6,7 @@ use async_stream::try_stream;
 use futures_util::StreamExt;
 use itertools::iproduct;
 use serde::{Deserialize, Serialize};
-use vrl::{core::Value, value::KeyString};
+use serde_json::Value;
 
 use crate::log::{Log, LogStream, LogTryStream};
 
@@ -42,8 +42,8 @@ fn merge_two_logs(join_value: &Value, left: Log, right: Log) -> Log {
                 continue;
             }
 
-            merged.insert((key.as_str().to_string() + "_left").into(), existing_value);
-            merged.insert((key.as_str().to_string() + "_right").into(), value);
+            merged.insert(key.as_str().to_string() + "_left", existing_value);
+            merged.insert(key.as_str().to_string() + "_right", value);
         } else {
             merged.insert(key, value);
         }
@@ -135,18 +135,18 @@ pub async fn join_streams(
 ) -> LogTryStream {
     let mut left = JoinMap::new();
     let mut right = JoinMap::new();
-    let left_key: KeyString = config.on.0.into();
-    let right_key: KeyString = config.on.1.into();
+    let left_key = &config.on.0;
+    let right_key = &config.on.1;
 
     loop {
         tokio::select! {
             Some(log) = left_stream.next() => {
-                if let Some(value) = log.get(&left_key) {
+                if let Some(value) = log.get(left_key) {
                     left.entry(SortableValue(value.clone())).or_default().push(log);
                 }
             },
             Some(log) = right_stream.next() => {
-                if let Some(value) = log.get(&right_key) {
+                if let Some(value) = log.get(right_key) {
                     right.entry(SortableValue(value.clone())).or_default().push(log);
                 }
             },
