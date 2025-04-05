@@ -5,3 +5,6 @@ pub mod log;
 pub mod optimizations;
 pub mod quickwit_connector;
 pub mod workflow;
+
+#[cfg(test)]
+mod tests;
