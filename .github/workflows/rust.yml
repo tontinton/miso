@@ -45,8 +45,13 @@ jobs:
       - name: Cache setup
         uses: ./.github/actions/cache-setup
 
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+
       - name: Tests
-        run: RUST_BACKTRACE=1 cargo test
+        run: cargo nextest run
 
   lint:
     name: rustfmt + clippy
