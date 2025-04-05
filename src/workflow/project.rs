@@ -4,7 +4,7 @@ use async_stream::try_stream;
 use color_eyre::eyre::Result;
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
-use tracing::error;
+use tracing::warn;
 
 use crate::log::{Log, LogStream, LogTryStream};
 
@@ -62,7 +62,7 @@ pub async fn project_stream(
     mut input_stream: LogStream,
 ) -> Result<LogTryStream> {
     Ok(Box::pin(try_stream! {
-        'logs_loop: while let Some(log) = input_stream.next().await {
+        while let Some(log) = input_stream.next().await {
             let interpreter = ProjectInterpreter::new(&log);
 
             let mut output = Log::new();
@@ -78,8 +78,8 @@ pub async fn project_stream(
                         output.insert(field.to.clone(), owned);
                     }
                     Err(e) => {
-                        error!("Project failed: {e}");
-                        continue 'logs_loop;
+                        warn!("Project failed: {e}");
+                        continue;
                     }
                 };
             }
