@@ -30,7 +30,7 @@ use crate::{
 
 const INTERNAL_SERVER_ERROR: &str = "Internal server error";
 
-type ConnectorsMap = BTreeMap<String, Arc<dyn Connector>>;
+pub type ConnectorsMap = BTreeMap<String, Arc<dyn Connector>>;
 
 struct State {
     connectors: ConnectorsMap,

@@ -206,7 +206,7 @@ fn default_scroll_size() -> u16 {
     10000
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Default)]
 pub struct QuickwitConfig {
     url: String,
 
@@ -224,6 +224,17 @@ pub struct QuickwitConfig {
 
     #[serde(default = "default_scroll_size")]
     scroll_size: u16,
+}
+
+impl QuickwitConfig {
+    pub fn new_with_interval(url: String, refresh_interval: Duration) -> Self {
+        Self {
+            url,
+            refresh_interval,
+            scroll_timeout: default_scroll_timeout(),
+            scroll_size: default_scroll_size(),
+        }
+    }
 }
 
 type SharedCollections = Arc<RwLock<Vec<String>>>;
