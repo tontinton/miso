@@ -3,13 +3,12 @@ use std::{cmp::Ordering, fmt};
 use color_eyre::eyre::{bail, Result};
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use tracing::info;
-use vrl::{core::Value, value::KeyString};
 
-use crate::{
-    log::{Log, LogStream},
-    workflow::vrl_utils::partial_cmp_values,
-};
+use crate::log::{Log, LogStream};
+
+use super::serde_json_utils::partial_cmp_values;
 
 #[derive(Debug, Serialize, Deserialize, Default, PartialEq, Clone)]
 #[serde(rename_all = "snake_case")]
@@ -40,7 +39,7 @@ pub struct Sort {
 
 #[derive(Debug)]
 pub struct SortConfig {
-    by: Vec<KeyString>,
+    by: Vec<String>,
     pub sort_orders: Vec<SortOrder>,
     nulls_orders: Vec<NullsOrder>,
 }
@@ -48,7 +47,7 @@ pub struct SortConfig {
 impl SortConfig {
     pub fn new(sorts: &[Sort]) -> Self {
         Self {
-            by: sorts.iter().map(|sort| sort.by.clone().into()).collect(),
+            by: sorts.iter().map(|sort| sort.by.clone()).collect(),
             sort_orders: sorts.iter().map(|sort| sort.clone().order).collect(),
             nulls_orders: sorts.iter().map(|sort| sort.clone().nulls).collect(),
         }
@@ -123,7 +122,7 @@ pub fn cmp_logs(a: &Log, b: &Log, config: &SortConfig) -> Option<Ordering> {
     Some(Ordering::Equal)
 }
 
-async fn collect_logs(by: &[KeyString], mut input_stream: LogStream) -> Result<Vec<Log>> {
+async fn collect_logs(by: &[String], mut input_stream: LogStream) -> Result<Vec<Log>> {
     let mut tracked_types = vec![None; by.len()];
 
     let mut logs = Vec::new();

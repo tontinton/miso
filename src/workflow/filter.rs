@@ -2,11 +2,12 @@ use async_stream::try_stream;
 use color_eyre::Result;
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use tracing::error;
 
 use crate::log::{Log, LogStream, LogTryStream};
 
-use super::interpreter::{ident, serde_json_to_val, Val};
+use super::interpreter::{ident, Val};
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "snake_case")]
@@ -37,11 +38,11 @@ impl FilterInterpreter {
         Self { log }
     }
 
-    fn eval(&self, ast: &FilterAst) -> Result<Val> {
+    fn eval<'a>(&'a self, ast: &'a FilterAst) -> Result<Val<'a>> {
         Ok(match &ast {
             FilterAst::Id(name) => ident(&self.log, name)?,
-            FilterAst::Lit(value) => serde_json_to_val(value)?,
-            FilterAst::Exists(name) => Val::Bool(!matches!(ident(&self.log, name)?, Val::NotExist)),
+            FilterAst::Lit(value) => Val::borrowed(value),
+            FilterAst::Exists(name) => Val::owned(Value::Bool(ident(&self.log, name)?.0.is_some())),
             FilterAst::Or(exprs) => {
                 let mut result = false;
                 for expr in exprs {
@@ -50,7 +51,7 @@ impl FilterInterpreter {
                         break;
                     }
                 }
-                Val::Bool(result)
+                Val::bool(result)
             }
             FilterAst::And(exprs) => {
                 let mut result = true;
@@ -60,25 +61,25 @@ impl FilterInterpreter {
                         break;
                     }
                 }
-                Val::Bool(result)
+                Val::bool(result)
             }
-            FilterAst::Not(expr) => Val::Bool(!self.eval(expr)?.to_bool()),
+            FilterAst::Not(expr) => Val::bool(!self.eval(expr)?.to_bool()),
             FilterAst::Contains(lhs, rhs) => {
-                self.eval(lhs)?.contains(&self.eval(rhs)?).map(Val::Bool)?
+                self.eval(lhs)?.contains(&self.eval(rhs)?).map(Val::bool)?
             }
             FilterAst::StartsWith(lhs, rhs) => self
                 .eval(lhs)?
                 .starts_with(&self.eval(rhs)?)
-                .map(Val::Bool)?,
+                .map(Val::bool)?,
             FilterAst::EndsWith(lhs, rhs) => {
-                self.eval(lhs)?.ends_with(&self.eval(rhs)?).map(Val::Bool)?
+                self.eval(lhs)?.ends_with(&self.eval(rhs)?).map(Val::bool)?
             }
-            FilterAst::Eq(l, r) => self.eval(l)?.eq(&self.eval(r)?).map(Val::Bool)?,
-            FilterAst::Ne(l, r) => self.eval(l)?.ne(&self.eval(r)?).map(Val::Bool)?,
-            FilterAst::Gt(l, r) => self.eval(l)?.gt(&self.eval(r)?).map(Val::Bool)?,
-            FilterAst::Gte(l, r) => self.eval(l)?.gte(&self.eval(r)?).map(Val::Bool)?,
-            FilterAst::Lt(l, r) => self.eval(l)?.lt(&self.eval(r)?).map(Val::Bool)?,
-            FilterAst::Lte(l, r) => self.eval(l)?.lte(&self.eval(r)?).map(Val::Bool)?,
+            FilterAst::Eq(l, r) => self.eval(l)?.eq(&self.eval(r)?).map(Val::bool)?,
+            FilterAst::Ne(l, r) => self.eval(l)?.ne(&self.eval(r)?).map(Val::bool)?,
+            FilterAst::Gt(l, r) => self.eval(l)?.gt(&self.eval(r)?).map(Val::bool)?,
+            FilterAst::Gte(l, r) => self.eval(l)?.gte(&self.eval(r)?).map(Val::bool)?,
+            FilterAst::Lt(l, r) => self.eval(l)?.lt(&self.eval(r)?).map(Val::bool)?,
+            FilterAst::Lte(l, r) => self.eval(l)?.lte(&self.eval(r)?).map(Val::bool)?,
         })
     }
 }

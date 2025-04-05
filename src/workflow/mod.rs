@@ -5,6 +5,7 @@ use color_eyre::eyre::{bail, Context, Result};
 use futures_util::{future::try_join_all, stream::FuturesUnordered, StreamExt};
 use join::{join_streams, Join, JoinType};
 use kinded::Kinded;
+use serde_json::Value;
 use summarize::{summarize_stream, Summarize};
 use tokio::{
     spawn,
@@ -13,7 +14,6 @@ use tokio::{
 };
 use topn::topn_stream;
 use tracing::{debug, info, instrument};
-use vrl::core::Value;
 
 use crate::{
     connector::{Connector, QueryHandle, QueryResponse, Split},
@@ -30,11 +30,11 @@ mod interpreter;
 pub mod join;
 pub mod limit;
 pub mod project;
+mod serde_json_utils;
 pub mod sort;
 mod sortable_value;
 pub mod summarize;
 pub mod topn;
-mod vrl_utils;
 
 #[cfg(test)]
 mod tests;
@@ -134,7 +134,7 @@ fn rx_stream(mut rx: mpsc::Receiver<Log>) -> LogStream {
 
 async fn count_to_tx(count: i64, tx: mpsc::Sender<Log>) {
     let mut count_log = Log::new();
-    count_log.insert(COUNT_LOG_FIELD_NAME.into(), Value::Integer(count));
+    count_log.insert(COUNT_LOG_FIELD_NAME.into(), Value::from(count));
     if let Err(e) = tx.send(count_log).await {
         debug!("Not sending count: {:?}", e);
     }
