@@ -81,11 +81,34 @@ impl Optimizer {
             patterns: vec![],
         }
     }
+
+    /// empty() would also suffice for tests, but using this will make the tests faster!
+    pub fn no_predicate_pushdowns() -> Self {
+        Self::new(vec![vec![
+            opt!(ReorderFilterBeforeSort),
+            opt!(PushLimitIntoLimit),
+            opt!(ConvertSortLimitToTopN),
+            opt!(PushLimitIntoTopN),
+            opt!(RemoveRedundantSortsBeforeCount),
+        ]])
+    }
+
+    fn new(optimizations: Vec<Vec<OptimizationStep>>) -> Self {
+        let patterns = optimizations
+            .iter()
+            .map(|opts| opts.iter().map(|x| x.optimization.pattern()).collect())
+            .collect();
+
+        Self {
+            optimizations,
+            patterns,
+        }
+    }
 }
 
 impl Default for Optimizer {
     fn default() -> Self {
-        let optimizations = vec![
+        Self::new(vec![
             // First pass.
             vec![
                 // Filter.
@@ -108,17 +131,7 @@ impl Default for Optimizer {
                 // Union.
                 opt_once!(PushFilterAndLimitIntoUnion),
             ],
-        ];
-
-        let patterns = optimizations
-            .iter()
-            .map(|opts| opts.iter().map(|x| x.optimization.pattern()).collect())
-            .collect();
-
-        Self {
-            optimizations,
-            patterns,
-        }
+        ])
     }
 }
 

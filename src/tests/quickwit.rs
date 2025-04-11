@@ -2,7 +2,7 @@ use std::{sync::Arc, time::Duration};
 
 use collection_macros::btreemap;
 use color_eyre::{
-    eyre::{bail, Context},
+    eyre::{bail, Context, OptionExt},
     Result,
 };
 use futures_util::StreamExt;
@@ -22,7 +22,7 @@ use crate::{
     http_server::{to_workflow_steps, ConnectorsMap},
     optimizations::Optimizer,
     quickwit_connector::{QuickwitConfig, QuickwitConnector},
-    workflow::Workflow,
+    workflow::{Workflow, WorkflowStep},
 };
 
 const QUICKWIT_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
@@ -186,6 +186,35 @@ async fn write_stackoverflow_posts(
     Ok(())
 }
 
+async fn check(steps: Vec<WorkflowStep>) -> Result<()> {
+    let default_optimizer = Optimizer::default();
+    let no_pushdown_optimizer = Optimizer::no_predicate_pushdowns();
+
+    let pushdown_workflow = Workflow::new(default_optimizer.optimize(steps.clone()).await);
+    let no_pushdown_workflow = Workflow::new(no_pushdown_optimizer.optimize(steps).await);
+
+    let (_cancel_tx1, cancel_rx1) = watch::channel(());
+    let (_cancel_tx2, cancel_rx2) = watch::channel(());
+
+    let mut pushdown_stream = pushdown_workflow
+        .execute(cancel_rx1)
+        .context("execute predicate pushdown workflow")?;
+    let mut no_pushdown_stream = no_pushdown_workflow
+        .execute(cancel_rx2)
+        .context("execute no predicate pushdown workflow")?;
+
+    while let Some(log1) = pushdown_stream.next().await {
+        let log2 = no_pushdown_stream.next().await
+            .ok_or_eyre("expected the no predicate pushdown query to have a log when the connector query streamed a log")?;
+        assert_eq!(
+            log1.context("predicate pushdown workflow failure")?,
+            log2.context("no predicate pushdown workflow failure")?
+        );
+    }
+
+    Ok(())
+}
+
 #[tokio::test]
 async fn quickwit_sanity() -> Result<()> {
     let image = run_quickwit_image().await;
@@ -198,25 +227,21 @@ async fn quickwit_sanity() -> Result<()> {
     let steps = Retry::spawn(strategy, || async {
         to_workflow_steps(
             &connectors,
-            serde_json::from_str(r#"[{"scan": ["test", "stack"]}]"#).expect("query from json"),
+            serde_json::from_str(
+                r#"[
+                    {"scan": ["test", "stack"]},
+                    {"sort": [{"by": "creationDate"}]},
+                    {"limit": 3}
+                ]"#,
+            )
+            .expect("query from json"),
         )
         .await
     })
     .await
     .expect("to workflow steps");
 
-    let optimizer = Optimizer::default();
-    let workflow = Workflow::new(optimizer.optimize(steps).await);
-
-    let (_cancel_tx, cancel_rx) = watch::channel(());
-    let mut stream = workflow.execute(cancel_rx).context("execute workflow")?;
-
-    let mut i = 0;
-    while let Some(_log) = stream.next().await {
-        i += 1;
-    }
-
-    assert_eq!(i, 10);
+    check(steps).await?;
 
     Ok(())
 }
