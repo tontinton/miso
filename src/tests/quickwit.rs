@@ -30,6 +30,18 @@ use crate::{
     workflow::{sortable_value::SortableValue, Scan, Workflow, WorkflowStep},
 };
 
+const INDEXES: [(&str, &str); 3] = [
+    (
+        "stack",
+        include_str!("./resources/stackoverflow.posts.10.json"),
+    ),
+    (
+        "stack_mirror",
+        include_str!("./resources/stackoverflow.posts.10.json"),
+    ),
+    ("hdfs", include_str!("./resources/hdfs.logs.10.json")),
+];
+
 const QUICKWIT_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
 static TEST_RESOURCES_WEAK: OnceCell<tokio::sync::Mutex<Weak<(QuickwitImage, ConnectorsMap)>>> =
     OnceCell::const_new();
@@ -61,13 +73,48 @@ async fn run_quickwit_image() -> QuickwitImage {
 async fn get_quickwit_connector_map(image: &QuickwitImage) -> Result<ConnectorsMap> {
     let url = format!("http://127.0.0.1:{}", image.port);
     let client = Client::new();
-    create_index(&client, &url, "stack").await?;
 
-    Retry::spawn(
-        FixedInterval::new(Duration::from_secs(1)).take(3),
-        || async { write_stackoverflow_posts(&client, &url, "stack").await },
+    for stackoverflow_index_name in ["stack", "stack_mirror"] {
+        create_index(
+            &client,
+            &url,
+            stackoverflow_index_name,
+            DocMapping {
+                field_mappings: vec![FieldMapping {
+                    name: "creationDate".to_string(),
+                    ty: "datetime".to_string(),
+                    fast: Some(true),
+                    fast_precision: Some("seconds".to_string()),
+                    input_formats: vec!["rfc3339".to_string()],
+                    ..Default::default()
+                }],
+                timestamp_field: "creationDate".to_string(),
+            },
+        )
+        .await?;
+    }
+
+    create_index(
+        &client,
+        &url,
+        "hdfs",
+        DocMapping {
+            field_mappings: vec![FieldMapping {
+                name: "timestamp".to_string(),
+                ty: "datetime".to_string(),
+                fast: Some(true),
+                fast_precision: Some("seconds".to_string()),
+                input_formats: vec!["unix_timestamp".to_string()],
+                ..Default::default()
+            }],
+            timestamp_field: "timestamp".to_string(),
+        },
     )
     .await?;
+
+    for (index_name, data) in INDEXES {
+        write_to_index(&client, &url, index_name, data).await?;
+    }
 
     let config = QuickwitConfig::new_with_interval(url, QUICKWIT_REFRESH_INTERVAL);
     let connector = Arc::new(QuickwitConnector::new(config)) as Arc<dyn Connector>;
@@ -75,11 +122,16 @@ async fn get_quickwit_connector_map(image: &QuickwitImage) -> Result<ConnectorsM
     Retry::spawn(
         FixedInterval::new(QUICKWIT_REFRESH_INTERVAL).take(3),
         || async {
-            connector
-                .does_collection_exist("stack")
-                .await
-                .then_some(())
-                .ok_or_eyre("timeout waiting for 'stack' collection to exist")
+            for (index_name, _) in INDEXES {
+                connector
+                    .does_collection_exist("stack")
+                    .await
+                    .then_some(())
+                    .ok_or_eyre(format!(
+                        "timeout waiting for '{index_name}' collection to exist"
+                    ))?;
+            }
+            Ok::<(), color_eyre::eyre::Error>(())
         },
     )
     .await?;
@@ -174,23 +226,18 @@ async fn void_response_to_err(url: &str, response: Response) -> Result<()> {
     Ok(())
 }
 
-async fn create_index(client: &Client, base_url: &str, index_name: &str) -> Result<()> {
+async fn create_index(
+    client: &Client,
+    base_url: &str,
+    index_name: &str,
+    doc_mapping: DocMapping,
+) -> Result<()> {
     let url = format!("{}/api/v1/indexes", base_url);
     let response = client
         .post(&url)
         .json(&CreateIndex {
             index_id: index_name.to_string(),
-            doc_mapping: DocMapping {
-                field_mappings: vec![FieldMapping {
-                    name: "creationDate".to_string(),
-                    ty: "datetime".to_string(),
-                    fast: Some(true),
-                    fast_precision: Some("seconds".to_string()),
-                    input_formats: vec!["rfc3339".to_string()],
-                    ..Default::default()
-                }],
-                timestamp_field: "creationDate".to_string(),
-            },
+            doc_mapping,
             ..Default::default()
         })
         .send()
@@ -203,17 +250,18 @@ async fn create_index(client: &Client, base_url: &str, index_name: &str) -> Resu
     Ok(())
 }
 
-async fn write_stackoverflow_posts(
+async fn write_to_index(
     client: &Client,
     base_url: &str,
     index_name: &str,
+    data: &'static str,
 ) -> Result<()> {
     let url = format!("{}/api/v1/{}/ingest", base_url, index_name);
     let response = client
         .post(&url)
         .query(&[("commit", "force")])
         .header(CONTENT_TYPE, "application/json")
-        .body(include_str!("./resources/stackoverflow.posts.10.json"))
+        .body(data)
         .send()
         .await
         .with_context(|| format!("POST ingest stackoverflow posts into index: {index_name}"))?;
@@ -377,6 +425,14 @@ async fn predicate_pushdown_same_results(query: &str, count: usize) -> Result<()
     ]"#,
     1;
     "count"
+)]
+#[test_case(
+    r#"[
+        {"scan": ["test", "stack"]},
+        {"union": [{"scan": ["test", "stack_mirror"]}]}
+    ]"#,
+    20;
+    "union"
 )]
 fn quickwit_predicate_pushdown(query: &str, count: usize) -> Result<()> {
     block_on(predicate_pushdown_same_results(query, count))
