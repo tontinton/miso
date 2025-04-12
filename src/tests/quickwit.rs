@@ -227,7 +227,7 @@ async fn write_stackoverflow_posts(
     Ok(())
 }
 
-async fn predicate_pushdown_same_results(query: &str) -> Result<()> {
+async fn predicate_pushdown_same_results(query: &str, count: usize) -> Result<()> {
     let resources = get_test_resources().await;
 
     let steps = to_workflow_steps(
@@ -253,6 +253,7 @@ async fn predicate_pushdown_same_results(query: &str) -> Result<()> {
         .execute(cancel_rx2)
         .context("execute no predicate pushdown workflow")?;
 
+    let mut i = 0;
     while let Some(log1) = pushdown_stream.next().await {
         let log2 = no_pushdown_stream.next().await
             .ok_or_eyre("expected the no predicate pushdown query to have a log when the connector query streamed a log")?;
@@ -260,7 +261,10 @@ async fn predicate_pushdown_same_results(query: &str) -> Result<()> {
             log1.context("predicate pushdown workflow failure")?,
             log2.context("no predicate pushdown workflow failure")?
         );
+        i += 1;
     }
+
+    assert_eq!(count, i, "number of logs returned is wrong");
 
     Ok(())
 }
@@ -270,8 +274,16 @@ async fn predicate_pushdown_same_results(query: &str) -> Result<()> {
         {"scan": ["test", "stack"]},
         {"sort": [{"by": "creationDate"}]},
         {"limit": 3}
-    ]"#
+    ]"#,
+    3
 )]
-fn quickwit_predicate_pushdown(query: &str) -> Result<()> {
-    block_on(predicate_pushdown_same_results(query))
+#[test_case(
+    r#"[
+        {"scan": ["test", "stack"]},
+        {"filter": {"eq": [{"id": "acceptedAnswerId"}, {"lit": 12446}]}}
+    ]"#,
+    1
+)]
+fn quickwit_predicate_pushdown(query: &str, count: usize) -> Result<()> {
+    block_on(predicate_pushdown_same_results(query, count))
 }
