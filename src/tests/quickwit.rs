@@ -285,14 +285,16 @@ async fn predicate_pushdown_same_results(query: &str, count: usize) -> Result<()
         {"sort": [{"by": "creationDate"}]},
         {"limit": 3}
     ]"#,
-    3
+    3;
+    "top_n"
 )]
 #[test_case(
     r#"[
         {"scan": ["test", "stack"]},
         {"filter": {"eq": [{"id": "acceptedAnswerId"}, {"lit": 12446}]}}
     ]"#,
-    1
+    1;
+    "filter_eq"
 )]
 #[test_case(
     r#"[
@@ -307,7 +309,8 @@ async fn predicate_pushdown_same_results(query: &str, count: usize) -> Result<()
             }
         }
     ]"#,
-    1
+    1;
+    "filter_eq_and_exists"
 )]
 fn quickwit_predicate_pushdown(query: &str, count: usize) -> Result<()> {
     block_on(predicate_pushdown_same_results(query, count))
