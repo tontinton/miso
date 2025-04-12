@@ -28,6 +28,7 @@ use crate::{
         filter::FilterAst,
         sort::Sort,
         summarize::{Aggregation, Summarize},
+        Workflow, WorkflowStep,
     },
 };
 
@@ -47,7 +48,7 @@ impl Split for QuickwitSplit {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 struct QuickwitHandle {
     queries: Vec<Value>,
     sorts: Option<Value>,
@@ -56,6 +57,7 @@ struct QuickwitHandle {
     count_fields: Vec<String>,
     limit: Option<u32>,
     count: bool,
+    collections: Vec<String>,
 }
 
 #[typetag::serde]
@@ -66,6 +68,10 @@ impl QueryHandle for QuickwitHandle {
 }
 
 impl QuickwitHandle {
+    fn is_empty(&self) -> bool {
+        self == &Self::default()
+    }
+
     fn with_filter(&self, query: Value) -> QuickwitHandle {
         let mut handle = self.clone();
         handle.queries.push(query);
@@ -101,6 +107,12 @@ impl QuickwitHandle {
         handle.aggs = Some(aggs);
         handle.group_by = group_by;
         handle.count_fields = count_fields;
+        handle
+    }
+
+    fn with_union(&self, collection: &str) -> QuickwitHandle {
+        let mut handle = self.clone();
+        handle.collections.push(collection.to_string());
         handle
     }
 }
@@ -802,7 +814,6 @@ impl Connector for QuickwitConnector {
         };
 
         let url = self.config.url.clone();
-        let collection = collection.to_string();
         let scroll_timeout = self.config.scroll_timeout;
 
         let handle = downcast_unwrap!(handle, QuickwitHandle);
@@ -810,6 +821,13 @@ impl Connector for QuickwitConnector {
         let scroll_size = limit.map_or(self.config.scroll_size, |l| {
             l.min(self.config.scroll_size as u32) as u16
         });
+
+        let mut collections = Vec::with_capacity(1 + handle.collections.len());
+        collections.push(collection);
+        collections.extend(handle.collections.iter().map(String::as_str));
+        collections.sort();
+        collections.dedup();
+        let collections = collections.join(",");
 
         let mut query_map = BTreeMap::new();
 
@@ -852,12 +870,12 @@ impl Connector for QuickwitConnector {
             ?scroll_size,
             ?limit,
             "Quickwit search '{}': {}",
-            collection,
+            collections,
             to_string(&query)?
         );
 
         if handle.count {
-            let mut result = count(&self.client, &url, &collection, query).await?;
+            let mut result = count(&self.client, &url, &collections, query).await?;
             if let Some(limit) = limit {
                 result = (limit as i64).min(result);
             }
@@ -869,7 +887,7 @@ impl Connector for QuickwitConnector {
                 Self::query_aggregation(
                     self.client.clone(),
                     url,
-                    collection,
+                    collections,
                     query,
                     handle.group_by.clone(),
                     handle.count_fields.clone(),
@@ -882,7 +900,7 @@ impl Connector for QuickwitConnector {
             Self::query_search(
                 self.client.clone(),
                 url,
-                collection,
+                collections,
                 query,
                 scroll_timeout,
                 scroll_size,
@@ -1022,6 +1040,25 @@ impl Connector for QuickwitConnector {
             config.by.clone(),
             count_fields,
         )))
+    }
+
+    fn apply_union(
+        &self,
+        union: &Workflow,
+        handle: &dyn QueryHandle,
+    ) -> Option<Box<dyn QueryHandle>> {
+        let handle = downcast_unwrap!(handle, QuickwitHandle);
+
+        if !handle.is_empty() || union.steps.len() > 1 {
+            // Quickwit only supports querying multiple indexes with the exact same query.
+            return None;
+        }
+
+        let WorkflowStep::Scan(scan) = &union.steps[0] else {
+            return None;
+        };
+
+        Some(Box::new(handle.with_union(&scan.collection)))
     }
 
     async fn close(self) {
