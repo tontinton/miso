@@ -13,19 +13,6 @@ It supports the same optimization based <a href="https://trino.io/docs/current/o
 Here's an example of a query supported today by miso (`localqw` is a <a href="https://quickwit.io/">Quickwit</a> connector to `localhost:7280/`):
 
 ```sh
-# scan localqw.hdfs1
-# | union (scan localqw.hdfs2)
-# | summarize
-#     min_tenant = min(tenant_id)
-#     max_tenant = max(tenant_id)
-#     count = count()
-#   by timestamp, severity_text 
-# | join (
-#     scan localqw.stackoverflow
-#     | where questionId > 80
-#   ) on min_tenant, questionId
-# | order by count desc;
-
 # curl supports SSE by adding the -N flag.
 curl -N -H 'Content-Type: application/json' localhost:8080/query -d '{
   "query": [
