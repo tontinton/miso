@@ -284,6 +284,21 @@ async fn predicate_pushdown_same_results(query: &str, count: usize) -> Result<()
     ]"#,
     1
 )]
+#[test_case(
+    r#"[
+        {"scan": ["test", "stack"]},
+        {
+            "filter": {
+                "and": [{
+                    "eq": [{"id": "questionId"}, {"lit": 11}]
+                }, {
+                    "exists": "answerId"
+                }]
+            }
+        }
+    ]"#,
+    1
+)]
 fn quickwit_predicate_pushdown(query: &str, count: usize) -> Result<()> {
     block_on(predicate_pushdown_same_results(query, count))
 }
