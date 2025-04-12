@@ -596,6 +596,20 @@ async fn topn() -> Result<()> {
 }
 
 #[tokio::test]
+async fn sort_limit() -> Result<()> {
+    check(
+        r#"[
+            {"scan": ["test", "c"]},
+            {"sort": [{"by": "world"}, {"by": "test", "order": "desc"}]},
+            {"limit": 2}
+        ]"#,
+        r#"[{"world": 3, "test": 1}, {"world": 2, "test": 3}, {"world": 2, "test": 6}]"#,
+        r#"[{"world": 2, "test": 6}, {"world": 2, "test": 3}]"#,
+    )
+    .await
+}
+
+#[tokio::test]
 async fn summarize() -> Result<()> {
     check(
         r#"[
