@@ -27,7 +27,7 @@ use crate::{
     http_server::{to_workflow_steps, ConnectorsMap},
     optimizations::Optimizer,
     quickwit_connector::{QuickwitConfig, QuickwitConnector},
-    workflow::Workflow,
+    workflow::{Scan, Workflow, WorkflowStep},
 };
 
 const QUICKWIT_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
@@ -229,9 +229,10 @@ async fn write_stackoverflow_posts(
 
 async fn predicate_pushdown_same_results(query: &str, count: usize) -> Result<()> {
     let resources = get_test_resources().await;
+    let connectors = resources.1.clone();
 
     let steps = to_workflow_steps(
-        &resources.1,
+        &connectors,
         serde_json::from_str(query).context("query from json")?,
     )
     .await
@@ -240,7 +241,16 @@ async fn predicate_pushdown_same_results(query: &str, count: usize) -> Result<()
     let default_optimizer = Optimizer::default();
     let no_pushdown_optimizer = Optimizer::no_predicate_pushdowns();
 
-    let pushdown_workflow = Workflow::new(default_optimizer.optimize(steps.clone()).await);
+    let predicate_pushdown_steps = default_optimizer.optimize(steps.clone()).await;
+    assert_eq!(
+        predicate_pushdown_steps,
+        vec![WorkflowStep::Scan(
+            Scan::from_connector(connectors["test"].clone(), "stack".to_string()).await
+        )],
+        "query predicates should have been fully pushdown"
+    );
+
+    let pushdown_workflow = Workflow::new(predicate_pushdown_steps);
     let no_pushdown_workflow = Workflow::new(no_pushdown_optimizer.optimize(steps).await);
 
     let (_cancel_tx1, cancel_rx1) = watch::channel(());
