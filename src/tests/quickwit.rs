@@ -1,4 +1,7 @@
-use std::{sync::Arc, time::Duration};
+use std::{
+    sync::{Arc, Weak},
+    time::Duration,
+};
 
 use collection_macros::btreemap;
 use color_eyre::{
@@ -8,13 +11,15 @@ use color_eyre::{
 use futures_util::StreamExt;
 use reqwest::{header::CONTENT_TYPE, Client, Response};
 use serde::Serialize;
+use test_case::test_case;
 use testcontainers::{
     core::{IntoContainerPort, WaitFor},
     runners::AsyncRunner,
     ContainerAsync, GenericImage, ImageExt,
 };
-use tokio::sync::watch;
+use tokio::sync::{watch, OnceCell};
 use tokio_retry::{strategy::FixedInterval, Retry};
+use tokio_test::block_on;
 use tracing::info;
 
 use crate::{
@@ -22,10 +27,12 @@ use crate::{
     http_server::{to_workflow_steps, ConnectorsMap},
     optimizations::Optimizer,
     quickwit_connector::{QuickwitConfig, QuickwitConnector},
-    workflow::{Workflow, WorkflowStep},
+    workflow::Workflow,
 };
 
 const QUICKWIT_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
+static TEST_RESOURCES_WEAK: OnceCell<tokio::sync::Mutex<Weak<(QuickwitImage, ConnectorsMap)>>> =
+    OnceCell::const_new();
 
 struct QuickwitImage {
     _container: ContainerAsync<GenericImage>,
@@ -64,7 +71,41 @@ async fn get_quickwit_connector_map(image: &QuickwitImage) -> Result<ConnectorsM
 
     let config = QuickwitConfig::new_with_interval(url, QUICKWIT_REFRESH_INTERVAL);
     let connector = Arc::new(QuickwitConnector::new(config)) as Arc<dyn Connector>;
+
+    Retry::spawn(
+        FixedInterval::new(QUICKWIT_REFRESH_INTERVAL).take(3),
+        || async {
+            connector
+                .does_collection_exist("stack")
+                .await
+                .then_some(())
+                .ok_or_eyre("timeout waiting for 'stack' collection to exist")
+        },
+    )
+    .await?;
+
     Ok(btreemap! { "test".to_string() => connector })
+}
+
+async fn get_test_resources() -> Arc<(QuickwitImage, ConnectorsMap)> {
+    let weak_cell = TEST_RESOURCES_WEAK
+        .get_or_init(|| async { tokio::sync::Mutex::new(Weak::new()) })
+        .await;
+
+    let mut weak_lock = weak_cell.lock().await;
+    if let Some(existing) = weak_lock.upgrade() {
+        return existing;
+    }
+
+    let image = run_quickwit_image().await;
+    let connectors = get_quickwit_connector_map(&image)
+        .await
+        .expect("get quickwit connector");
+
+    let resources = Arc::new((image, connectors));
+    *weak_lock = Arc::downgrade(&resources);
+
+    resources
 }
 
 fn default_version() -> String {
@@ -186,7 +227,16 @@ async fn write_stackoverflow_posts(
     Ok(())
 }
 
-async fn check(steps: Vec<WorkflowStep>) -> Result<()> {
+async fn predicate_pushdown_same_results(query: &str) -> Result<()> {
+    let resources = get_test_resources().await;
+
+    let steps = to_workflow_steps(
+        &resources.1,
+        serde_json::from_str(query).context("query from json")?,
+    )
+    .await
+    .expect("to workflow steps");
+
     let default_optimizer = Optimizer::default();
     let no_pushdown_optimizer = Optimizer::no_predicate_pushdowns();
 
@@ -215,33 +265,13 @@ async fn check(steps: Vec<WorkflowStep>) -> Result<()> {
     Ok(())
 }
 
-#[tokio::test]
-async fn quickwit_sanity() -> Result<()> {
-    let image = run_quickwit_image().await;
-
-    let connectors = get_quickwit_connector_map(&image)
-        .await
-        .context("get quickwit connector")?;
-
-    let strategy = FixedInterval::new(QUICKWIT_REFRESH_INTERVAL).take(3);
-    let steps = Retry::spawn(strategy, || async {
-        to_workflow_steps(
-            &connectors,
-            serde_json::from_str(
-                r#"[
-                    {"scan": ["test", "stack"]},
-                    {"sort": [{"by": "creationDate"}]},
-                    {"limit": 3}
-                ]"#,
-            )
-            .expect("query from json"),
-        )
-        .await
-    })
-    .await
-    .expect("to workflow steps");
-
-    check(steps).await?;
-
-    Ok(())
+#[test_case(
+    r#"[
+        {"scan": ["test", "stack"]},
+        {"sort": [{"by": "creationDate"}]},
+        {"limit": 3}
+    ]"#
+)]
+fn quickwit_predicate_pushdown(query: &str) -> Result<()> {
+    block_on(predicate_pushdown_same_results(query))
 }
