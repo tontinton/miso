@@ -2,6 +2,7 @@ use std::collections::BTreeSet;
 
 use async_recursion::async_recursion;
 use convert_sort_limit_to_topn::ConvertSortLimitToTopN;
+use merge_filters_into_and_filter::MergeFiltersIntoAndFilter;
 use pattern::{Group, Pattern};
 use push_count_into_scan::PushCountIntoScan;
 use push_filter_and_limit_into_union::PushFilterAndLimitIntoUnion;
@@ -18,6 +19,7 @@ use tokio::task::yield_now;
 use crate::workflow::{WorkflowStep, WorkflowStepKind};
 
 mod convert_sort_limit_to_topn;
+mod merge_filters_into_and_filter;
 mod pattern;
 mod push_count_into_scan;
 mod push_filter_and_limit_into_union;
@@ -86,6 +88,7 @@ impl Optimizer {
     pub fn no_predicate_pushdowns() -> Self {
         Self::new(vec![vec![
             opt!(ReorderFilterBeforeSort),
+            opt!(MergeFiltersIntoAndFilter),
             opt!(PushLimitIntoLimit),
             opt!(ConvertSortLimitToTopN),
             opt!(PushLimitIntoTopN),
@@ -113,6 +116,7 @@ impl Default for Optimizer {
             vec![
                 // Filter.
                 opt!(ReorderFilterBeforeSort),
+                opt!(MergeFiltersIntoAndFilter),
                 opt!(PushFilterIntoScan),
                 // Limit.
                 opt!(PushLimitIntoLimit),

@@ -76,19 +76,28 @@ async fn filter_before_sort() {
         Box::new(FilterAst::Id("a".to_string())),
         Box::new(FilterAst::Lit(serde_json::Value::String("b".to_string()))),
     ));
-    let filter2 = S::Filter(FilterAst::Ne(
-        Box::new(FilterAst::Id("c".to_string())),
-        Box::new(FilterAst::Lit(serde_json::Value::String("d".to_string()))),
-    ));
 
     check_default(
-        vec![
-            sort1.clone(),
-            sort2.clone(),
-            filter1.clone(),
-            filter2.clone(),
-        ],
-        vec![filter1, filter2, sort1, sort2],
+        vec![sort1.clone(), sort2.clone(), filter1.clone()],
+        vec![filter1, sort1, sort2],
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn merge_filters() {
+    let ast1 = FilterAst::Eq(
+        Box::new(FilterAst::Id("a".to_string())),
+        Box::new(FilterAst::Lit(serde_json::Value::String("b".to_string()))),
+    );
+    let ast2 = FilterAst::Ne(
+        Box::new(FilterAst::Id("c".to_string())),
+        Box::new(FilterAst::Lit(serde_json::Value::String("d".to_string()))),
+    );
+
+    check_default(
+        vec![S::Filter(ast1.clone()), S::Filter(ast2.clone())],
+        vec![S::Filter(FilterAst::And(vec![ast1, ast2]))],
     )
     .await;
 }
