@@ -27,7 +27,7 @@ use crate::{
     http_server::{to_workflow_steps, ConnectorsMap},
     optimizations::Optimizer,
     quickwit_connector::{QuickwitConfig, QuickwitConnector},
-    workflow::{Scan, Workflow, WorkflowStep},
+    workflow::{sortable_value::SortableValue, Scan, Workflow, WorkflowStep},
 };
 
 const QUICKWIT_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
@@ -263,18 +263,60 @@ async fn predicate_pushdown_same_results(query: &str, count: usize) -> Result<()
         .execute(cancel_rx2)
         .context("execute no predicate pushdown workflow")?;
 
-    let mut i = 0;
-    while let Some(log1) = pushdown_stream.next().await {
-        let log2 = no_pushdown_stream.next().await
-            .ok_or_eyre("expected the no predicate pushdown query to have a log when the connector query streamed a log")?;
-        assert_eq!(
-            log1.context("predicate pushdown workflow failure")?,
-            log2.context("no predicate pushdown workflow failure")?
-        );
-        i += 1;
+    let mut pushdown_results = Vec::with_capacity(count);
+    let mut no_pushdown_results = Vec::with_capacity(count);
+
+    let mut pushdown_done = false;
+    let mut no_pushdown_done = false;
+
+    loop {
+        if pushdown_done && no_pushdown_done {
+            break;
+        }
+
+        tokio::select! {
+            item = pushdown_stream.next(), if !pushdown_done => {
+                match item {
+                    Some(log) => {
+                        let log = log.context("predicate pushdown workflow failure")?;
+                        pushdown_results.push(SortableValue(serde_json::Value::Object(log)));
+                    }
+                    None => {
+                        assert_eq!(
+                            count,
+                            pushdown_results.len(),
+                            "number of logs returned in pushdown query is wrong"
+                        );
+                        pushdown_done = true;
+                    }
+                }
+            }
+            item = no_pushdown_stream.next(), if !no_pushdown_done => {
+                match item {
+                    Some(log) => {
+                        let log = log.context("no predicate pushdown workflow failure")?;
+                        no_pushdown_results.push(SortableValue(serde_json::Value::Object(log)));
+                    }
+                    None => {
+                        assert_eq!(
+                            count,
+                            no_pushdown_results.len(),
+                            "number of logs returned in non pushdown query is wrong"
+                        );
+                        no_pushdown_done = true;
+                    }
+                }
+            }
+        }
     }
 
-    assert_eq!(count, i, "number of logs returned is wrong");
+    pushdown_results.sort();
+    no_pushdown_results.sort();
+
+    assert_eq!(
+        pushdown_results, no_pushdown_results,
+        "result of pushdown query should equal results of non pushdown query, after sorting"
+    );
 
     Ok(())
 }
@@ -311,6 +353,24 @@ async fn predicate_pushdown_same_results(query: &str, count: usize) -> Result<()
     ]"#,
     1;
     "filter_eq_and_exists"
+)]
+#[test_case(
+    r#"[
+        {"scan": ["test", "stack"]},
+        {
+          "summarize": {
+            "aggs": {
+              "minQuestionId": {"min": "questionId"},
+              "maxQuestionId": {"max": "questionId"},
+              "sumQuestionId": {"sum": "questionId"},
+              "count": "count"
+            },
+            "by": ["user"]
+          }
+        }
+    ]"#,
+    5;
+    "summarize_min_max_count"
 )]
 fn quickwit_predicate_pushdown(query: &str, count: usize) -> Result<()> {
     block_on(predicate_pushdown_same_results(query, count))

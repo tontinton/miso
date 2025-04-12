@@ -32,7 +32,7 @@ pub mod limit;
 pub mod project;
 mod serde_json_utils;
 pub mod sort;
-mod sortable_value;
+pub mod sortable_value;
 pub mod summarize;
 pub mod topn;
 
