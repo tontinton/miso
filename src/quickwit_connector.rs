@@ -918,6 +918,10 @@ impl Connector for QuickwitConnector {
         handle: &dyn QueryHandle,
     ) -> Option<Box<dyn QueryHandle>> {
         let handle = downcast_unwrap!(handle, QuickwitHandle);
+        if handle.sorts.is_some() {
+            return None;
+        }
+
         if let Some(limit) = handle.limit {
             if limit < max {
                 return None;
