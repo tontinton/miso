@@ -16,7 +16,8 @@ use crate::{
     connector::{Connector, QueryHandle, QueryResponse, Split},
     http_server::to_workflow_steps,
     log::Log,
-    workflow::Workflow,
+    optimizations::Optimizer,
+    workflow::{sortable_value::SortableValue, Workflow},
 };
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -133,30 +134,59 @@ async fn check_multi_connectors(
     )
     .await
     .expect("workflow steps to compile");
-    let workflow = Workflow::new(steps);
+
+    let optimizer = Optimizer::default();
+
+    let optimizations_workflow = Workflow::new(optimizer.optimize(steps.clone()).await);
+    let no_optimizations_workflow = Workflow::new(steps);
 
     let (_cancel_tx, cancel_rx) = watch::channel(());
 
-    let mut logs_stream = workflow.execute(cancel_rx).context("workflow execute")?;
+    let mut logs_stream = no_optimizations_workflow
+        .execute(cancel_rx)
+        .context("non optimized workflow execute")?;
 
-    let mut i = 0;
+    let mut logs = Vec::new();
+
     let mut expected_logs_iter = expected_logs.into_iter();
     while let Some(log) = logs_stream.try_next().await? {
         let test_log = expected_logs_iter
             .next()
             .expect("expected there to be more logs to test");
         assert_eq!(
-            test_log, log,
-            "logs[{i}] not equal (left is expected, right is what we received)"
+            test_log,
+            log,
+            "logs[{}] not equal (left is expected, right is what we received)",
+            logs.len()
         );
 
-        i += 1;
+        logs.push(SortableValue(serde_json::Value::Object(log)));
     }
 
     let left: Vec<_> = expected_logs_iter.collect();
     assert!(
         left.is_empty(),
-        "expected no more logs to test, collected: {i}, left: {left:?}",
+        "expected no more logs to test, collected: {}, left: {:?}",
+        logs.len(),
+        left
+    );
+
+    let (_cancel_tx, cancel_rx) = watch::channel(());
+    let mut logs_stream = optimizations_workflow
+        .execute(cancel_rx)
+        .context("optimized workflow execute")?;
+
+    let mut optimized_logs = Vec::with_capacity(logs.len());
+    while let Some(log) = logs_stream.try_next().await? {
+        optimized_logs.push(SortableValue(serde_json::Value::Object(log)));
+    }
+
+    logs.sort();
+    optimized_logs.sort();
+
+    assert_eq!(
+        logs, optimized_logs,
+        "results of workflow should equal results of optimized workflow query, after sorting"
     );
 
     Ok(())
