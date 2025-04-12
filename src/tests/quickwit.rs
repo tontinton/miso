@@ -372,6 +372,14 @@ async fn predicate_pushdown_same_results(query: &str, count: usize) -> Result<()
     5;
     "summarize_min_max_count"
 )]
+#[test_case(
+    r#"[
+        {"scan": ["test", "stack"]},
+        "count"
+    ]"#,
+    1;
+    "count"
+)]
 fn quickwit_predicate_pushdown(query: &str, count: usize) -> Result<()> {
     block_on(predicate_pushdown_same_results(query, count))
 }
