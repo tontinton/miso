@@ -8,7 +8,7 @@ use color_eyre::{
     eyre::{bail, Context, OptionExt},
     Result,
 };
-use futures_util::StreamExt;
+use futures_util::TryStreamExt;
 use reqwest::{header::CONTENT_TYPE, Client, Response};
 use serde::Serialize;
 use test_case::test_case;
@@ -275,10 +275,9 @@ async fn predicate_pushdown_same_results(query: &str, count: usize) -> Result<()
         }
 
         tokio::select! {
-            item = pushdown_stream.next(), if !pushdown_done => {
-                match item {
+            item = pushdown_stream.try_next(), if !pushdown_done => {
+                match item.context("predicate pushdown workflow failure")? {
                     Some(log) => {
-                        let log = log.context("predicate pushdown workflow failure")?;
                         pushdown_results.push(SortableValue(serde_json::Value::Object(log)));
                     }
                     None => {
@@ -291,10 +290,9 @@ async fn predicate_pushdown_same_results(query: &str, count: usize) -> Result<()
                     }
                 }
             }
-            item = no_pushdown_stream.next(), if !no_pushdown_done => {
-                match item {
+            item = no_pushdown_stream.try_next(), if !no_pushdown_done => {
+                match item.context("non predicate pushdown workflow failure")? {
                     Some(log) => {
-                        let log = log.context("no predicate pushdown workflow failure")?;
                         no_pushdown_results.push(SortableValue(serde_json::Value::Object(log)));
                     }
                     None => {
@@ -315,7 +313,7 @@ async fn predicate_pushdown_same_results(query: &str, count: usize) -> Result<()
 
     assert_eq!(
         pushdown_results, no_pushdown_results,
-        "result of pushdown query should equal results of non pushdown query, after sorting"
+        "results of pushdown query should equal results of non pushdown query, after sorting"
     );
 
     Ok(())
