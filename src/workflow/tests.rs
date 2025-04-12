@@ -610,6 +610,21 @@ async fn sort_limit() -> Result<()> {
 }
 
 #[tokio::test]
+async fn sort_limit_count() -> Result<()> {
+    check(
+        r#"[
+            {"scan": ["test", "c"]},
+            {"sort": [{"by": "world"}, {"by": "test", "order": "desc"}]},
+            {"limit": 2},
+            "count"
+        ]"#,
+        r#"[{"world": 3, "test": 1}, {"world": 2, "test": 3}, {"world": 2, "test": 6}]"#,
+        r#"[{"count": 2}]"#,
+    )
+    .await
+}
+
+#[tokio::test]
 async fn summarize() -> Result<()> {
     check(
         r#"[
