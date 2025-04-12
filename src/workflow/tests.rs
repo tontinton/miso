@@ -727,3 +727,13 @@ async fn count() -> Result<()> {
     )
     .await
 }
+
+#[tokio::test]
+async fn count_on_count() -> Result<()> {
+    check(
+        r#"[{"scan": ["test", "c"]}, "count", "count"]"#,
+        r#"[{"world": 3}, {"test": 1}, {"world": 2, "test": 3}, {"world": 2, "test": 6}]"#,
+        r#"[{"count": 1}]"#,
+    )
+    .await
+}

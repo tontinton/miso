@@ -120,12 +120,6 @@ pub(crate) async fn to_workflow_steps(
                 ));
             }
             QueryStep::Count => {
-                if i != num_steps - 1 {
-                    return Err(HttpError::new(
-                        StatusCode::BAD_REQUEST,
-                        "count must be the last step".to_string(),
-                    ));
-                }
                 steps.push(WorkflowStep::Count);
             }
         }
