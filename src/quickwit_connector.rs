@@ -951,17 +951,18 @@ impl Connector for QuickwitConnector {
     fn apply_topn(
         &self,
         sorts: &[Sort],
-        max: u32,
+        mut max: u32,
         handle: &dyn QueryHandle,
     ) -> Option<Box<dyn QueryHandle>> {
         let handle = downcast_unwrap!(handle, QuickwitHandle);
         if handle.sorts.is_some() {
+            // Cannot top-n over top-n in Quickwit.
             return None;
         }
 
         if let Some(limit) = handle.limit {
             if limit < max {
-                return None;
+                max = limit;
             }
         }
 
