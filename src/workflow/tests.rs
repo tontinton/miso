@@ -110,8 +110,15 @@ async fn check_multi_connectors(
     input: BTreeMap<&str, BTreeMap<&str, &str>>,
     expected: &str,
 ) -> Result<()> {
-    let expected_logs: Vec<Log> =
-        serde_json::from_str(expected).context("parse expected output logs from json")?;
+    let expected_logs = {
+        let mut v: Vec<_> = serde_json::from_str::<Vec<serde_json::Value>>(expected)
+            .context("parse expected output logs from json")?
+            .into_iter()
+            .map(SortableValue)
+            .collect();
+        v.sort();
+        v
+    };
 
     let mut connectors = BTreeMap::new();
     for (connector_name, collections) in input {
@@ -141,34 +148,19 @@ async fn check_multi_connectors(
     let no_optimizations_workflow = Workflow::new(steps);
 
     let (_cancel_tx, cancel_rx) = watch::channel(());
-
     let mut logs_stream = no_optimizations_workflow
         .execute(cancel_rx)
         .context("non optimized workflow execute")?;
 
     let mut logs = Vec::new();
-
-    let mut expected_logs_iter = expected_logs.into_iter();
-    while let Some(log) = logs_stream.try_next().await? {
-        let test_log = expected_logs_iter
-            .next()
-            .expect("expected there to be more logs to test");
-        assert_eq!(
-            test_log,
-            log,
-            "logs[{}] not equal (left is expected, right is what we received)",
-            logs.len()
-        );
-
+    while let Some(log) = logs_stream.try_next().await.context("log stream")? {
         logs.push(SortableValue(serde_json::Value::Object(log)));
     }
+    logs.sort();
 
-    let left: Vec<_> = expected_logs_iter.collect();
-    assert!(
-        left.is_empty(),
-        "expected no more logs to test, collected: {}, left: {:?}",
-        logs.len(),
-        left
+    assert_eq!(
+        expected_logs, logs,
+        "logs not equal to expected (left is expected, right is what we received)",
     );
 
     let (_cancel_tx, cancel_rx) = watch::channel(());
@@ -180,13 +172,11 @@ async fn check_multi_connectors(
     while let Some(log) = logs_stream.try_next().await? {
         optimized_logs.push(SortableValue(serde_json::Value::Object(log)));
     }
-
-    logs.sort();
     optimized_logs.sort();
 
     assert_eq!(
         logs, optimized_logs,
-        "results of workflow should equal results of optimized workflow query, after sorting"
+        "results of workflow should equal results of optimized workflow query, even after sorting"
     );
 
     Ok(())
@@ -763,6 +753,28 @@ async fn count_on_count() -> Result<()> {
         r#"[{"scan": ["test", "c"]}, "count", "count"]"#,
         r#"[{"world": 3}, {"test": 1}, {"world": 2, "test": 3}, {"world": 2, "test": 6}]"#,
         r#"[{"count": 1}]"#,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn union() -> Result<()> {
+    check_multi_collection(
+        r#"[
+            {"scan": ["test", "x"]},
+            {"union": [{"scan": ["test", "y"]}]}
+        ]"#,
+        btreemap!{
+            "x" => r#"[{"id": 1, "value": "one"}, {"id": 2, "value": "two"}, {"id": 3, "value": "three"}]"#,
+            "y" => r#"[{"id": 4, "value": "four"}, {"id": 5, "value": "five"}]"#,
+        },
+        r#"[
+            {"id": 1, "value": "one"},
+            {"id": 2, "value": "two"},
+            {"id": 3, "value": "three"},
+            {"id": 4, "value": "four"},
+            {"id": 5, "value": "five"}
+        ]"#,
     )
     .await
 }
