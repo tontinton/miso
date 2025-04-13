@@ -5,11 +5,12 @@ use convert_sort_limit_to_topn::ConvertSortLimitToTopN;
 use merge_filters_into_and_filter::MergeFiltersIntoAndFilter;
 use pattern::{Group, Pattern};
 use push_count_into_scan::PushCountIntoScan;
-use push_filter_and_limit_into_union::PushFilterAndLimitIntoUnion;
 use push_filter_into_scan::PushFilterIntoScan;
+use push_filter_into_union::PushFilterIntoUnion;
 use push_limit_into_limit::PushLimitIntoLimit;
 use push_limit_into_scan::PushLimitIntoScan;
 use push_limit_into_topn::PushLimitIntoTopN;
+use push_limit_into_union::PushLimitIntoUnion;
 use push_summarize_into_scan::PushSummarizeIntoScan;
 use push_topn_into_scan::PushTopNIntoScan;
 use push_union_into_scan::PushUnionIntoScan;
@@ -23,11 +24,12 @@ mod convert_sort_limit_to_topn;
 mod merge_filters_into_and_filter;
 mod pattern;
 mod push_count_into_scan;
-mod push_filter_and_limit_into_union;
 mod push_filter_into_scan;
+mod push_filter_into_union;
 mod push_limit_into_limit;
 mod push_limit_into_scan;
 mod push_limit_into_topn;
+mod push_limit_into_union;
 mod push_summarize_into_scan;
 mod push_topn_into_scan;
 mod push_union_into_scan;
@@ -114,7 +116,6 @@ impl Optimizer {
 impl Default for Optimizer {
     fn default() -> Self {
         Self::new(vec![
-            // First pass.
             vec![
                 // Filter.
                 opt!(ReorderFilterBeforeSort),
@@ -127,17 +128,17 @@ impl Default for Optimizer {
                 opt!(PushLimitIntoScan),
                 opt!(PushTopNIntoScan),
                 // Count.
-                opt!(RemoveRedundantSortsBeforeCount),
                 opt!(PushCountIntoScan),
+                opt!(RemoveRedundantSortsBeforeCount),
                 // Summarize.
                 opt!(PushSummarizeIntoScan),
                 // Union.
                 opt!(PushUnionIntoScan),
+                opt!(PushFilterIntoUnion),
             ],
-            // Second pass - runs only after nothing to do on first pass.
             vec![
                 // Union.
-                opt_once!(PushFilterAndLimitIntoUnion),
+                opt_once!(PushLimitIntoUnion),
             ],
         ])
     }
