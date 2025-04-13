@@ -57,34 +57,56 @@ impl<'a> ProjectInterpreter<'a> {
     }
 }
 
-pub async fn project_stream(
+async fn project_stream_ex(
     project_fields: Vec<ProjectField>,
     mut input_stream: LogStream,
+    extend: bool,
 ) -> Result<LogTryStream> {
     Ok(Box::pin(try_stream! {
-        while let Some(log) = input_stream.next().await {
-            let interpreter = ProjectInterpreter::new(&log);
-
+        while let Some(mut log) = input_stream.next().await {
             let mut output = Log::new();
 
-            for field in &project_fields {
-                match interpreter.eval(&field.from) {
-                    Ok(Val(None)) => {} // Skip.
-                    Ok(v) => {
-                        let owned = match v.0.unwrap() {
-                            Cow::Borrowed(borrowed) => borrowed.clone(),
-                            Cow::Owned(owned) => owned,
-                        };
-                        output.insert(field.to.clone(), owned);
-                    }
-                    Err(e) => {
-                        warn!("Project failed: {e}");
-                        continue;
-                    }
-                };
+            {
+                let interpreter = ProjectInterpreter::new(&log);
+
+                for field in &project_fields {
+                    match interpreter.eval(&field.from) {
+                        Ok(Val(None)) => {} // Skip.
+                        Ok(v) => {
+                            let owned = match v.0.unwrap() {
+                                Cow::Borrowed(borrowed) => borrowed.clone(),
+                                Cow::Owned(owned) => owned,
+                            };
+                            output.insert(field.to.clone(), owned);
+                        }
+                        Err(e) => {
+                            warn!("Project failed: {e}");
+                            continue;
+                        }
+                    };
+                }
             }
 
-            yield output;
+            if extend {
+                log.extend(output);
+                yield log;
+            } else {
+                yield output;
+            }
         }
     }))
+}
+
+pub async fn project_stream(
+    project_fields: Vec<ProjectField>,
+    input_stream: LogStream,
+) -> Result<LogTryStream> {
+    project_stream_ex(project_fields, input_stream, false).await
+}
+
+pub async fn extend_stream(
+    project_fields: Vec<ProjectField>,
+    input_stream: LogStream,
+) -> Result<LogTryStream> {
+    project_stream_ex(project_fields, input_stream, true).await
 }

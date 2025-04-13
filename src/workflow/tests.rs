@@ -534,6 +534,31 @@ async fn project_add() -> Result<()> {
 }
 
 #[tokio::test]
+async fn extend_add() -> Result<()> {
+    check(
+        r#"[
+            {"scan": ["test", "c"]},
+            {
+                "extend": [
+                    {
+                        "to": "test",
+                        "from": {
+                            "+": [
+                                {"cast": ["float", {"id": "world"}]},
+                                {"lit": 2}
+                            ]
+                        }
+                    }
+                ]
+            }
+        ]"#,
+        r#"[{"world": 2}, {"world": 1}, {"hello": "world"}]"#,
+        r#"[{"world": 2, "test": 4.0}, {"world": 1, "test": 3.0}, {"hello": "world"}]"#,
+    )
+    .await
+}
+
+#[tokio::test]
 async fn sort_asc_then_desc() -> Result<()> {
     check(
         r#"[

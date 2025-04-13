@@ -5,6 +5,7 @@ use color_eyre::eyre::{bail, Context, Result};
 use futures_util::{future::try_join_all, stream::FuturesUnordered, StreamExt};
 use join::{join_streams, Join, JoinType};
 use kinded::Kinded;
+use project::extend_stream;
 use serde_json::Value;
 use summarize::{summarize_stream, Summarize};
 use tokio::{
@@ -80,6 +81,9 @@ pub enum WorkflowStep {
     /// Project to select only some of the fields, and optionally rename some.
     Project(Vec<ProjectField>),
 
+    /// Same as project but keeps original fields, and adds new projected fields to the results.
+    Extend(Vec<ProjectField>),
+
     /// Limit to X amount of records.
     Limit(u32),
 
@@ -108,6 +112,7 @@ impl std::fmt::Display for WorkflowStep {
             WorkflowStep::Scan(..) => write!(f, "scan"),
             WorkflowStep::Filter(..) => write!(f, "filter"),
             WorkflowStep::Project(..) => write!(f, "project"),
+            WorkflowStep::Extend(..) => write!(f, "extend"),
             WorkflowStep::Limit(limit) => write!(f, "limit({})", limit),
             WorkflowStep::Sort(..) => write!(f, "sort"),
             WorkflowStep::TopN(.., limit) => write!(f, "top-n({})", limit),
@@ -239,6 +244,10 @@ impl WorkflowStep {
             WorkflowStep::Project(fields) => {
                 let stream = project_stream(fields, rx_stream(rx.unwrap())).await?;
                 stream_to_tx(stream, tx, "project").await?;
+            }
+            WorkflowStep::Extend(fields) => {
+                let stream = extend_stream(fields, rx_stream(rx.unwrap())).await?;
+                stream_to_tx(stream, tx, "extend").await?;
             }
             WorkflowStep::Limit(limit) => {
                 let stream = limit_stream(limit, rx_stream(rx.unwrap()))?;

@@ -96,6 +96,9 @@ pub(crate) async fn to_workflow_steps(
             QueryStep::Project(fields) => {
                 steps.push(WorkflowStep::Project(fields));
             }
+            QueryStep::Extend(fields) => {
+                steps.push(WorkflowStep::Extend(fields));
+            }
             QueryStep::Limit(max) => {
                 steps.push(WorkflowStep::Limit(max));
             }
@@ -134,6 +137,7 @@ pub(crate) enum QueryStep {
     Scan(/*connector=*/ String, /*collection=*/ String),
     Filter(FilterAst),
     Project(Vec<ProjectField>),
+    Extend(Vec<ProjectField>),
     Limit(u32),
     Sort(Vec<Sort>),
     Top(Vec<Sort>, u32),
