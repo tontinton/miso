@@ -114,8 +114,15 @@ impl QuickwitHandle {
 }
 
 #[derive(Debug, Deserialize)]
+struct DocMapping {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    timestamp_field: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
 struct IndexResponseConfig {
     index_id: String,
+    doc_mapping: DocMapping,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1045,6 +1052,7 @@ impl Connector for QuickwitConnector {
 
     fn apply_union(
         &self,
+        scan_collection: &str,
         union: &Workflow,
         handle: &dyn QueryHandle,
     ) -> Option<Box<dyn QueryHandle>> {
@@ -1058,6 +1066,19 @@ impl Connector for QuickwitConnector {
         let WorkflowStep::Scan(scan) = &union.steps[0] else {
             return None;
         };
+
+        let can_union = match (
+            self.collections.read().get(scan_collection).cloned(),
+            self.collections.read().get(&scan.collection).cloned(),
+        ) {
+            (None, _) | (_, None) => true,
+            (Some(l), Some(r)) => l == r,
+        };
+
+        if !can_union {
+            // Quickwit only supports multi index search when the timestamp fields are the same.
+            return None;
+        }
 
         Some(Box::new(handle.with_union(&scan.collection)))
     }

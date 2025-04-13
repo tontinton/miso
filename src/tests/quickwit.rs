@@ -274,7 +274,11 @@ async fn write_to_index(
     Ok(())
 }
 
-async fn predicate_pushdown_same_results(query: &str, count: usize) -> Result<()> {
+async fn predicate_pushdown_same_results(
+    query: &str,
+    count: usize,
+    fully_pushdown: bool,
+) -> Result<()> {
     let resources = get_test_resources().await;
     let connectors = resources.1.clone();
 
@@ -289,13 +293,22 @@ async fn predicate_pushdown_same_results(query: &str, count: usize) -> Result<()
     let no_pushdown_optimizer = Optimizer::no_predicate_pushdowns();
 
     let predicate_pushdown_steps = default_optimizer.optimize(steps.clone()).await;
-    assert_eq!(
-        predicate_pushdown_steps,
-        vec![WorkflowStep::Scan(
-            Scan::from_connector(connectors["test"].clone(), "stack".to_string()).await
-        )],
-        "query predicates should have been fully pushdown"
-    );
+
+    if fully_pushdown {
+        assert_eq!(
+            predicate_pushdown_steps,
+            vec![WorkflowStep::Scan(
+                Scan::from_connector(connectors["test"].clone(), "stack".to_string()).await
+            )],
+            "query predicates should have been fully pushdown"
+        );
+    } else {
+        assert!(
+            predicate_pushdown_steps.len() > 1,
+            "query predicates should have not have been fully pushdown: {:?}",
+            predicate_pushdown_steps
+        );
+    }
 
     let pushdown_workflow = Workflow::new(predicate_pushdown_steps);
     let no_pushdown_workflow = Workflow::new(no_pushdown_optimizer.optimize(steps).await);
@@ -372,7 +385,8 @@ async fn predicate_pushdown_same_results(query: &str, count: usize) -> Result<()
         {"sort": [{"by": "creationDate"}]},
         {"limit": 3}
     ]"#,
-    3;
+    3,
+    true;
     "top_n"
 )]
 #[test_case(
@@ -380,7 +394,8 @@ async fn predicate_pushdown_same_results(query: &str, count: usize) -> Result<()
         {"scan": ["test", "stack"]},
         {"filter": {"eq": [{"id": "acceptedAnswerId"}, {"lit": 12446}]}}
     ]"#,
-    1;
+    1,
+    true;
     "filter_eq"
 )]
 #[test_case(
@@ -396,7 +411,8 @@ async fn predicate_pushdown_same_results(query: &str, count: usize) -> Result<()
             }
         }
     ]"#,
-    1;
+    1,
+    true;
     "filter_eq_and_exists"
 )]
 #[test_case(
@@ -414,7 +430,8 @@ async fn predicate_pushdown_same_results(query: &str, count: usize) -> Result<()
           }
         }
     ]"#,
-    5;
+    5,
+    true;
     "summarize_min_max_count"
 )]
 #[test_case(
@@ -422,7 +439,8 @@ async fn predicate_pushdown_same_results(query: &str, count: usize) -> Result<()
         {"scan": ["test", "stack"]},
         "count"
     ]"#,
-    1;
+    1,
+    true;
     "count"
 )]
 #[test_case(
@@ -430,9 +448,23 @@ async fn predicate_pushdown_same_results(query: &str, count: usize) -> Result<()
         {"scan": ["test", "stack"]},
         {"union": [{"scan": ["test", "stack_mirror"]}]}
     ]"#,
-    20;
+    20,
+    true;
     "union"
 )]
-fn quickwit_predicate_pushdown(query: &str, count: usize) -> Result<()> {
-    block_on(predicate_pushdown_same_results(query, count))
+#[test_case(
+    r#"[
+        {"scan": ["test", "stack"]},
+        {"union": [{"scan": ["test", "hdfs"]}]}
+    ]"#,
+    20,
+    false;
+    "union_not_same_timestamp_field"
+)]
+fn quickwit_predicate_pushdown(query: &str, count: usize, fully_pushdown: bool) -> Result<()> {
+    block_on(predicate_pushdown_same_results(
+        query,
+        count,
+        fully_pushdown,
+    ))
 }

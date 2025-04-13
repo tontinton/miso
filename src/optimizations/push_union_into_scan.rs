@@ -19,7 +19,7 @@ impl Optimization for PushUnionIntoScan {
 
         scan.handle = scan
             .connector
-            .apply_union(workflow, scan.handle.as_ref())?
+            .apply_union(&scan.collection, workflow, scan.handle.as_ref())?
             .into();
 
         Some(vec![WorkflowStep::Scan(scan)])

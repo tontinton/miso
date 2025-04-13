@@ -100,6 +100,7 @@ pub trait Connector: Debug + Send + Sync {
     /// None means it can't predicate pushdown union.
     fn apply_union(
         &self,
+        _scan_collection: &str,
         _union: &Workflow,
         _handle: &dyn QueryHandle,
     ) -> Option<Box<dyn QueryHandle>> {
