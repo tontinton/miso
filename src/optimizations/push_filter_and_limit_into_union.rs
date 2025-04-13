@@ -10,7 +10,7 @@ pub struct PushFilterAndLimitIntoUnion;
 
 impl Optimization for PushFilterAndLimitIntoUnion {
     fn pattern(&self) -> Pattern {
-        pattern!((Union+) (Filter* [Limit TopN]))
+        pattern!((Union+) (Filter*? [Limit TopN]))
     }
 
     fn apply(&self, steps: &[WorkflowStep], groups: &[Group]) -> Option<Vec<WorkflowStep>> {
