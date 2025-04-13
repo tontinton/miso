@@ -131,7 +131,7 @@ async fn get_quickwit_connector_map(image: &QuickwitImage) -> Result<ConnectorsM
         || async {
             for (index_name, _) in INDEXES {
                 connector
-                    .does_collection_exist("stack")
+                    .does_collection_exist(index_name)
                     .then_some(())
                     .ok_or_eyre(format!(
                         "timeout waiting for '{index_name}' collection to exist"
