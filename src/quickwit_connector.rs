@@ -624,15 +624,8 @@ impl QuickwitConnector {
         scroll_size: u16,
         limit: Option<u32>,
     ) -> Result<LogTryStream> {
-        if let Some(limit) = limit {
-            if limit == 0 {
-                return Ok(Box::pin(stream::empty()));
-            }
-        }
-
         let start = Instant::now();
 
-        let mut streamed = 0;
         let (mut logs, mut scroll_id) =
             begin_search(&client, &url, &index, query, &scroll_timeout, scroll_size).await?;
 
@@ -644,6 +637,8 @@ impl QuickwitConnector {
         }
 
         Ok(Box::pin(try_stream! {
+            let mut streamed = 0;
+
             for log in logs {
                 yield log;
                 streamed += 1;
@@ -753,6 +748,7 @@ impl QuickwitConnector {
         url: String,
         index: String,
         query: Option<Value>,
+        limit: Option<u32>,
         group_by: Vec<String>,
         count_fields: Vec<String>,
     ) -> Result<LogTryStream> {
@@ -790,8 +786,16 @@ impl QuickwitConnector {
                 return;
             }
 
+            let mut streamed = 0;
+
             for log in logs {
                 yield log;
+                streamed += 1;
+                if let Some(limit) = limit {
+                    if streamed >= limit {
+                        return;
+                    }
+                }
             }
         }))
     }
@@ -890,6 +894,12 @@ impl Connector for QuickwitConnector {
             return Ok(QueryResponse::Count(result));
         }
 
+        if let Some(limit) = limit {
+            if limit == 0 {
+                return Ok(QueryResponse::Logs(Box::pin(stream::empty())));
+            }
+        }
+
         if is_aggregation_query {
             return Ok(QueryResponse::Logs(
                 Self::query_aggregation(
@@ -897,6 +907,7 @@ impl Connector for QuickwitConnector {
                     url,
                     collections,
                     query,
+                    limit,
                     handle.group_by.clone(),
                     handle.count_fields.clone(),
                 )
