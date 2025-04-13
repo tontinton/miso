@@ -3,6 +3,7 @@ use std::collections::BTreeSet;
 use async_recursion::async_recursion;
 use convert_sort_limit_to_topn::ConvertSortLimitToTopN;
 use merge_filters_into_and_filter::MergeFiltersIntoAndFilter;
+use merge_topn_limit::MergeTopNLimit;
 use pattern::{Group, Pattern};
 use push_count_into_scan::PushCountIntoScan;
 use push_filter_into_scan::PushFilterIntoScan;
@@ -23,6 +24,7 @@ use crate::workflow::{WorkflowStep, WorkflowStepKind};
 
 mod convert_sort_limit_to_topn;
 mod merge_filters_into_and_filter;
+mod merge_topn_limit;
 mod pattern;
 mod push_count_into_scan;
 mod push_filter_into_scan;
@@ -98,6 +100,7 @@ impl Optimizer {
             opt!(PushLimitIntoLimit),
             opt!(ConvertSortLimitToTopN),
             opt!(PushLimitIntoTopN),
+            opt!(MergeTopNLimit),
             opt!(RemoveRedundantSortsBeforeCount),
         ]])
     }
@@ -128,6 +131,7 @@ impl Default for Optimizer {
                 opt!(ConvertSortLimitToTopN),
                 opt!(PushLimitIntoTopN),
                 opt!(PushLimitIntoScan),
+                opt!(MergeTopNLimit),
                 opt!(PushTopNIntoScan),
                 // Count.
                 opt!(PushCountIntoScan),
