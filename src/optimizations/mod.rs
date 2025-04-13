@@ -122,13 +122,13 @@ impl Default for Optimizer {
                 opt!(PushFilterIntoScan),
                 // Limit.
                 opt!(PushLimitIntoLimit),
-                opt!(PushLimitIntoScan),
                 opt!(ConvertSortLimitToTopN),
                 opt!(PushLimitIntoTopN),
+                opt!(PushLimitIntoScan),
                 opt!(PushTopNIntoScan),
                 // Count.
-                opt!(PushCountIntoScan),
                 opt!(RemoveRedundantSortsBeforeCount),
+                opt!(PushCountIntoScan),
                 // Summarize.
                 opt!(PushSummarizeIntoScan),
                 // Union.
