@@ -20,12 +20,19 @@ pub enum FilterAst {
     Contains(Box<FilterAst>, Box<FilterAst>),   // right in left
     StartsWith(Box<FilterAst>, Box<FilterAst>), // left starts with right
     EndsWith(Box<FilterAst>, Box<FilterAst>),   // left ends with right
-    Eq(Box<FilterAst>, Box<FilterAst>),         // ==
-    Ne(Box<FilterAst>, Box<FilterAst>),         // !=
-    Gt(Box<FilterAst>, Box<FilterAst>),         // >
-    Gte(Box<FilterAst>, Box<FilterAst>),        // >=
-    Lt(Box<FilterAst>, Box<FilterAst>),         // <
-    Lte(Box<FilterAst>, Box<FilterAst>),        // <=
+
+    #[serde(rename = "==")]
+    Eq(Box<FilterAst>, Box<FilterAst>),
+    #[serde(rename = "!=")]
+    Ne(Box<FilterAst>, Box<FilterAst>),
+    #[serde(rename = ">")]
+    Gt(Box<FilterAst>, Box<FilterAst>),
+    #[serde(rename = ">=")]
+    Gte(Box<FilterAst>, Box<FilterAst>),
+    #[serde(rename = "<")]
+    Lt(Box<FilterAst>, Box<FilterAst>),
+    #[serde(rename = "<=")]
+    Lte(Box<FilterAst>, Box<FilterAst>),
 
     #[serde(rename = "*")]
     Mul(Box<FilterAst>, Box<FilterAst>),

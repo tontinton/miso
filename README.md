@@ -33,7 +33,7 @@ curl -N -H 'Content-Type: application/json' localhost:8080/query -d '{
         {"on": ["min_tenant", "questionId"]},
         [
           { "scan": ["localqw", "stackoverflow"] },
-          { "filter": {"gt": [{"id": "questionId"}, {"lit": 80}]} }
+          { "filter": {">": [{"id": "questionId"}, {"lit": 80}]} }
         ]
       ]
     }

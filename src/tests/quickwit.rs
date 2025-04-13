@@ -396,7 +396,7 @@ async fn predicate_pushdown_same_results(
 #[test_case(
     r#"[
         {"scan": ["test", "stack"]},
-        {"filter": {"eq": [{"id": "acceptedAnswerId"}, {"lit": 12446}]}}
+        {"filter": {"==": [{"id": "acceptedAnswerId"}, {"lit": 12446}]}}
     ]"#,
     r#"[{"scan": ["test", "stack"]}]"#,
     1;
@@ -408,7 +408,7 @@ async fn predicate_pushdown_same_results(
         {
             "filter": {
                 "and": [{
-                    "eq": [{"id": "questionId"}, {"lit": 11}]
+                    "==": [{"id": "questionId"}, {"lit": 11}]
                 }, {
                     "exists": "answerId"
                 }]
@@ -513,7 +513,7 @@ async fn predicate_pushdown_same_results(
     r#"[
         {"scan": ["test", "stack"]},
         {"union": [{"scan": ["test", "stack_mirror"]}]},
-        {"filter": {"lt": [{"id": "acceptedAnswerId"}, {"lit": 100}]}},
+        {"filter": {"<": [{"id": "acceptedAnswerId"}, {"lit": 100}]}},
         {"top": [[{"by": "acceptedAnswerId"}], 1]}
     ]"#,
     r#"[{"scan": ["test", "stack"]}]"#,
