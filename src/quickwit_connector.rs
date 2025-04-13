@@ -9,15 +9,11 @@ use async_stream::try_stream;
 use axum::async_trait;
 use color_eyre::eyre::{bail, Context, Result};
 use futures_util::stream;
+use parking_lot::RwLock;
 use reqwest::Client;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{json, to_string, Value};
-use tokio::{
-    select, spawn,
-    sync::{watch, RwLock},
-    task::JoinHandle,
-    time::sleep,
-};
+use tokio::{select, spawn, sync::watch, task::JoinHandle, time::sleep};
 use tracing::{debug, error, info, instrument};
 
 use crate::{
@@ -249,7 +245,8 @@ impl QuickwitConfig {
     }
 }
 
-type SharedCollections = Arc<RwLock<Vec<String>>>;
+type Collection = BTreeMap<String, Option<String>>;
+type SharedCollections = Arc<RwLock<Collection>>;
 
 #[derive(Debug)]
 pub struct QuickwitConnector {
@@ -535,7 +532,7 @@ async fn search_aggregation(
 }
 
 #[instrument(name = "GET and parse quickwit indexes")]
-async fn get_indexes(client: &Client, base_url: &str) -> Result<Vec<String>> {
+async fn get_indexes(client: &Client, base_url: &str) -> Result<Collection> {
     let url = format!("{}/api/v1/indexes", base_url);
     let response = client.get(&url).send().await.context("http request")?;
     if !response.status().is_success() {
@@ -543,14 +540,22 @@ async fn get_indexes(client: &Client, base_url: &str) -> Result<Vec<String>> {
     }
     let text = response.text().await.context("text from response")?;
     let data: Vec<IndexResponse> = serde_json::from_str(&text)?;
-    Ok(data.into_iter().map(|x| x.index_config.index_id).collect())
+    Ok(data
+        .into_iter()
+        .map(|x| {
+            (
+                x.index_config.index_id,
+                x.index_config.doc_mapping.timestamp_field,
+            )
+        })
+        .collect())
 }
 
 async fn refresh_indexes(client: &Client, url: &str, collections: &SharedCollections) {
     match get_indexes(client, url).await {
         Ok(indexes) => {
             debug!("Got indexes: {:?}", &indexes);
-            let mut guard = collections.write().await;
+            let mut guard = collections.write();
             *guard = indexes;
         }
         Err(e) => {
@@ -587,7 +592,7 @@ async fn run_interval_task(
 impl QuickwitConnector {
     pub fn new(config: QuickwitConfig) -> QuickwitConnector {
         let (shutdown_tx, shutdown_rx) = watch::channel(());
-        let collections = Arc::new(RwLock::new(Vec::new()));
+        let collections = Arc::new(RwLock::new(BTreeMap::new()));
         let interval_task = spawn(run_interval_task(
             config.clone(),
             collections.clone(),
@@ -787,12 +792,8 @@ impl QuickwitConnector {
 
 #[async_trait]
 impl Connector for QuickwitConnector {
-    async fn does_collection_exist(&self, collection: &str) -> bool {
-        self.collections
-            .read()
-            .await
-            .iter()
-            .any(|s| s == collection)
+    fn does_collection_exist(&self, collection: &str) -> bool {
+        self.collections.read().contains_key(collection)
     }
 
     async fn get_splits(&self) -> Vec<Arc<dyn Split>> {

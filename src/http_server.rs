@@ -78,7 +78,7 @@ pub(crate) async fn to_workflow_steps(
                 };
 
                 info!(?collection, "Checking whether collection exists");
-                if !connector.does_collection_exist(&collection).await {
+                if !connector.does_collection_exist(&collection) {
                     info!(?collection, "Collection doesn't exist");
                     return Err(HttpError::new(
                         StatusCode::NOT_FOUND,

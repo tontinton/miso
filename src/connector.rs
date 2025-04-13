@@ -38,7 +38,7 @@ pub trait QueryHandle: Any + Debug + Send + Sync {
 
 #[async_trait]
 pub trait Connector: Debug + Send + Sync {
-    async fn does_collection_exist(&self, collection: &str) -> bool;
+    fn does_collection_exist(&self, collection: &str) -> bool;
 
     fn get_handle(&self) -> Box<dyn QueryHandle>;
 

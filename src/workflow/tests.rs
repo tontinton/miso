@@ -53,7 +53,7 @@ impl TestConnector {
 
 #[async_trait]
 impl Connector for TestConnector {
-    async fn does_collection_exist(&self, collection: &str) -> bool {
+    fn does_collection_exist(&self, collection: &str) -> bool {
         self.collections.contains_key(collection)
     }
 
