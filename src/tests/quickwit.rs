@@ -444,6 +444,36 @@ async fn predicate_pushdown_same_results(
 #[test_case(
     r#"[
         {"scan": ["test", "stack"]},
+        {
+          "summarize": {
+            "aggs": {"minQuestionId": {"min": "questionId"}},
+            "by": ["user"]
+          }
+        },
+        {"top": [[{"by": "minQuestionId"}], 3]}
+    ]"#,
+    3,
+    false;
+    "summarize_then_topn"
+)]
+#[test_case(
+    r#"[
+        {"scan": ["test", "stack"]},
+        {"top": [[{"by": "questionId"}], 5]},
+        {
+          "summarize": {
+            "aggs": {"minQuestionId": {"min": "questionId"}},
+            "by": ["user"]
+          }
+        }
+    ]"#,
+    3,
+    false;
+    "topn_then_summarize"
+)]
+#[test_case(
+    r#"[
+        {"scan": ["test", "stack"]},
         "count"
     ]"#,
     1,
