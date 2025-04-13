@@ -998,6 +998,13 @@ impl Connector for QuickwitConnector {
         handle: &dyn QueryHandle,
     ) -> Option<Box<dyn QueryHandle>> {
         let handle = downcast_unwrap!(handle, QuickwitHandle);
+        if handle.limit.is_some() || handle.sorts.is_some() {
+            // Quickwit's query (like Elasticsearch's) is not pipelined, most similar to SQL.
+            // When you request it to both sort (or limit) and aggregate, it will always first
+            // aggregate and then sort (or limit), no way to control the order of these 2 AFAIK.
+            // So we do the aggregation in-process instead of pushing it down to Quickwit.
+            return None;
+        }
 
         let mut count_fields = Vec::new();
         let mut inner_aggs = BTreeMap::new();
