@@ -372,6 +372,32 @@ async fn filter_lte() -> Result<()> {
 }
 
 #[tokio::test]
+async fn filter_add_sub() -> Result<()> {
+    check(
+        r#"[
+            {"scan": ["test", "c"]},
+            {"filter": {"eq": [{"id": "world"}, {"-": [{"+": [{"lit": 3}, {"lit": 2}]}, {"lit": 4}]}]}}
+        ]"#,
+        r#"[{"hello": "world"}, {"world": 1}, {"world": 2}]"#,
+        r#"[{"world": 1}]"#,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn filter_mul_div() -> Result<()> {
+    check(
+        r#"[
+            {"scan": ["test", "c"]},
+            {"filter": {"eq": [{"id": "world"}, {"/": [{"*": [{"lit": 3}, {"lit": 2}]}, {"lit": 4}]}]}}
+        ]"#,
+        r#"[{"hello": "world"}, {"world": 1.5}, {"world": 2}]"#,
+        r#"[{"world": 1.5}]"#,
+    )
+    .await
+}
+
+#[tokio::test]
 async fn filter_and() -> Result<()> {
     check(
         r#"[

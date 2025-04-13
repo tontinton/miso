@@ -26,6 +26,15 @@ pub enum FilterAst {
     Gte(Box<FilterAst>, Box<FilterAst>),        // >=
     Lt(Box<FilterAst>, Box<FilterAst>),         // <
     Lte(Box<FilterAst>, Box<FilterAst>),        // <=
+
+    #[serde(rename = "*")]
+    Mul(Box<FilterAst>, Box<FilterAst>),
+    #[serde(rename = "/")]
+    Div(Box<FilterAst>, Box<FilterAst>),
+    #[serde(rename = "+")]
+    Plus(Box<FilterAst>, Box<FilterAst>),
+    #[serde(rename = "-")]
+    Minus(Box<FilterAst>, Box<FilterAst>),
 }
 
 struct FilterInterpreter {
@@ -72,6 +81,10 @@ impl FilterInterpreter {
             FilterAst::Gte(l, r) => self.eval(l)?.gte(self.eval(r)?),
             FilterAst::Lt(l, r) => self.eval(l)?.lt(self.eval(r)?),
             FilterAst::Lte(l, r) => self.eval(l)?.lte(self.eval(r)?),
+            FilterAst::Mul(l, r) => self.eval(l)?.mul(self.eval(r)?),
+            FilterAst::Div(l, r) => self.eval(l)?.div(self.eval(r)?),
+            FilterAst::Plus(l, r) => self.eval(l)?.add(self.eval(r)?),
+            FilterAst::Minus(l, r) => self.eval(l)?.sub(self.eval(r)?),
         }
     }
 }
