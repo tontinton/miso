@@ -960,6 +960,11 @@ impl Connector for QuickwitConnector {
             return None;
         }
 
+        if !handle.group_by.is_empty() {
+            // Maybe this can actually be implemented, need to check in the future.
+            return None;
+        }
+
         if let Some(limit) = handle.limit {
             if limit < max {
                 max = limit;
