@@ -514,11 +514,11 @@ async fn predicate_pushdown_same_results(
         {"scan": ["test", "stack"]},
         {"union": [{"scan": ["test", "stack_mirror"]}]},
         {"filter": {"lt": [{"id": "acceptedAnswerId"}, {"lit": 100}]}},
-        {"limit": 1}
+        {"top": [[{"by": "acceptedAnswerId"}], 1]}
     ]"#,
     r#"[{"scan": ["test", "stack"]}]"#,
     1;
-    "union_filter_limit"
+    "union_filter_topn"
 )]
 fn quickwit_predicate_pushdown(
     query: &str,
