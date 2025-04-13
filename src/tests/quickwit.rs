@@ -468,6 +468,17 @@ async fn predicate_pushdown_same_results(
     false;
     "union_not_same_timestamp_field"
 )]
+#[test_case(
+    r#"[
+        {"scan": ["test", "stack"]},
+        {"union": [{"scan": ["test", "stack_mirror"]}]},
+        {"filter": {"lt": [{"id": "acceptedAnswerId"}, {"lit": 100}]}},
+        {"limit": 1}
+    ]"#,
+    1,
+    true;
+    "union_filter_limit"
+)]
 fn quickwit_predicate_pushdown(query: &str, count: usize, fully_pushdown: bool) -> Result<()> {
     block_on(predicate_pushdown_same_results(
         query,
