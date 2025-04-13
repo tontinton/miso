@@ -69,9 +69,13 @@ macro_rules! impl_op {
         match (lhs_val, rhs_val) {
             (Value::Number(l), Value::Number(r)) => {
                 if let (Some(l_i64), Some(r_i64)) = (l.as_i64(), r.as_i64()) {
-                    let result = $op(l_i64, r_i64);
-                    return Ok(Val::owned(Value::from(result)));
-                } else if let (Some(l_f64), Some(r_f64)) = (l.as_f64(), r.as_f64()) {
+                    if $op_str != "/" {
+                        let result = $op(l_i64, r_i64);
+                        return Ok(Val::owned(Value::from(result)));
+                    }
+                }
+
+                if let (Some(l_f64), Some(r_f64)) = (l.as_f64(), r.as_f64()) {
                     let result = $op(l_f64, r_f64);
                     match serde_json::Number::from_f64(result) {
                         Some(num) => return Ok(Val::owned(Value::Number(num))),
