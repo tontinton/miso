@@ -778,3 +778,46 @@ async fn union() -> Result<()> {
     )
     .await
 }
+
+#[tokio::test]
+async fn filter_non_existant_field_then_limit_after_union() -> Result<()> {
+    check_multi_collection(
+        r#"[
+            {"scan": ["test", "x"]},
+            {"union": [{"scan": ["test", "y"]}]},
+            {"filter": {"eq": [{"id": "id"}, {"lit": 2}]}},
+            {"limit": 4}
+        ]"#,
+        btreemap! {
+            "x" => r#"[{"id": 1}, {"id": 2}, {"id": 3}]"#,
+            "y" => r#"[{"xd": 1}, {"xd": 2}, {"xd": 3}]"#,
+        },
+        r#"[{"id": 2}]"#,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn filter_existant_field_then_limit_after_union() -> Result<()> {
+    check_multi_collection(
+        r#"[
+            {"scan": ["test", "x"]},
+            {"union": [{"scan": ["test", "y"]}]},
+            {
+                "filter": {
+                    "or": [
+                        {"not": {"exists": "id"}},
+                        {"eq": [{"id": "id"}, {"lit": 2}]}
+                    ]
+                }
+            },
+            {"limit": 4}
+        ]"#,
+        btreemap! {
+            "x" => r#"[{"id": 1}, {"id": 2}, {"id": 3}]"#,
+            "y" => r#"[{"xd": 1}, {"xd": 2}, {"xd": 3}]"#,
+        },
+        r#"[{"id": 2}, {"xd": 1}, {"xd": 2}, {"xd": 3}]"#,
+    )
+    .await
+}
