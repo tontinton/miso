@@ -130,6 +130,47 @@ async fn dont_remove_sorts_before_limit_before_count() {
 }
 
 #[tokio::test]
+async fn filter_into_union() {
+    let filter = S::Filter(FilterAst::Eq(
+        Box::new(FilterAst::Id("a".to_string())),
+        Box::new(FilterAst::Lit(serde_json::Value::String("b".to_string()))),
+    ));
+
+    check_default(
+        vec![S::Union(Workflow::new(vec![])), filter.clone()],
+        vec![filter.clone(), S::Union(Workflow::new(vec![filter]))],
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn limit_into_union() {
+    let limit = S::Limit(1);
+    check_default(
+        vec![S::Union(Workflow::new(vec![])), limit.clone()],
+        vec![limit.clone(), S::Union(Workflow::new(vec![limit]))],
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn topn_into_union() {
+    let topn = S::TopN(
+        vec![Sort {
+            by: "a".to_string(),
+            order: SortOrder::Asc,
+            nulls: NullsOrder::Last,
+        }],
+        1,
+    );
+    check_default(
+        vec![S::Union(Workflow::new(vec![])), topn.clone()],
+        vec![topn.clone(), S::Union(Workflow::new(vec![topn]))],
+    )
+    .await;
+}
+
+#[tokio::test]
 async fn summarize_into_union() {
     let original = S::Summarize(Summarize {
         aggs: btreemap! {
