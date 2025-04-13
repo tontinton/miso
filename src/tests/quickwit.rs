@@ -8,7 +8,7 @@ use color_eyre::{
     eyre::{bail, Context, OptionExt},
     Result,
 };
-use futures_util::TryStreamExt;
+use futures_util::{future::try_join_all, TryStreamExt};
 use reqwest::{header::CONTENT_TYPE, Client, Response};
 use serde::Serialize;
 use test_case::test_case;
@@ -74,8 +74,10 @@ async fn get_quickwit_connector_map(image: &QuickwitImage) -> Result<ConnectorsM
     let url = format!("http://127.0.0.1:{}", image.port);
     let client = Client::new();
 
+    let mut create_index_futures = Vec::with_capacity(INDEXES.len());
+
     for stackoverflow_index_name in ["stack", "stack_mirror"] {
-        create_index(
+        let fut = create_index(
             &client,
             &url,
             stackoverflow_index_name,
@@ -90,11 +92,11 @@ async fn get_quickwit_connector_map(image: &QuickwitImage) -> Result<ConnectorsM
                 }],
                 timestamp_field: "creationDate".to_string(),
             },
-        )
-        .await?;
+        );
+        create_index_futures.push(fut);
     }
 
-    create_index(
+    create_index_futures.push(create_index(
         &client,
         &url,
         "hdfs",
@@ -109,12 +111,17 @@ async fn get_quickwit_connector_map(image: &QuickwitImage) -> Result<ConnectorsM
             }],
             timestamp_field: "timestamp".to_string(),
         },
+    ));
+
+    try_join_all(create_index_futures).await?;
+
+    try_join_all(
+        INDEXES
+            .iter()
+            .map(|(index_name, data)| write_to_index(&client, &url, index_name, data))
+            .collect::<Vec<_>>(),
     )
     .await?;
-
-    for (index_name, data) in INDEXES {
-        write_to_index(&client, &url, index_name, data).await?;
-    }
 
     let config = QuickwitConfig::new_with_interval(url, QUICKWIT_REFRESH_INTERVAL);
     let connector = Arc::new(QuickwitConnector::new(config)) as Arc<dyn Connector>;
