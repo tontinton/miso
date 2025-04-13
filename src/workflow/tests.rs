@@ -821,3 +821,30 @@ async fn filter_existant_field_then_limit_after_union() -> Result<()> {
     )
     .await
 }
+
+#[tokio::test]
+async fn union_summarize() -> Result<()> {
+    check_multi_collection(
+        r#"[
+            {"scan": ["test", "x"]},
+            {"union": [{"scan": ["test", "y"]}]},
+            {
+                "summarize": {
+                    "aggs": {
+                        "max_x": {"max": "x"},
+                        "min_x": {"min": "x"},
+                        "sum_x": {"sum": "x"},
+                        "c": "count"
+                    },
+                    "by": ["y"]
+                }
+            }
+        ]"#,
+        btreemap! {
+            "x" => r#"[{"x": 3, "y": 3}, {"x": 5, "y": 6}, {"x": 1, "y": 3}, {"x": 9, "y": 6}]"#,
+            "y" => r#"[{"x": 6, "y": 3}, {"x": 9, "y": 6}, {"x": 7, "y": 3}, {"x": 2, "y": 6}]"#,
+        },
+        r#"[{"max_x": 7, "min_x": 1, "sum_x": 17.0, "c": 4, "y": 3}, {"max_x": 9, "min_x": 2, "sum_x": 25.0, "c": 4, "y": 6}]"#,
+    )
+    .await
+}

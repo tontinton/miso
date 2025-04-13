@@ -1,7 +1,10 @@
+use collection_macros::btreemap;
+
 use crate::workflow::{
     filter::FilterAst,
     sort::{NullsOrder, Sort, SortOrder},
-    WorkflowStep as S,
+    summarize::{Aggregation, Summarize},
+    Workflow, WorkflowStep as S,
 };
 
 use super::Optimizer;
@@ -122,6 +125,34 @@ async fn dont_remove_sorts_before_limit_before_count() {
             S::Count,
         ],
         vec![S::Sort(vec![]), S::Project(vec![]), S::Limit(10), S::Count],
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn summarize_into_union() {
+    let original = S::Summarize(Summarize {
+        aggs: btreemap! {
+            "c".to_string() => Aggregation::Count,
+            "s".to_string() => Aggregation::Sum("y".to_string()),
+        },
+        by: vec!["x".to_string()],
+    });
+    let post = S::Summarize(Summarize {
+        aggs: btreemap! {
+            "c".to_string() => Aggregation::Sum("c".to_string()),
+            "s".to_string() => Aggregation::Sum("s".to_string()),
+        },
+        by: vec!["x".to_string()],
+    });
+
+    check_default(
+        vec![S::Union(Workflow::new(vec![])), original.clone()],
+        vec![
+            original.clone(),
+            S::Union(Workflow::new(vec![original.clone()])),
+            post,
+        ],
     )
     .await;
 }

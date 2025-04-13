@@ -1,6 +1,6 @@
 use std::{
     cmp::Ordering,
-    collections::{BTreeMap, BTreeSet, HashMap},
+    collections::{BTreeMap, BTreeSet},
     sync::{
         atomic::{self, AtomicI64},
         Arc,
@@ -36,12 +36,33 @@ impl Aggregation {
             Self::Sum(field) | Self::Min(field) | Self::Max(field) => Some(field.clone()),
         }
     }
+
+    #[must_use]
+    pub fn map_into_combine_agg(self, field: String) -> Self {
+        match self {
+            Self::Count => Self::Sum(field),
+            Self::Sum(..) => Self::Sum(field),
+            Self::Min(..) => Self::Min(field),
+            Self::Max(..) => Self::Max(field),
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct Summarize {
-    pub aggs: HashMap<String, Aggregation>,
+    pub aggs: BTreeMap<String, Aggregation>,
     pub by: Vec<String>,
+}
+
+impl Summarize {
+    #[must_use]
+    pub fn map_into_combined(self) -> Self {
+        let mut aggs = BTreeMap::new();
+        for (field, agg) in self.aggs {
+            aggs.insert(field.clone(), agg.map_into_combine_agg(field));
+        }
+        Self { aggs, by: self.by }
+    }
 }
 
 /// An on-going aggregation (including the needed state to compute the next value of the

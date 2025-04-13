@@ -12,6 +12,7 @@ use push_limit_into_scan::PushLimitIntoScan;
 use push_limit_into_topn::PushLimitIntoTopN;
 use push_limit_into_union::PushLimitIntoUnion;
 use push_summarize_into_scan::PushSummarizeIntoScan;
+use push_summarize_into_union::PushSummarizeIntoUnion;
 use push_topn_into_scan::PushTopNIntoScan;
 use push_union_into_scan::PushUnionIntoScan;
 use remove_redundant_sorts_before_count::RemoveRedundantSortsBeforeCount;
@@ -31,6 +32,7 @@ mod push_limit_into_scan;
 mod push_limit_into_topn;
 mod push_limit_into_union;
 mod push_summarize_into_scan;
+mod push_summarize_into_union;
 mod push_topn_into_scan;
 mod push_union_into_scan;
 mod remove_redundant_sorts_before_count;
@@ -138,6 +140,7 @@ impl Default for Optimizer {
             ],
             vec![
                 // Union.
+                opt_once!(PushSummarizeIntoUnion),
                 opt_once!(PushLimitIntoUnion),
             ],
         ])
