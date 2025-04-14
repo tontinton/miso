@@ -66,7 +66,7 @@ pub(crate) async fn to_workflow_steps(
             QueryStep::Scan(..) if i > 0 => {
                 return Err(HttpError::new(
                     StatusCode::BAD_REQUEST,
-                    "cannot scan inside a scan".to_string(),
+                    "scan can only be the first step of a query".to_string(),
                 ));
             }
             QueryStep::Scan(connector_name, collection) => {
