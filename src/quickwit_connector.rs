@@ -942,11 +942,11 @@ impl Connector for QuickwitConnector {
         Some(Box::new(handle.with_filter(filter_ast_to_query(ast)?)))
     }
 
-    fn apply_limit(&self, max: u32, handle: &dyn QueryHandle) -> Option<Box<dyn QueryHandle>> {
+    fn apply_limit(&self, mut max: u32, handle: &dyn QueryHandle) -> Option<Box<dyn QueryHandle>> {
         let handle = downcast_unwrap!(handle, QuickwitHandle);
         if let Some(limit) = handle.limit {
             if limit < max {
-                return None;
+                max = limit;
             }
         }
         Some(Box::new(handle.with_limit(max)))
