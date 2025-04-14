@@ -993,7 +993,7 @@ impl Connector for QuickwitConnector {
 
     fn apply_count(&self, handle: &dyn QueryHandle) -> Option<Box<dyn QueryHandle>> {
         let handle = downcast_unwrap!(handle, QuickwitHandle);
-        if handle.aggs.is_some() {
+        if !handle.group_by.is_empty() {
             // Quickwit count query returns number of items instead of number of unique groups.
             // This is fine, as usually aggregation requests return few results, we can count
             // them ourselves.
