@@ -124,7 +124,6 @@ impl Default for Optimizer {
             vec![
                 // Filter.
                 opt!(ReorderFilterBeforeSort),
-                opt!(MergeFiltersIntoAndFilter),
                 opt!(PushFilterIntoScan),
                 // Limit.
                 opt!(PushLimitIntoLimit),
@@ -141,6 +140,11 @@ impl Default for Optimizer {
                 // Union.
                 opt!(PushUnionIntoScan),
                 opt!(PushFilterIntoUnion),
+            ],
+            vec![
+                // Merge filters into AND only after no more filters to pushdown, as this
+                // optimization is only good for in-process filtering.
+                opt!(MergeFiltersIntoAndFilter),
             ],
             vec![
                 // Union.
