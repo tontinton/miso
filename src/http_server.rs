@@ -90,6 +90,12 @@ pub(crate) async fn to_workflow_steps(
                     Scan::from_connector(connector.clone(), collection).await,
                 ));
             }
+            _ if steps.is_empty() => {
+                return Err(HttpError::new(
+                    StatusCode::BAD_REQUEST,
+                    "first query step must be a scan".to_string(),
+                ));
+            }
             QueryStep::Filter(ast) => {
                 steps.push(WorkflowStep::Filter(ast));
             }
