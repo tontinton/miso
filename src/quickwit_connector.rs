@@ -935,6 +935,10 @@ impl Connector for QuickwitConnector {
         handle: &dyn QueryHandle,
     ) -> Option<Box<dyn QueryHandle>> {
         let handle = downcast_unwrap!(handle, QuickwitHandle);
+        if handle.sorts.is_some() {
+            // Cannot filter over top-n in Quickwit.
+            return None;
+        }
         Some(Box::new(handle.with_filter(filter_ast_to_query(ast)?)))
     }
 
