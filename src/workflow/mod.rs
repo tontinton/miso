@@ -102,7 +102,7 @@ pub enum WorkflowStep {
     /// Join results from another query.
     Join(Join, Workflow),
 
-    /// The number of records. Only works as the last step.
+    /// Returns 1 record with a field named "count" containing the number of records.
     Count,
 }
 
