@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
 
 use crate::{
-    connector::{Connector, QueryHandle, QueryResponse, Split},
+    connector::{Connector, ConnectorState, QueryHandle, QueryResponse, Split},
     http_server::to_workflow_steps,
     log::Log,
     optimizations::Optimizer,
@@ -135,7 +135,14 @@ async fn check_multi_connectors(
     let steps = to_workflow_steps(
         &connectors
             .into_iter()
-            .map(|(name, connector)| (name, Arc::new(connector) as Arc<dyn Connector>))
+            .map(|(name, connector)| {
+                (
+                    name,
+                    Arc::new(ConnectorState::new(
+                        Arc::new(connector) as Arc<dyn Connector>
+                    )),
+                )
+            })
             .collect(),
         serde_json::from_str(query).context("parse query steps from json")?,
     )

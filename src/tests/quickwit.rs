@@ -23,7 +23,7 @@ use tokio_test::block_on;
 use tracing::info;
 
 use crate::{
-    connector::Connector,
+    connector::{Connector, ConnectorState},
     http_server::{to_workflow_steps, ConnectorsMap},
     optimizations::Optimizer,
     quickwit_connector::{QuickwitConfig, QuickwitConnector},
@@ -125,6 +125,7 @@ async fn get_quickwit_connector_map(image: &QuickwitImage) -> Result<ConnectorsM
 
     let config = QuickwitConfig::new_with_interval(url, QUICKWIT_REFRESH_INTERVAL);
     let connector = Arc::new(QuickwitConnector::new(config)) as Arc<dyn Connector>;
+    let connector_state = Arc::new(ConnectorState::new(connector.clone()));
 
     Retry::spawn(
         FixedInterval::new(QUICKWIT_REFRESH_INTERVAL).take(3),
@@ -142,7 +143,7 @@ async fn get_quickwit_connector_map(image: &QuickwitImage) -> Result<ConnectorsM
     )
     .await?;
 
-    Ok(btreemap! { "test".to_string() => connector })
+    Ok(btreemap! { "test".to_string() => connector_state })
 }
 
 async fn get_test_resources() -> Arc<(QuickwitImage, ConnectorsMap)> {
