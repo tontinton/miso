@@ -137,7 +137,7 @@ fn rx_stream(mut rx: mpsc::Receiver<Log>) -> LogStream {
     })
 }
 
-async fn count_to_tx(count: i64, tx: mpsc::Sender<Log>) {
+async fn count_to_tx(count: u64, tx: mpsc::Sender<Log>) {
     let mut count_log = Log::new();
     count_log.insert(COUNT_LOG_FIELD_NAME.into(), Value::from(count));
     if let Err(e) = tx.send(count_log).await {
@@ -214,7 +214,7 @@ impl WorkflowStep {
                             QueryResponse::Count(count) => return Ok(Some(count)),
                         }
 
-                        Ok::<Option<i64>, color_eyre::eyre::Error>(None)
+                        Ok::<Option<u64>, color_eyre::eyre::Error>(None)
                     }));
                 }
 
@@ -299,7 +299,7 @@ impl WorkflowStep {
             WorkflowStep::Count => {
                 let mut rx = rx.unwrap();
 
-                let mut count: i64 = 0;
+                let mut count: u64 = 0;
                 while rx.recv().await.is_some() {
                     count += 1;
                 }

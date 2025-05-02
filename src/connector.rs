@@ -23,7 +23,7 @@ macro_rules! downcast_unwrap {
 
 pub enum QueryResponse {
     Logs(LogTryStream),
-    Count(i64),
+    Count(u64),
 }
 
 #[typetag::serde(tag = "type")]
