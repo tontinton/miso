@@ -13,13 +13,14 @@ use parking_lot::RwLock;
 use reqwest::Client;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{json, to_string, Value};
-use tokio::{select, spawn, sync::watch, task::JoinHandle, time::sleep};
+use tokio::{spawn, sync::watch, task::JoinHandle};
 use tracing::{debug, error, info, instrument};
 
 use crate::{
     connector::{Connector, QueryHandle, QueryResponse, Split},
     downcast_unwrap,
     log::{Log, LogTryStream},
+    run_at_interval::run_at_interval,
     workflow::{
         filter::FilterAst,
         sort::Sort,
@@ -571,36 +572,27 @@ async fn refresh_indexes(client: &Client, url: &str, collections: &SharedCollect
     }
 }
 
-async fn run_interval_task(
+async fn refresh_indexes_at_interval(
     config: QuickwitConfig,
     collections: SharedCollections,
-    mut shutdown_rx: watch::Receiver<()>,
+    shutdown_rx: watch::Receiver<()>,
 ) {
     let client = Client::new();
 
-    let future = async {
-        refresh_indexes(&client, &config.url, &collections).await;
-        loop {
-            sleep(config.refresh_interval).await;
-            refresh_indexes(&client, &config.url, &collections).await;
-        }
-    };
-
-    select! {
-        _ = future => {
-            panic!("Interval future done looping?");
-        }
-        _ = shutdown_rx.changed() => {
-            info!("Shutdown signal received. Stopping task.");
-        }
-    }
+    run_at_interval(
+        async || refresh_indexes(&client, &config.url, &collections).await,
+        config.refresh_interval,
+        shutdown_rx,
+        "Quickwit indexes",
+    )
+    .await;
 }
 
 impl QuickwitConnector {
     pub fn new(config: QuickwitConfig) -> QuickwitConnector {
         let (shutdown_tx, shutdown_rx) = watch::channel(());
         let collections = Arc::new(RwLock::new(BTreeMap::new()));
-        let interval_task = spawn(run_interval_task(
+        let interval_task = spawn(refresh_indexes_at_interval(
             config.clone(),
             collections.clone(),
             shutdown_rx,
