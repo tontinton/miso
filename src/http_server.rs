@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, sync::Arc};
+use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
 use async_recursion::async_recursion;
 use async_stream::stream;
@@ -19,7 +19,7 @@ use uuid::Uuid;
 
 use crate::{
     args::Args,
-    connector::Connector,
+    connector::ConnectorState,
     optimizations::Optimizer,
     quickwit_connector::QuickwitConnector,
     workflow::{
@@ -28,9 +28,12 @@ use crate::{
     },
 };
 
+// Should be a configuration in the future.
+const UPDATE_STATS_INTERVAL: Duration = Duration::from_secs(60 * 60 * 3); // 3 hours.
+
 const INTERNAL_SERVER_ERROR: &str = "Internal server error";
 
-pub type ConnectorsMap = BTreeMap<String, Arc<dyn Connector>>;
+pub type ConnectorsMap = BTreeMap<String, Arc<ConnectorState>>;
 
 struct State {
     connectors: ConnectorsMap,
@@ -70,7 +73,7 @@ pub(crate) async fn to_workflow_steps(
                 ));
             }
             QueryStep::Scan(connector_name, collection) => {
-                let Some(connector) = connectors.get(&connector_name).cloned() else {
+                let Some(connector_state) = connectors.get(&connector_name).cloned() else {
                     return Err(HttpError::new(
                         StatusCode::NOT_FOUND,
                         format!("connector '{}' not found", connector_name),
@@ -78,7 +81,7 @@ pub(crate) async fn to_workflow_steps(
                 };
 
                 info!(?collection, "Checking whether collection exists");
-                if !connector.does_collection_exist(&collection) {
+                if !connector_state.connector.does_collection_exist(&collection) {
                     info!(?collection, "Collection doesn't exist");
                     return Err(HttpError::new(
                         StatusCode::NOT_FOUND,
@@ -87,7 +90,7 @@ pub(crate) async fn to_workflow_steps(
                 }
 
                 steps.push(WorkflowStep::Scan(
-                    Scan::from_connector(connector.clone(), collection).await,
+                    Scan::from_connector_state(connector_state, collection).await,
                 ));
             }
             _ if steps.is_empty() => {
@@ -247,12 +250,15 @@ pub fn create_axum_app(args: &Args) -> Result<Router> {
     let mut connectors = BTreeMap::new();
     connectors.insert(
         "tony".to_string(),
-        Arc::new(QuickwitConnector::new(serde_json::from_str(
-            r#"{
+        Arc::new(ConnectorState::new_with_stats(
+            Arc::new(QuickwitConnector::new(serde_json::from_str(
+                r#"{
                 "url": "http://127.0.0.1:7280",
                 "refresh_interval": "5s"
             }"#,
-        )?)) as Arc<dyn Connector>,
+            )?)),
+            Some(UPDATE_STATS_INTERVAL),
+        )),
     );
 
     let optimizer = Arc::new(if args.no_optimizations {

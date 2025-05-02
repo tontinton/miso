@@ -1,15 +1,18 @@
-use std::any::Any;
 use std::fmt::Debug;
 use std::sync::Arc;
+use std::time::Duration;
+use std::{any::Any, collections::BTreeMap};
 
 use axum::async_trait;
 use color_eyre::eyre::Result;
+use parking_lot::Mutex;
 
-use crate::log::LogTryStream;
-use crate::workflow::filter::FilterAst;
-use crate::workflow::sort::Sort;
-use crate::workflow::summarize::Summarize;
-use crate::workflow::Workflow;
+use crate::connector_stats::IntervalStatsCollector;
+use crate::{
+    connector_stats::{ConnectorStats, SharedConnectorStats},
+    log::LogTryStream,
+    workflow::{filter::FilterAst, sort::Sort, summarize::Summarize, Workflow},
+};
 
 #[macro_export]
 macro_rules! downcast_unwrap {
@@ -19,6 +22,36 @@ macro_rules! downcast_unwrap {
             None => panic!("Failed to downcast to {}", stringify!($target_type)),
         }
     }};
+}
+
+#[derive(Debug)]
+pub struct ConnectorState {
+    pub connector: Arc<dyn Connector>,
+    pub stats: SharedConnectorStats,
+
+    // Need to close() this when the connector is deleted.
+    _stats_collector: Option<IntervalStatsCollector>,
+}
+
+impl ConnectorState {
+    pub fn new(connector: Arc<dyn Connector>) -> Self {
+        Self {
+            connector,
+            stats: Arc::new(Mutex::new(BTreeMap::new())),
+            _stats_collector: None,
+        }
+    }
+
+    pub fn new_with_stats(connector: Arc<dyn Connector>, interval: Option<Duration>) -> Self {
+        let stats = Arc::new(Mutex::new(BTreeMap::new()));
+        let stats_collector =
+            interval.map(|x| IntervalStatsCollector::new(x, connector.clone(), stats.clone()));
+        Self {
+            connector,
+            stats,
+            _stats_collector: stats_collector,
+        }
+    }
 }
 
 pub enum QueryResponse {
@@ -104,6 +137,15 @@ pub trait Connector: Debug + Send + Sync {
         _union: &Workflow,
         _handle: &dyn QueryHandle,
     ) -> Option<Box<dyn QueryHandle>> {
+        None
+    }
+
+    /// Get statistics about collections and their fields.
+    /// Miso uses these statistics to optimize queries.
+    /// For example: by knowing how many distinct values there are on a field which a query wants to
+    /// JOIN ON, we can see ahead of time whether we should execute that query and filter the
+    /// results in the other part of the JOIN query. This is called "dynamic filtering".
+    async fn fetch_stats(&self) -> Option<ConnectorStats> {
         None
     }
 
