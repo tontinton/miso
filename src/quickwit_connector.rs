@@ -156,12 +156,12 @@ struct ContinueSearchRequest {
 
 #[derive(Debug, Deserialize)]
 struct CountResponse {
-    count: i64,
+    count: u64,
 }
 
 #[derive(Debug, Deserialize)]
 struct SearchAggregationBucket {
-    doc_count: i64,
+    doc_count: u64,
     key: Value,
 
     #[serde(flatten)]
@@ -187,7 +187,7 @@ struct SearchAggregationBuckets {
 
 #[derive(Debug, Deserialize)]
 struct SearchAggregationHitsTotal {
-    value: i64,
+    value: u64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -486,7 +486,7 @@ async fn continue_search(
 }
 
 #[instrument(skip(query), name = "GET and parse quickwit count result")]
-async fn count(client: &Client, base_url: &str, index: &str, query: Option<Value>) -> Result<i64> {
+async fn count(client: &Client, base_url: &str, index: &str, query: Option<Value>) -> Result<u64> {
     let url = format!("{}/api/v1/_elastic/{}/_count", base_url, index);
 
     let mut req = client.get(&url);
@@ -669,7 +669,7 @@ impl QuickwitConnector {
 
     fn parse_last_bucket(
         buckets_or_value_wrap: HashMap<String, SearchAggregationBucketsOrValue>,
-        doc_count: i64,
+        doc_count: u64,
         group_by: &[String],
         count_fields: &[String],
         keys_stack: &[Value],
@@ -889,7 +889,7 @@ impl Connector for QuickwitConnector {
         if handle.count {
             let mut result = count(&self.client, &url, &collections, query).await?;
             if let Some(limit) = limit {
-                result = (limit as i64).min(result);
+                result = (limit as u64).min(result);
             }
             return Ok(QueryResponse::Count(result));
         }
