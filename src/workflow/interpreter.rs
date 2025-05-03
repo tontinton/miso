@@ -12,11 +12,11 @@ macro_rules! impl_two_strs_fn {
     ($l:expr, $r:expr, $func:expr, $op_str:literal) => {{
         let lhs_val = match &$l.0 {
             Some(cow) => cow.as_ref(),
-            None => return Ok(Val::not_exist()),
+            None => return Ok(None),
         };
         let rhs_val = match &$r.0 {
             Some(cow) => cow.as_ref(),
-            None => return Ok(Val::not_exist()),
+            None => return Ok(None),
         };
 
         let Value::String(lhs) = lhs_val else {
@@ -27,7 +27,7 @@ macro_rules! impl_two_strs_fn {
             bail!("RHS of '{}' operation must be a string", $op_str);
         };
 
-        Ok(Val::bool(if rhs.is_empty() {
+        Ok(Some(if rhs.is_empty() {
             true
         } else {
             $func(lhs, rhs)
@@ -38,12 +38,12 @@ macro_rules! impl_two_strs_fn {
 macro_rules! impl_cmp {
     ($self:expr, $other:expr, $cmp:expr, $op:expr) => {
         match (&$self.0, &$other.0) {
-            (None, None) | (None, Some(_)) | (Some(_), None) => Ok(Val::not_exist()),
+            (None, None) | (None, Some(_)) | (Some(_), None) => Ok(None),
             (Some(lhs_cow), Some(rhs_cow)) => {
                 let lhs = lhs_cow.as_ref();
                 let rhs = rhs_cow.as_ref();
                 match partial_cmp_values(lhs, rhs) {
-                    Some(ord) => Ok(Val::bool($cmp(ord))),
+                    Some(ord) => Ok(Some($cmp(ord))),
                     _ => {
                         let lhs_kind = get_value_kind(lhs);
                         let rhs_kind = get_value_kind(rhs);
@@ -59,11 +59,11 @@ macro_rules! impl_op {
     ($self:expr, $other:expr, $op:expr, $op_str:literal) => {{
         let lhs_val = match &$self.0 {
             Some(cow) => cow.as_ref(),
-            None => return Ok(Val::not_exist()),
+            None => return Ok(None),
         };
         let rhs_val = match &$other.0 {
             Some(cow) => cow.as_ref(),
-            None => return Ok(Val::not_exist()),
+            None => return Ok(None),
         };
 
         match (lhs_val, rhs_val) {
@@ -71,14 +71,14 @@ macro_rules! impl_op {
                 if let (Some(l_i64), Some(r_i64)) = (l.as_i64(), r.as_i64()) {
                     if $op_str != "/" {
                         let result = $op(l_i64, r_i64);
-                        return Ok(Val::owned(Value::from(result)));
+                        return Ok(Some(Value::from(result)));
                     }
                 }
 
                 if let (Some(l_f64), Some(r_f64)) = (l.as_f64(), r.as_f64()) {
                     let result = $op(l_f64, r_f64);
                     match serde_json::Number::from_f64(result) {
-                        Some(num) => return Ok(Val::owned(Value::Number(num))),
+                        Some(num) => return Ok(Some(Value::Number(num))),
                         None => bail!(
                             "Result of '{}' operation is not a valid JSON number",
                             $op_str
@@ -112,6 +112,18 @@ pub enum CastType {
 #[derive(Debug)]
 pub struct Val<'a>(pub Option<Cow<'a, Value>>);
 
+impl From<Option<bool>> for Val<'_> {
+    fn from(value: Option<bool>) -> Self {
+        value.map_or(Val::not_exist(), Val::bool)
+    }
+}
+
+impl From<Option<Value>> for Val<'_> {
+    fn from(value: Option<Value>) -> Self {
+        value.map_or(Val::not_exist(), Val::owned)
+    }
+}
+
 impl<'a> Val<'a> {
     pub fn not_exist() -> Val<'a> {
         Val(None)
@@ -136,35 +148,35 @@ impl<'a> Val<'a> {
         value_to_bool(cow.as_ref())
     }
 
-    pub fn eq(self, other: Val) -> Result<Val> {
+    pub fn eq(&self, other: &Val) -> Result<Option<bool>> {
         impl_cmp!(self, other, |o| o == Ordering::Equal, "==")
     }
 
-    pub fn ne(self, other: Val) -> Result<Val> {
+    pub fn ne(&self, other: &Val) -> Result<Option<bool>> {
         impl_cmp!(self, other, |o| o != Ordering::Equal, "!=")
     }
 
-    pub fn gt(self, other: Val) -> Result<Val> {
+    pub fn gt(&self, other: &Val) -> Result<Option<bool>> {
         impl_cmp!(self, other, |o| o == Ordering::Greater, ">")
     }
 
-    pub fn gte(self, other: Val) -> Result<Val> {
+    pub fn gte(&self, other: &Val) -> Result<Option<bool>> {
         impl_cmp!(self, other, |o| o >= Ordering::Equal, ">=")
     }
 
-    pub fn lt(self, other: Val) -> Result<Val> {
+    pub fn lt(&self, other: &Val) -> Result<Option<bool>> {
         impl_cmp!(self, other, |o| o == Ordering::Less, "<")
     }
 
-    pub fn lte(self, other: Val) -> Result<Val> {
+    pub fn lte(&self, other: &Val) -> Result<Option<bool>> {
         impl_cmp!(self, other, |o| o <= Ordering::Equal, "<=")
     }
 
-    pub fn contains(self, other: Val) -> Result<Val> {
+    pub fn contains(&self, other: &Val) -> Result<Option<bool>> {
         impl_two_strs_fn!(self, other, |x: &str, y: &str| x.contains(y), "contains")
     }
 
-    pub fn starts_with(self, other: Val) -> Result<Val> {
+    pub fn starts_with(&self, other: &Val) -> Result<Option<bool>> {
         impl_two_strs_fn!(
             self,
             other,
@@ -173,28 +185,28 @@ impl<'a> Val<'a> {
         )
     }
 
-    pub fn ends_with(self, other: Val) -> Result<Val> {
+    pub fn ends_with(&self, other: &Val) -> Result<Option<bool>> {
         impl_two_strs_fn!(self, other, |x: &str, y: &str| x.ends_with(y), "ends_with")
     }
 
-    pub fn add(self, other: Val) -> Result<Val> {
+    pub fn add(&self, other: &Val) -> Result<Option<Value>> {
         if let (Some(lhs_cow), Some(rhs_cow)) = (&self.0, &other.0) {
             if let (Value::String(x), Value::String(y)) = (lhs_cow.as_ref(), rhs_cow.as_ref()) {
-                return Ok(Val::owned(Value::String(format!("{}{}", x, y))));
+                return Ok(Some(Value::String(format!("{}{}", x, y))));
             }
         }
         impl_op!(self, other, |x, y| x + y, "+")
     }
 
-    pub fn sub(self, other: Val) -> Result<Val> {
+    pub fn sub(&self, other: &Val) -> Result<Option<Value>> {
         impl_op!(self, other, |x, y| x - y, "-")
     }
 
-    pub fn mul(self, other: Val) -> Result<Val> {
+    pub fn mul(&self, other: &Val) -> Result<Option<Value>> {
         impl_op!(self, other, |x, y| x * y, "*")
     }
 
-    pub fn div(self, other: Val) -> Result<Val> {
+    pub fn div(&self, other: &Val) -> Result<Option<Value>> {
         if let Some(rhs_cow) = &other.0 {
             let rhs = rhs_cow.as_ref();
             if let Value::Number(n) = rhs {
