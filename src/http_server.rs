@@ -264,7 +264,7 @@ pub fn create_axum_app(args: &Args) -> Result<Router> {
     let optimizer = Arc::new(if args.no_optimizations {
         Optimizer::empty()
     } else {
-        Optimizer::default()
+        Optimizer::with_dynamic_filtering(args.dynamic_filter_max_distinct_values)
     });
 
     let state = Arc::new(RwLock::new(State {

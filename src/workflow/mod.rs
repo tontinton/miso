@@ -17,7 +17,8 @@ use topn::topn_stream;
 use tracing::{debug, info, instrument};
 
 use crate::{
-    connector::{Connector, QueryHandle, QueryResponse, Split},
+    connector::{Connector, ConnectorState, QueryHandle, QueryResponse, Split},
+    connector_stats::{FieldStats, SharedConnectorStats},
     log::{Log, LogStream, LogTryStream},
     workflow::{
         filter::filter_stream, limit::limit_stream, project::project_stream, sort::sort_stream,
@@ -50,6 +51,10 @@ pub struct Scan {
     pub connector: Arc<dyn Connector>,
     pub splits: Vec<Arc<dyn Split>>,
     pub handle: Arc<dyn QueryHandle>,
+    pub stats: SharedConnectorStats,
+
+    pub dynamic_filter_tx: Option<watch::Sender<Option<FilterAst>>>,
+    pub dynamic_filter_rx: Option<watch::Receiver<Option<FilterAst>>>,
 }
 
 impl PartialEq for Scan {
@@ -60,13 +65,28 @@ impl PartialEq for Scan {
 }
 
 impl Scan {
-    pub async fn from_connector(connector: Arc<dyn Connector>, collection: String) -> Self {
+    pub async fn from_connector_state(
+        connector_state: Arc<ConnectorState>,
+        collection: String,
+    ) -> Self {
+        let connector = connector_state.connector.clone();
         Self {
             collection,
-            connector: connector.clone(),
-            splits: connector.clone().get_splits().await,
+            splits: connector.get_splits().await,
             handle: connector.get_handle().into(),
+            connector,
+            stats: connector_state.stats.clone(),
+            dynamic_filter_tx: None,
+            dynamic_filter_rx: None,
         }
+    }
+
+    pub fn get_field_stats(&self, field: &str) -> Option<FieldStats> {
+        self.stats
+            .lock()
+            .get(&self.collection)
+            .and_then(|x| x.fields.get(field))
+            .cloned()
     }
 }
 
@@ -193,6 +213,7 @@ impl WorkflowStep {
                 connector,
                 splits,
                 handle,
+                ..
             }) => {
                 let mut split_tasks = Vec::new();
 
