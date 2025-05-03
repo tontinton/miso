@@ -11,15 +11,19 @@ use super::interpreter::{ident, Val};
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum FilterAst {
-    Id(String),                                 // field
-    Lit(serde_json::Value),                     // a json literal
-    Exists(String),                             // field exists
-    Or(Vec<FilterAst>),                         // ||
-    And(Vec<FilterAst>),                        // &&
-    Not(Box<FilterAst>),                        // !
-    Contains(Box<FilterAst>, Box<FilterAst>),   // right in left
-    StartsWith(Box<FilterAst>, Box<FilterAst>), // left starts with right
-    EndsWith(Box<FilterAst>, Box<FilterAst>),   // left ends with right
+    Id(String),             // field
+    Lit(serde_json::Value), // a json literal
+    Exists(String),         // field exists
+
+    Or(Vec<FilterAst>),  // ||
+    And(Vec<FilterAst>), // &&
+    Not(Box<FilterAst>), // !
+
+    In(Box<FilterAst>, Vec<FilterAst>), // like python's in
+
+    Contains(Box<FilterAst>, Box<FilterAst>), // string - right in left
+    StartsWith(Box<FilterAst>, Box<FilterAst>), // string - left starts with right
+    EndsWith(Box<FilterAst>, Box<FilterAst>), // string - left ends with right
 
     #[serde(rename = "==")]
     Eq(Box<FilterAst>, Box<FilterAst>),
@@ -79,6 +83,14 @@ impl FilterInterpreter {
                 Val::bool(result)
             }
             FilterAst::Not(expr) => Val::bool(!self.eval(expr)?.to_bool()),
+            FilterAst::In(lhs, rhs) => self
+                .eval(lhs)?
+                .is_in(
+                    &rhs.iter()
+                        .map(|e| self.eval(e))
+                        .collect::<Result<Vec<_>>>()?,
+                )?
+                .into(),
             FilterAst::Contains(lhs, rhs) => self.eval(lhs)?.contains(&self.eval(rhs)?)?.into(),
             FilterAst::StartsWith(lhs, rhs) => {
                 self.eval(lhs)?.starts_with(&self.eval(rhs)?)?.into()

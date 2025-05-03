@@ -172,6 +172,15 @@ impl<'a> Val<'a> {
         impl_cmp!(self, other, |o| o <= Ordering::Equal, "<=")
     }
 
+    pub fn is_in(&self, others: &[Val]) -> Result<Option<bool>> {
+        for other in others {
+            if matches!(self.eq(other)?, Some(true)) {
+                return Ok(Some(true));
+            }
+        }
+        Ok(Some(false))
+    }
+
     pub fn contains(&self, other: &Val) -> Result<Option<bool>> {
         impl_two_strs_fn!(self, other, |x: &str, y: &str| x.contains(y), "contains")
     }

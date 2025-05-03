@@ -437,6 +437,19 @@ async fn filter_or() -> Result<()> {
 }
 
 #[tokio::test]
+async fn filter_in() -> Result<()> {
+    check(
+        r#"[
+            {"scan": ["test", "c"]},
+            {"filter": {"in": [{"id": "world"}, [{"lit": 2}, {"lit": 4}]]}}
+        ]"#,
+        r#"[{"hello": "world"}, {"world": 1}, {"world": 4}, {"world": 2}]"#,
+        r#"[{"world": 4}, {"world": 2}]"#,
+    )
+    .await
+}
+
+#[tokio::test]
 async fn filter_contains() -> Result<()> {
     check(
         r#"[
