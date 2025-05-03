@@ -266,7 +266,6 @@ pub struct QuickwitConnector {
 }
 
 fn filter_ast_to_query(ast: &FilterAst) -> Option<Value> {
-    #[allow(unreachable_patterns)]
     Some(match ast {
         FilterAst::Or(filters) => {
             json!({
@@ -297,6 +296,26 @@ fn filter_ast_to_query(ast: &FilterAst) -> Option<Value> {
             json!({
                 "exists": {
                     "field": field,
+                }
+            })
+        }
+        FilterAst::In(lhs, rhs) => {
+            let FilterAst::Id(field) = &**lhs else {
+                return None;
+            };
+
+            let values = rhs
+                .iter()
+                .map(|x| match x {
+                    FilterAst::Lit(Value::String(v)) => Some(v.clone()),
+                    FilterAst::Lit(value) => Some(value.to_string()),
+                    _ => None,
+                })
+                .collect::<Option<Vec<_>>>()?;
+
+            json!({
+                "terms": {
+                    field: values
                 }
             })
         }

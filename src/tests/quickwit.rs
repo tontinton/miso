@@ -406,6 +406,15 @@ async fn predicate_pushdown_same_results(
 #[test_case(
     r#"[
         {"scan": ["test", "stack"]},
+        {"filter": {"in": [{"id": "acceptedAnswerId"}, [{"lit": 12446}, {"lit": 31}]]}}
+    ]"#,
+    r#"[{"scan": ["test", "stack"]}]"#,
+    2;
+    "filter_in"
+)]
+#[test_case(
+    r#"[
+        {"scan": ["test", "stack"]},
         {
             "filter": {
                 "and": [{
