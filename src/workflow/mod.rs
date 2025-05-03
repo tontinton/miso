@@ -1,4 +1,8 @@
-use std::{sync::Arc, time::Instant};
+use std::{
+    collections::BTreeSet,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use async_stream::{stream, try_stream};
 use color_eyre::eyre::{bail, Context, Result};
@@ -7,14 +11,16 @@ use join::{join_streams, Join, JoinType};
 use kinded::Kinded;
 use project::extend_stream;
 use serde_json::Value;
+use sortable_value::SortableValue;
 use summarize::{summarize_stream, Summarize};
 use tokio::{
     spawn,
     sync::{mpsc, watch},
     task::JoinHandle,
+    time::timeout,
 };
 use topn::topn_stream;
-use tracing::{debug, info, instrument};
+use tracing::{debug, error, info, instrument};
 
 use crate::{
     connector::{Connector, ConnectorState, QueryHandle, QueryResponse, Split},
@@ -42,6 +48,7 @@ pub mod topn;
 mod tests;
 
 const COUNT_LOG_FIELD_NAME: &str = "count";
+const DYNAMIC_FILTER_TIMEOUT: Duration = Duration::from_secs(30);
 
 type WorkflowTasks = FuturesUnordered<JoinHandle<Result<()>>>;
 
@@ -157,6 +164,30 @@ fn rx_stream(mut rx: mpsc::Receiver<Log>) -> LogStream {
     })
 }
 
+fn rx_to_dynamic_filter_tx_stream(
+    mut rx: mpsc::Receiver<Log>,
+    dynamic_filter_tx: watch::Sender<Option<FilterAst>>,
+    field: impl Into<String>,
+) -> LogStream {
+    let field = field.into();
+    let mut values = BTreeSet::new();
+
+    Box::pin(stream! {
+        while let Some(log) = rx.recv().await {
+            if let Some(value) = log.get(&field) {
+                values.insert(SortableValue(value.clone()));
+            }
+            yield log;
+        }
+
+        // Adding "in" filter would probably be more efficient.
+        let ast = FilterAst::Or(values.into_iter().map(|v| FilterAst::Lit(v.0)).collect());
+        if let Err(e) = dynamic_filter_tx.send(Some(ast)) {
+            error!("Failed sending dynamic filter: {e}");
+        }
+    })
+}
+
 async fn count_to_tx(count: u64, tx: mpsc::Sender<Log>) {
     let mut count_log = Log::new();
     count_log.insert(COUNT_LOG_FIELD_NAME.into(), Value::from(count));
@@ -197,6 +228,29 @@ async fn pipe_task(rx: mpsc::Receiver<Log>, tx: mpsc::Sender<Log>) -> Result<()>
     Ok(())
 }
 
+async fn apply_dynamic_filter(
+    connector: &dyn Connector,
+    handle: &dyn QueryHandle,
+    mut dynamic_filter_rx: watch::Receiver<Option<FilterAst>>,
+) -> Option<Arc<dyn QueryHandle>> {
+    match timeout(DYNAMIC_FILTER_TIMEOUT, dynamic_filter_rx.changed()).await {
+        Ok(Ok(())) => {
+            if let Some(ast) = dynamic_filter_rx.borrow().as_ref() {
+                if let Some(dynamic_filtered_handle) = connector.apply_filter(ast, handle) {
+                    return Some(dynamic_filtered_handle.into());
+                }
+            }
+        }
+        Ok(Err(e)) => {
+            error!("Error waiting on dynamic filter: {e}");
+        }
+        Err(e) => {
+            debug!("Timeout waiting on dynamic filter: {e}");
+        }
+    }
+    None
+}
+
 impl WorkflowStep {
     #[instrument(skip_all, fields(step = %self))]
     async fn execute(
@@ -212,9 +266,18 @@ impl WorkflowStep {
                 collection,
                 connector,
                 splits,
-                handle,
+                mut handle,
+                dynamic_filter_rx,
                 ..
             }) => {
+                if let Some(filter_rx) = dynamic_filter_rx {
+                    if let Some(dynamic_filtered_handle) =
+                        apply_dynamic_filter(connector.as_ref(), handle.as_ref(), filter_rx).await
+                    {
+                        handle = dynamic_filtered_handle;
+                    }
+                }
+
                 let mut split_tasks = Vec::new();
 
                 for (i, split) in splits.into_iter().enumerate() {
@@ -298,19 +361,38 @@ impl WorkflowStep {
 
                 execute_tasks(tasks, cancel_rx).await?;
             }
-            WorkflowStep::Join(config, workflow) => {
+            WorkflowStep::Join(join, workflow) => {
                 if workflow.steps.is_empty() {
-                    if matches!(config.type_, JoinType::Left | JoinType::Outer) {
+                    if matches!(join.type_, JoinType::Left | JoinType::Outer) {
                         pipe(rx.unwrap(), tx).await;
                     }
                     return Ok(());
                 }
 
-                let (tasks, join_rx) = workflow.create_tasks(cancel_rx.clone())?;
+                let WorkflowStep::Scan(scan) = &workflow.steps[0] else {
+                    panic!("scan not as first step in join?");
+                };
+                let is_left_sending_dynamic_filter = scan.dynamic_filter_rx.is_some();
+                let dynamic_filter_tx = scan.dynamic_filter_tx.clone();
+
+                let (tasks, right_rx) = workflow.create_tasks(cancel_rx.clone())?;
 
                 tasks.push(spawn(async move {
-                    let stream =
-                        join_streams(config, rx_stream(rx.unwrap()), rx_stream(join_rx)).await;
+                    let left_rx = rx.unwrap();
+
+                    let (left_stream, right_stream) = match dynamic_filter_tx {
+                        Some(tx) if is_left_sending_dynamic_filter => (
+                            rx_to_dynamic_filter_tx_stream(left_rx, tx, &join.on.0),
+                            rx_stream(right_rx),
+                        ),
+                        Some(tx) => (
+                            rx_stream(left_rx),
+                            rx_to_dynamic_filter_tx_stream(right_rx, tx, &join.on.1),
+                        ),
+                        _ => (rx_stream(left_rx), rx_stream(right_rx)),
+                    };
+
+                    let stream = join_streams(join, left_stream, right_stream).await;
                     stream_to_tx(stream, tx, "join").await?;
                     Ok(())
                 }));
