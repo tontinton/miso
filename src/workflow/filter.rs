@@ -54,10 +54,10 @@ impl FilterInterpreter {
     }
 
     fn eval<'a>(&'a self, ast: &'a FilterAst) -> Result<Val<'a>> {
-        match &ast {
-            FilterAst::Id(name) => ident(&self.log, name),
-            FilterAst::Lit(value) => Ok(Val::borrowed(value)),
-            FilterAst::Exists(name) => Ok(Val::bool(ident(&self.log, name)?.0.is_some())),
+        Ok(match &ast {
+            FilterAst::Id(name) => ident(&self.log, name)?,
+            FilterAst::Lit(value) => Val::borrowed(value),
+            FilterAst::Exists(name) => Val::bool(ident(&self.log, name)?.0.is_some()),
             FilterAst::Or(exprs) => {
                 let mut result = false;
                 for expr in exprs {
@@ -66,7 +66,7 @@ impl FilterInterpreter {
                         break;
                     }
                 }
-                Ok(Val::bool(result))
+                Val::bool(result)
             }
             FilterAst::And(exprs) => {
                 let mut result = true;
@@ -76,23 +76,25 @@ impl FilterInterpreter {
                         break;
                     }
                 }
-                Ok(Val::bool(result))
+                Val::bool(result)
             }
-            FilterAst::Not(expr) => Ok(Val::bool(!self.eval(expr)?.to_bool())),
-            FilterAst::Contains(lhs, rhs) => self.eval(lhs)?.contains(self.eval(rhs)?),
-            FilterAst::StartsWith(lhs, rhs) => self.eval(lhs)?.starts_with(self.eval(rhs)?),
-            FilterAst::EndsWith(lhs, rhs) => self.eval(lhs)?.ends_with(self.eval(rhs)?),
-            FilterAst::Eq(l, r) => self.eval(l)?.eq(self.eval(r)?),
-            FilterAst::Ne(l, r) => self.eval(l)?.ne(self.eval(r)?),
-            FilterAst::Gt(l, r) => self.eval(l)?.gt(self.eval(r)?),
-            FilterAst::Gte(l, r) => self.eval(l)?.gte(self.eval(r)?),
-            FilterAst::Lt(l, r) => self.eval(l)?.lt(self.eval(r)?),
-            FilterAst::Lte(l, r) => self.eval(l)?.lte(self.eval(r)?),
-            FilterAst::Mul(l, r) => self.eval(l)?.mul(self.eval(r)?),
-            FilterAst::Div(l, r) => self.eval(l)?.div(self.eval(r)?),
-            FilterAst::Plus(l, r) => self.eval(l)?.add(self.eval(r)?),
-            FilterAst::Minus(l, r) => self.eval(l)?.sub(self.eval(r)?),
-        }
+            FilterAst::Not(expr) => Val::bool(!self.eval(expr)?.to_bool()),
+            FilterAst::Contains(lhs, rhs) => self.eval(lhs)?.contains(&self.eval(rhs)?)?.into(),
+            FilterAst::StartsWith(lhs, rhs) => {
+                self.eval(lhs)?.starts_with(&self.eval(rhs)?)?.into()
+            }
+            FilterAst::EndsWith(lhs, rhs) => self.eval(lhs)?.ends_with(&self.eval(rhs)?)?.into(),
+            FilterAst::Eq(l, r) => self.eval(l)?.eq(&self.eval(r)?)?.into(),
+            FilterAst::Ne(l, r) => self.eval(l)?.ne(&self.eval(r)?)?.into(),
+            FilterAst::Gt(l, r) => self.eval(l)?.gt(&self.eval(r)?)?.into(),
+            FilterAst::Gte(l, r) => self.eval(l)?.gte(&self.eval(r)?)?.into(),
+            FilterAst::Lt(l, r) => self.eval(l)?.lt(&self.eval(r)?)?.into(),
+            FilterAst::Lte(l, r) => self.eval(l)?.lte(&self.eval(r)?)?.into(),
+            FilterAst::Mul(l, r) => self.eval(l)?.mul(&self.eval(r)?)?.into(),
+            FilterAst::Div(l, r) => self.eval(l)?.div(&self.eval(r)?)?.into(),
+            FilterAst::Plus(l, r) => self.eval(l)?.add(&self.eval(r)?)?.into(),
+            FilterAst::Minus(l, r) => self.eval(l)?.sub(&self.eval(r)?)?.into(),
+        })
     }
 }
 

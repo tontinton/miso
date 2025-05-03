@@ -45,15 +45,15 @@ impl<'a> ProjectInterpreter<'a> {
 
 impl<'a> ProjectInterpreter<'a> {
     fn eval(&self, ast: &'a ProjectAst) -> Result<Val<'a>> {
-        match ast {
-            ProjectAst::Id(name) => ident(self.log, name),
-            ProjectAst::Lit(value) => Ok(Val::borrowed(value)),
-            ProjectAst::Cast(ty, expr) => self.eval(expr)?.cast(*ty),
-            ProjectAst::Mul(l, r) => self.eval(l)?.mul(self.eval(r)?),
-            ProjectAst::Div(l, r) => self.eval(l)?.div(self.eval(r)?),
-            ProjectAst::Plus(l, r) => self.eval(l)?.add(self.eval(r)?),
-            ProjectAst::Minus(l, r) => self.eval(l)?.sub(self.eval(r)?),
-        }
+        Ok(match ast {
+            ProjectAst::Id(name) => ident(self.log, name)?,
+            ProjectAst::Lit(value) => Val::borrowed(value),
+            ProjectAst::Cast(ty, expr) => self.eval(expr)?.cast(*ty)?,
+            ProjectAst::Mul(l, r) => self.eval(l)?.mul(&self.eval(r)?)?.into(),
+            ProjectAst::Div(l, r) => self.eval(l)?.div(&self.eval(r)?)?.into(),
+            ProjectAst::Plus(l, r) => self.eval(l)?.add(&self.eval(r)?)?.into(),
+            ProjectAst::Minus(l, r) => self.eval(l)?.sub(&self.eval(r)?)?.into(),
+        })
     }
 }
 
