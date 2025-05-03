@@ -180,8 +180,10 @@ fn rx_to_dynamic_filter_tx_stream(
             yield log;
         }
 
-        // Adding "in" filter would probably be more efficient.
-        let ast = FilterAst::Or(values.into_iter().map(|v| FilterAst::Lit(v.0)).collect());
+        let ast = FilterAst::In(
+            Box::new(FilterAst::Id(field)),
+            values.into_iter().map(|v| FilterAst::Lit(v.0)).collect(),
+        );
         if let Err(e) = dynamic_filter_tx.send(Some(ast)) {
             error!("Failed sending dynamic filter: {e}");
         }
