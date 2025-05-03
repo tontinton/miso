@@ -2,6 +2,7 @@ use std::collections::BTreeSet;
 
 use async_recursion::async_recursion;
 use convert_sort_limit_to_topn::ConvertSortLimitToTopN;
+use dynamic_filter::DynamicFilter;
 use merge_filters_into_and_filter::MergeFiltersIntoAndFilter;
 use merge_topn_limit::MergeTopNLimit;
 use pattern::{Group, Pattern};
@@ -23,6 +24,7 @@ use tokio::task::yield_now;
 use crate::workflow::{WorkflowStep, WorkflowStepKind};
 
 mod convert_sort_limit_to_topn;
+mod dynamic_filter;
 mod merge_filters_into_and_filter;
 mod merge_topn_limit;
 mod pattern;
@@ -45,7 +47,7 @@ mod tests;
 
 #[macro_export]
 macro_rules! opt {
-    ($optimization:ident) => {
+    ($optimization:expr) => {
         OptimizationStep {
             optimization: Box::new($optimization) as Box<dyn Optimization>,
             run_once: false,
@@ -55,13 +57,16 @@ macro_rules! opt {
 
 #[macro_export]
 macro_rules! opt_once {
-    ($optimization:ident) => {
+    ($optimization:expr) => {
         OptimizationStep {
             optimization: Box::new($optimization) as Box<dyn Optimization>,
             run_once: true,
         }
     };
 }
+
+/// Like dynamic-filtering.small.max-distinct-values-per-driver in trino.
+const DEFAULT_MAX_DISTINCT_COUNT_FOR_DYNAMIC_FILTER: u32 = 10000;
 
 pub trait Optimization: Send + Sync {
     fn pattern(&self) -> Pattern;
@@ -105,22 +110,9 @@ impl Optimizer {
         ]])
     }
 
-    fn new(optimizations: Vec<Vec<OptimizationStep>>) -> Self {
-        let patterns = optimizations
-            .iter()
-            .map(|opts| opts.iter().map(|x| x.optimization.pattern()).collect())
-            .collect();
-
-        Self {
-            optimizations,
-            patterns,
-        }
-    }
-}
-
-impl Default for Optimizer {
-    fn default() -> Self {
+    pub fn with_dynamic_filtering(max_distinct_values: u32) -> Self {
         Self::new(vec![
+            vec![opt_once!(DynamicFilter::new(max_distinct_values))],
             vec![
                 // Filter.
                 opt!(ReorderFilterBeforeSort),
@@ -152,6 +144,24 @@ impl Default for Optimizer {
                 opt_once!(PushLimitIntoUnion),
             ],
         ])
+    }
+
+    fn new(optimizations: Vec<Vec<OptimizationStep>>) -> Self {
+        let patterns = optimizations
+            .iter()
+            .map(|opts| opts.iter().map(|x| x.optimization.pattern()).collect())
+            .collect();
+
+        Self {
+            optimizations,
+            patterns,
+        }
+    }
+}
+
+impl Default for Optimizer {
+    fn default() -> Self {
+        Self::with_dynamic_filtering(DEFAULT_MAX_DISTINCT_COUNT_FOR_DYNAMIC_FILTER)
     }
 }
 
