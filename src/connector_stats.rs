@@ -8,11 +8,7 @@ use crate::{connector::Connector, run_at_interval::run_at_interval};
 
 pub type ConnectorStats = BTreeMap<String, CollectionStats>;
 pub type SharedConnectorStats = Arc<Mutex<BTreeMap<String, CollectionStats>>>;
-
-#[derive(Debug)]
-pub struct CollectionStats {
-    pub fields: BTreeMap<String, FieldStats>,
-}
+pub type CollectionStats = BTreeMap<String, FieldStats>;
 
 #[derive(Debug, Default, Clone)]
 pub struct FieldStats {

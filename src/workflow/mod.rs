@@ -92,7 +92,7 @@ impl Scan {
         self.stats
             .lock()
             .get(&self.collection)
-            .and_then(|x| x.fields.get(field))
+            .and_then(|x| x.get(field))
             .cloned()
     }
 }
@@ -235,10 +235,14 @@ async fn apply_dynamic_filter(
     handle: &dyn QueryHandle,
     mut dynamic_filter_rx: watch::Receiver<Option<FilterAst>>,
 ) -> Option<Arc<dyn QueryHandle>> {
+    info!("Waiting for dynamic filter");
+
     match timeout(DYNAMIC_FILTER_TIMEOUT, dynamic_filter_rx.changed()).await {
         Ok(Ok(())) => {
+            info!("Got dynamic filter");
             if let Some(ast) = dynamic_filter_rx.borrow().as_ref() {
                 if let Some(dynamic_filtered_handle) = connector.apply_filter(ast, handle) {
+                    info!("Applied dynamic filter");
                     return Some(dynamic_filtered_handle.into());
                 }
             }

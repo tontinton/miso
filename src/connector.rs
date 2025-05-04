@@ -52,6 +52,18 @@ impl ConnectorState {
             _stats_collector: stats_collector,
         }
     }
+
+    pub fn new_with_static_stats(
+        connector: Arc<dyn Connector>,
+        stats: Option<ConnectorStats>,
+    ) -> Self {
+        let stats = Arc::new(Mutex::new(stats.unwrap_or_default()));
+        Self {
+            connector,
+            stats,
+            _stats_collector: None,
+        }
+    }
 }
 
 pub enum QueryResponse {
