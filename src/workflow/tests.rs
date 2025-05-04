@@ -869,7 +869,7 @@ async fn filter_non_existant_field_then_limit_after_union() -> Result<()> {
 }
 
 #[tokio::test]
-async fn filter_existant_field_then_limit_after_union() -> Result<()> {
+async fn filter_exists_field_and_limit_after_union() -> Result<()> {
     check_multi_collection(
         r#"[
             {"scan": ["test", "x"]},
