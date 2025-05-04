@@ -1,4 +1,8 @@
-use std::{any::Any, collections::BTreeMap, sync::Arc};
+use std::{
+    any::Any,
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+};
 
 use async_stream::try_stream;
 use axum::async_trait;
@@ -14,11 +18,14 @@ use tokio::sync::watch;
 
 use crate::{
     connector::{Connector, ConnectorState, QueryHandle, QueryResponse, Split},
+    connector_stats::{CollectionStats, ConnectorStats, FieldStats},
     http_server::to_workflow_steps,
     log::Log,
     optimizations::Optimizer,
     workflow::{sortable_value::SortableValue, Workflow},
 };
+
+use super::filter::FilterAst;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct TestSplit {}
@@ -40,12 +47,20 @@ impl QueryHandle for TestHandle {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 struct TestHandle {}
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct TestConnector {
     collections: BTreeMap<String, Vec<Log>>,
+    apply_filter_tx: Option<std::sync::mpsc::Sender<FilterAst>>,
 }
 
 impl TestConnector {
+    fn new(apply_filter_tx: Option<std::sync::mpsc::Sender<FilterAst>>) -> Self {
+        Self {
+            collections: BTreeMap::new(),
+            apply_filter_tx,
+        }
+    }
+
     fn insert(&mut self, collection: String, logs: Vec<Log>) {
         self.collections.insert(collection, logs);
     }
@@ -83,7 +98,53 @@ impl Connector for TestConnector {
         })))
     }
 
+    fn apply_filter(
+        &self,
+        ast: &FilterAst,
+        _handle: &dyn QueryHandle,
+    ) -> Option<Box<dyn QueryHandle>> {
+        if let Some(tx) = &self.apply_filter_tx {
+            tx.send(ast.clone()).expect("send() apply dynamic filter");
+        }
+        None
+    }
+
+    async fn fetch_stats(&self) -> Option<ConnectorStats> {
+        let mut stats = ConnectorStats::new();
+        for (collection, logs) in self.collections.clone() {
+            let mut collection_stats = CollectionStats::new();
+            for (field, distinct_count) in distinct_field_values(logs) {
+                collection_stats.insert(
+                    field,
+                    FieldStats {
+                        distinct_count: Some(distinct_count),
+                    },
+                );
+            }
+            stats.insert(collection, collection_stats);
+        }
+        Some(stats)
+    }
+
     async fn close(self) {}
+}
+
+fn distinct_field_values(logs: Vec<Log>) -> Vec<(String, u32)> {
+    let mut field_values: BTreeMap<String, BTreeSet<SortableValue>> = BTreeMap::new();
+
+    for log in logs {
+        for (key, value) in log {
+            field_values
+                .entry(key)
+                .or_default()
+                .insert(SortableValue(value));
+        }
+    }
+
+    field_values
+        .into_iter()
+        .map(|(k, v)| (k, v.len() as u32))
+        .collect()
 }
 
 #[ctor]
@@ -109,6 +170,7 @@ async fn check_multi_connectors(
     query: &str,
     input: BTreeMap<&str, BTreeMap<&str, &str>>,
     expected: &str,
+    apply_filter_tx: Option<std::sync::mpsc::Sender<FilterAst>>,
 ) -> Result<()> {
     let expected_logs = {
         let mut v: Vec<_> = serde_json::from_str::<Vec<serde_json::Value>>(expected)
@@ -120,30 +182,32 @@ async fn check_multi_connectors(
         v
     };
 
-    let mut connectors = BTreeMap::new();
+    let mut test_connectors = BTreeMap::new();
     for (connector_name, collections) in input {
         for (collection, raw_logs) in collections {
             let input_logs: Vec<Log> =
                 serde_json::from_str(raw_logs).context("parse input logs from json")?;
-            connectors
+            test_connectors
                 .entry(connector_name.to_string())
-                .or_insert_with(TestConnector::default)
+                .or_insert_with(|| TestConnector::new(apply_filter_tx.clone()))
                 .insert(collection.to_string(), input_logs);
         }
     }
 
+    let test_connectors = test_connectors
+        .into_iter()
+        .map(|(name, connector)| (name, Arc::new(connector)))
+        .collect::<BTreeMap<String, Arc<TestConnector>>>();
+
+    let mut connectors = BTreeMap::new();
+    for (name, connector) in test_connectors {
+        let stats = connector.fetch_stats().await;
+        let connector_state = Arc::new(ConnectorState::new_with_static_stats(connector, stats));
+        connectors.insert(name, connector_state);
+    }
+
     let steps = to_workflow_steps(
-        &connectors
-            .into_iter()
-            .map(|(name, connector)| {
-                (
-                    name,
-                    Arc::new(ConnectorState::new(
-                        Arc::new(connector) as Arc<dyn Connector>
-                    )),
-                )
-            })
-            .collect(),
+        &connectors,
         serde_json::from_str(query).context("parse query steps from json")?,
     )
     .await
@@ -189,18 +253,25 @@ async fn check_multi_connectors(
     Ok(())
 }
 
+#[bon::builder]
 async fn check_multi_collection(
     query: &str,
     input: BTreeMap<&str, &str>,
-    expected: &str,
+    expect: &str,
+    apply_filter_tx: Option<std::sync::mpsc::Sender<FilterAst>>,
 ) -> Result<()> {
-    check_multi_connectors(query, btreemap! {"test" => input}, expected).await
+    check_multi_connectors(query, btreemap! {"test" => input}, expect, apply_filter_tx).await
 }
 
 /// Creates a test connector named 'test' and a collection named 'c' which will include logs
 /// given by |input|. Tests that the logs returned by running |query| are equal to |expected|.
 async fn check(query: &str, input: &str, expected: &str) -> Result<()> {
-    check_multi_collection(query, btreemap! {"c" => input}, expected).await
+    check_multi_collection()
+        .query(query)
+        .input(btreemap! {"c" => input})
+        .expect(expected)
+        .call()
+        .await
 }
 
 #[tokio::test]
@@ -710,102 +781,142 @@ async fn summarize() -> Result<()> {
 
 #[tokio::test]
 async fn join_inner() -> Result<()> {
-    check_multi_collection(
-        r#"[
-            {"scan": ["test", "left"]},
-            {
-                "join": [
-                    {"on": ["id", "id"]},
-                    [{"scan": ["test", "right"]}]
-                ]
-            }
-        ]"#,
-        btreemap!{
+    let (tx, rx) = std::sync::mpsc::channel();
+
+    check_multi_collection()
+        .query(
+            r#"[
+                {"scan": ["test", "left"]},
+                {
+                    "join": [
+                        {"on": ["id", "id"]},
+                        [{"scan": ["test", "right"]}]
+                    ]
+                }
+            ]"#
+        )
+        .input(btreemap!{
             "left"  => r#"[{"id": 1, "value": "one"}, {"id": 2, "value": "two"}, {"id": 3, "value": "three"}]"#,
             "right" => r#"[{"id": 1, "value": "ONE"}, {"id": 2, "value": "TWO"}, {"id": 4, "value": "FOUR"}]"#,
-        },
-        r#"[
-            {"id": 1, "value_left": "one", "value_right": "ONE"},
-            {"id": 2, "value_left": "two", "value_right": "TWO"}
-        ]"#,
-    )
-    .await
+        })
+        .expect(
+            r#"[
+                {"id": 1, "value_left": "one", "value_right": "ONE"},
+                {"id": 2, "value_left": "two", "value_right": "TWO"}
+            ]"#
+        )
+        .apply_filter_tx(tx)
+        .call()
+        .await
+        .context("check multi collection")?;
+
+    let ast = rx.recv().context("recv() apply dynamic filter")?;
+    assert_eq!(
+        ast,
+        FilterAst::In(
+            Box::new(FilterAst::Id("id".to_string())),
+            vec![
+                FilterAst::Lit(1.into()),
+                FilterAst::Lit(2.into()),
+                FilterAst::Lit(3.into())
+            ]
+        )
+    );
+
+    assert!(matches!(
+        rx.try_recv(),
+        Err(std::sync::mpsc::TryRecvError::Empty | std::sync::mpsc::TryRecvError::Disconnected)
+    ));
+
+    Ok(())
 }
 
 #[tokio::test]
 async fn join_outer() -> Result<()> {
-    check_multi_collection(
-        r#"[
-            {"scan": ["test", "left"]},
-            {
-                "join": [
-                    {"on": ["id", "id"], "type": "outer"},
-                    [{"scan": ["test", "right"]}]
-                ]
-            }
-        ]"#,
-        btreemap!{
+    check_multi_collection()
+        .query(
+            r#"[
+                {"scan": ["test", "left"]},
+                {
+                    "join": [
+                        {"on": ["id", "id"], "type": "outer"},
+                        [{"scan": ["test", "right"]}]
+                    ]
+                }
+            ]"#
+        )
+        .input(btreemap!{
             "left"  => r#"[{"id": 1, "value": "one"}, {"id": 2, "value": "two"}, {"id": 3, "value": "three"}]"#,
             "right" => r#"[{"id": 1, "value": "ONE"}, {"id": 2, "value": "TWO"}, {"id": 4, "value": "FOUR"}]"#,
-        },
-        r#"[
-            {"id": 1, "value_left": "one", "value_right": "ONE"},
-            {"id": 2, "value_left": "two", "value_right": "TWO"},
-            {"id": 3, "value": "three"},
-            {"id": 4, "value": "FOUR"}
-        ]"#,
-    )
-    .await
+        })
+        .expect(
+            r#"[
+                {"id": 1, "value_left": "one", "value_right": "ONE"},
+                {"id": 2, "value_left": "two", "value_right": "TWO"},
+                {"id": 3, "value": "three"},
+                {"id": 4, "value": "FOUR"}
+            ]"#
+        )
+        .call()
+        .await
 }
 
 #[tokio::test]
 async fn join_left() -> Result<()> {
-    check_multi_collection(
-        r#"[
-            {"scan": ["test", "left"]},
-            {
-                "join": [
-                    {"on": ["id", "id"], "type": "left"},
-                    [{"scan": ["test", "right"]}]
-                ]
-            }
-        ]"#,
-        btreemap!{
+    check_multi_collection()
+        .query(
+            r#"[
+                {"scan": ["test", "left"]},
+                {
+                    "join": [
+                        {"on": ["id", "id"], "type": "left"},
+                        [{"scan": ["test", "right"]}]
+                    ]
+                }
+            ]"#
+        )
+        .input(btreemap!{
             "left"  => r#"[{"id": 1, "value": "one"}, {"id": 2, "value": "two"}, {"id": 3, "value": "three"}]"#,
             "right" => r#"[{"id": 1, "value": "ONE"}, {"id": 2, "value": "TWO"}, {"id": 4, "value": "FOUR"}]"#,
-        },
-        r#"[
-            {"id": 1, "value": "one"},
-            {"id": 2, "value": "two"},
-            {"id": 3, "value": "three"}
-        ]"#,
-    )
-    .await
+        })
+        .expect(
+            r#"[
+                {"id": 1, "value": "one"},
+                {"id": 2, "value": "two"},
+                {"id": 3, "value": "three"}
+            ]"#
+        )
+        .call()
+        .await
 }
 
 #[tokio::test]
 async fn join_right() -> Result<()> {
-    check_multi_collection(
-        r#"[
-            {"scan": ["test", "left"]},
-            {
-                "join": [
-                    {"on": ["id", "id"], "type": "right"},
-                    [{"scan": ["test", "right"]}]
-                ]
-            }
-        ]"#,
-        btreemap!{
+    check_multi_collection()
+        .query(
+            r#"[
+                {"scan": ["test", "left"]},
+                {
+                    "join": [
+                        {"on": ["id", "id"], "type": "right"},
+                        [{"scan": ["test", "right"]}]
+                    ]
+                }
+            ]"#
+        )
+        .input(btreemap!{
             "left"  => r#"[{"id": 1, "value": "one"}, {"id": 2, "value": "two"}, {"id": 3, "value": "three"}]"#,
             "right" => r#"[{"id": 1, "value": "ONE"}, {"id": 2, "value": "TWO"}, {"id": 4, "value": "FOUR"}]"#,
-        },
-        r#"[
-            {"id": 1, "value": "ONE"},
-            {"id": 2, "value": "TWO"},
-            {"id": 4, "value": "FOUR"}
-        ]"#,
-    )
-    .await
+        })
+        .expect(
+            r#"[
+                {"id": 1, "value": "ONE"},
+                {"id": 2, "value": "TWO"},
+                {"id": 4, "value": "FOUR"}
+            ]"#
+        )
+        .call()
+        .await
 }
 
 #[tokio::test]
@@ -830,92 +941,107 @@ async fn count_on_count() -> Result<()> {
 
 #[tokio::test]
 async fn union() -> Result<()> {
-    check_multi_collection(
-        r#"[
-            {"scan": ["test", "x"]},
-            {"union": [{"scan": ["test", "y"]}]}
-        ]"#,
-        btreemap!{
+    check_multi_collection()
+        .query(
+            r#"[
+                {"scan": ["test", "x"]},
+                {"union": [{"scan": ["test", "y"]}]}
+            ]"#
+        )
+        .input(btreemap!{
             "x" => r#"[{"id": 1, "value": "one"}, {"id": 2, "value": "two"}, {"id": 3, "value": "three"}]"#,
             "y" => r#"[{"id": 4, "value": "four"}, {"id": 5, "value": "five"}]"#,
-        },
-        r#"[
-            {"id": 1, "value": "one"},
-            {"id": 2, "value": "two"},
-            {"id": 3, "value": "three"},
-            {"id": 4, "value": "four"},
-            {"id": 5, "value": "five"}
-        ]"#,
-    )
-    .await
+        })
+        .expect(
+            r#"[
+                {"id": 1, "value": "one"},
+                {"id": 2, "value": "two"},
+                {"id": 3, "value": "three"},
+                {"id": 4, "value": "four"},
+                {"id": 5, "value": "five"}
+            ]"#
+        )
+        .call()
+        .await
 }
 
 #[tokio::test]
 async fn filter_non_existant_field_then_limit_after_union() -> Result<()> {
-    check_multi_collection(
-        r#"[
-            {"scan": ["test", "x"]},
-            {"union": [{"scan": ["test", "y"]}]},
-            {"filter": {"==": [{"id": "id"}, {"lit": 2}]}},
-            {"limit": 4}
-        ]"#,
-        btreemap! {
+    check_multi_collection()
+        .query(
+            r#"[
+                {"scan": ["test", "x"]},
+                {"union": [{"scan": ["test", "y"]}]},
+                {"filter": {"==": [{"id": "id"}, {"lit": 2}]}},
+                {"limit": 4}
+            ]"#,
+        )
+        .input(btreemap! {
             "x" => r#"[{"id": 1}, {"id": 2}, {"id": 3}]"#,
             "y" => r#"[{"xd": 1}, {"xd": 2}, {"xd": 3}]"#,
-        },
-        r#"[{"id": 2}]"#,
-    )
-    .await
+        })
+        .expect(r#"[{"id": 2}]"#)
+        .call()
+        .await
 }
 
 #[tokio::test]
 async fn filter_exists_field_and_limit_after_union() -> Result<()> {
-    check_multi_collection(
-        r#"[
-            {"scan": ["test", "x"]},
-            {"union": [{"scan": ["test", "y"]}]},
-            {
-                "filter": {
-                    "or": [
-                        {"not": {"exists": "id"}},
-                        {"==": [{"id": "id"}, {"lit": 2}]}
-                    ]
-                }
-            },
-            {"limit": 4}
-        ]"#,
-        btreemap! {
+    check_multi_collection()
+        .query(
+            r#"[
+                {"scan": ["test", "x"]},
+                {"union": [{"scan": ["test", "y"]}]},
+                {
+                    "filter": {
+                        "or": [
+                            {"not": {"exists": "id"}},
+                            {"==": [{"id": "id"}, {"lit": 2}]}
+                        ]
+                    }
+                },
+                {"limit": 4}
+            ]"#,
+        )
+        .input(btreemap! {
             "x" => r#"[{"id": 1}, {"id": 2}, {"id": 3}]"#,
             "y" => r#"[{"xd": 1}, {"xd": 2}, {"xd": 3}]"#,
-        },
-        r#"[{"id": 2}, {"xd": 1}, {"xd": 2}, {"xd": 3}]"#,
-    )
-    .await
+        })
+        .expect(r#"[{"id": 2}, {"xd": 1}, {"xd": 2}, {"xd": 3}]"#)
+        .call()
+        .await
 }
 
 #[tokio::test]
 async fn union_summarize() -> Result<()> {
-    check_multi_collection(
-        r#"[
-            {"scan": ["test", "x"]},
-            {"union": [{"scan": ["test", "y"]}]},
-            {
-                "summarize": {
-                    "aggs": {
-                        "max_x": {"max": "x"},
-                        "min_x": {"min": "x"},
-                        "sum_x": {"sum": "x"},
-                        "c": "count"
-                    },
-                    "by": ["y"]
+    check_multi_collection()
+        .query(
+            r#"[
+                {"scan": ["test", "x"]},
+                {"union": [{"scan": ["test", "y"]}]},
+                {
+                    "summarize": {
+                        "aggs": {
+                            "max_x": {"max": "x"},
+                            "min_x": {"min": "x"},
+                            "sum_x": {"sum": "x"},
+                            "c": "count"
+                        },
+                        "by": ["y"]
+                    }
                 }
-            }
-        ]"#,
-        btreemap! {
+            ]"#,
+        )
+        .input(btreemap! {
             "x" => r#"[{"x": 3, "y": 3}, {"x": 5, "y": 6}, {"x": 1, "y": 3}, {"x": 9, "y": 6}]"#,
             "y" => r#"[{"x": 6, "y": 3}, {"x": 9, "y": 6}, {"x": 7, "y": 3}, {"x": 2, "y": 6}]"#,
-        },
-        r#"[{"max_x": 7, "min_x": 1, "sum_x": 17.0, "c": 4, "y": 3}, {"max_x": 9, "min_x": 2, "sum_x": 25.0, "c": 4, "y": 6}]"#,
-    )
-    .await
+        })
+        .expect(
+            r#"[
+                {"max_x": 7, "min_x": 1, "sum_x": 17.0, "c": 4, "y": 3},
+                {"max_x": 9, "min_x": 2, "sum_x": 25.0, "c": 4, "y": 6}
+            ]"#,
+        )
+        .call()
+        .await
 }
