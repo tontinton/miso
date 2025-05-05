@@ -13,7 +13,7 @@ use color_eyre::{
 };
 use ctor::ctor;
 use futures_util::TryStreamExt;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use tokio::sync::watch;
 
 use crate::{
@@ -47,9 +47,11 @@ impl QueryHandle for TestHandle {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 struct TestHandle {}
 
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
 struct TestConnector {
     collections: BTreeMap<String, Vec<Log>>,
+
+    #[serde(skip_serializing)]
     apply_filter_tx: Option<std::sync::mpsc::Sender<FilterAst>>,
 }
 
@@ -66,7 +68,27 @@ impl TestConnector {
     }
 }
 
+impl<'de> Deserialize<'de> for TestConnector {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct Helper {
+            collections: BTreeMap<String, Vec<Log>>,
+        }
+
+        let helper = Helper::deserialize(deserializer)?;
+
+        Ok(TestConnector {
+            collections: helper.collections,
+            apply_filter_tx: None,
+        })
+    }
+}
+
 #[async_trait]
+#[typetag::serde]
 impl Connector for TestConnector {
     fn does_collection_exist(&self, collection: &str) -> bool {
         self.collections.contains_key(collection)

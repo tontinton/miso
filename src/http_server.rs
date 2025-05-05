@@ -3,9 +3,10 @@ use std::{collections::BTreeMap, sync::Arc, time::Duration};
 use async_recursion::async_recursion;
 use async_stream::stream;
 use axum::{
+    extract::Path,
     http::StatusCode,
     response::{sse::Event, IntoResponse, Response, Sse},
-    routing::post,
+    routing::{get, post},
     Extension, Json, Router,
 };
 use color_eyre::Result;
@@ -246,6 +247,12 @@ async fn query_stream(
     }))
 }
 
+async fn get_connectors(
+    Extension(state): Extension<SharedState>,
+    Path(id): Path<String>,
+) -> Result<Connector, HttpError> {
+}
+
 pub fn create_axum_app(args: &Args) -> Result<Router> {
     let mut connectors = BTreeMap::new();
     connectors.insert(
@@ -253,9 +260,9 @@ pub fn create_axum_app(args: &Args) -> Result<Router> {
         Arc::new(ConnectorState::new_with_stats(
             Arc::new(QuickwitConnector::new(serde_json::from_str(
                 r#"{
-                "url": "http://127.0.0.1:7280",
-                "refresh_interval": "5s"
-            }"#,
+                    "url": "http://127.0.0.1:7280",
+                    "refresh_interval": "5s"
+                }"#,
             )?)),
             Some(UPDATE_STATS_INTERVAL),
         )),
@@ -274,5 +281,6 @@ pub fn create_axum_app(args: &Args) -> Result<Router> {
 
     Ok(Router::new()
         .route("/query", post(query_stream))
+        .route("/connectors/:id", get(get_connectors))
         .layer(Extension(state)))
 }

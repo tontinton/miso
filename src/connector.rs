@@ -82,6 +82,7 @@ pub trait QueryHandle: Any + Debug + Send + Sync {
 }
 
 #[async_trait]
+#[typetag::serde(tag = "type")]
 pub trait Connector: Debug + Send + Sync {
     fn does_collection_exist(&self, collection: &str) -> bool;
 
