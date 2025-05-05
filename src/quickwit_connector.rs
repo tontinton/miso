@@ -1107,11 +1107,11 @@ impl Connector for QuickwitConnector {
         };
 
         let can_union = match (
-            self.collections.read().get(scan_collection).cloned(),
-            self.collections.read().get(&scan.collection).cloned(),
+            self.collections.read().get(scan_collection),
+            self.collections.read().get(&scan.collection),
         ) {
-            (None, _) | (_, None) => true,
             (Some(l), Some(r)) => l == r,
+            _ => false,
         };
 
         if !can_union {
