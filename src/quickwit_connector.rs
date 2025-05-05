@@ -210,6 +210,14 @@ fn default_scroll_timeout() -> Duration {
     humantime::parse_duration("1m").expect("Invalid duration format")
 }
 
+pub fn serialize_duration<S>(duration: &Duration, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    let s = humantime::format_duration(*duration).to_string();
+    serializer.serialize_str(&s)
+}
+
 fn deserialize_duration<'de, D>(deserializer: D) -> Result<Duration, D::Error>
 where
     D: Deserializer<'de>,
@@ -228,12 +236,14 @@ pub struct QuickwitConfig {
 
     #[serde(
         default = "default_refresh_interval",
+        serialize_with = "serialize_duration",
         deserialize_with = "deserialize_duration"
     )]
     refresh_interval: Duration,
 
     #[serde(
         default = "default_scroll_timeout",
+        serialize_with = "serialize_duration",
         deserialize_with = "deserialize_duration"
     )]
     scroll_timeout: Duration,
@@ -253,13 +263,18 @@ impl QuickwitConfig {
     }
 }
 
-type Collection = BTreeMap<String, Option<String>>;
-type SharedCollections = Arc<RwLock<Collection>>;
+#[derive(Debug, Serialize, Deserialize)]
+struct QuickwitIndex {
+    timestamp_field: Option<String>,
+}
+
+type QuickwitIndexes = BTreeMap<String, QuickwitIndex>;
+type SharedIndexes = Arc<RwLock<QuickwitIndexes>>;
 
 #[derive(Debug)]
 pub struct QuickwitConnector {
     config: QuickwitConfig,
-    collections: SharedCollections,
+    indexes: SharedIndexes,
     interval_task: JoinHandle<()>,
     shutdown_tx: watch::Sender<()>,
     client: Client,
@@ -272,7 +287,7 @@ impl Serialize for QuickwitConnector {
     {
         let mut state = serializer.serialize_struct("QuickwitConnector", 2)?;
         state.serialize_field("config", &self.config)?;
-        state.serialize_field("collections", &*self.collections.read())?;
+        state.serialize_field("indexes", &*self.indexes.read())?;
         state.end()
     }
 }
@@ -587,7 +602,7 @@ async fn search_aggregation(
 }
 
 #[instrument(name = "GET and parse quickwit indexes")]
-async fn get_indexes(client: &Client, base_url: &str) -> Result<Collection> {
+async fn get_indexes(client: &Client, base_url: &str) -> Result<QuickwitIndexes> {
     let url = format!("{}/api/v1/indexes", base_url);
     let response = client.get(&url).send().await.context("http request")?;
     if !response.status().is_success() {
@@ -600,13 +615,15 @@ async fn get_indexes(client: &Client, base_url: &str) -> Result<Collection> {
         .map(|x| {
             (
                 x.index_config.index_id,
-                x.index_config.doc_mapping.timestamp_field,
+                QuickwitIndex {
+                    timestamp_field: x.index_config.doc_mapping.timestamp_field,
+                },
             )
         })
         .collect())
 }
 
-async fn refresh_indexes(client: &Client, url: &str, collections: &SharedCollections) {
+async fn refresh_indexes(client: &Client, url: &str, collections: &SharedIndexes) {
     match get_indexes(client, url).await {
         Ok(indexes) => {
             debug!("Got indexes: {:?}", &indexes);
@@ -621,7 +638,7 @@ async fn refresh_indexes(client: &Client, url: &str, collections: &SharedCollect
 
 async fn refresh_indexes_at_interval(
     config: QuickwitConfig,
-    collections: SharedCollections,
+    collections: SharedIndexes,
     shutdown_rx: watch::Receiver<()>,
 ) {
     let client = Client::new();
@@ -647,7 +664,7 @@ impl QuickwitConnector {
 
         Self {
             config,
-            collections,
+            indexes: collections,
             interval_task,
             shutdown_tx,
             client: Client::new(),
@@ -844,7 +861,7 @@ impl QuickwitConnector {
 #[typetag::serde(name = "quickwit")]
 impl Connector for QuickwitConnector {
     fn does_collection_exist(&self, collection: &str) -> bool {
-        self.collections.read().contains_key(collection)
+        self.indexes.read().contains_key(collection)
     }
 
     async fn get_splits(&self) -> Vec<Arc<dyn Split>> {
@@ -1136,10 +1153,10 @@ impl Connector for QuickwitConnector {
         };
 
         let can_union = match (
-            self.collections.read().get(scan_collection),
-            self.collections.read().get(&scan.collection),
+            self.indexes.read().get(scan_collection),
+            self.indexes.read().get(&scan.collection),
         ) {
-            (Some(l), Some(r)) => l == r,
+            (Some(l), Some(r)) => l.timestamp_field == r.timestamp_field,
             _ => false,
         };
 
