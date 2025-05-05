@@ -20,7 +20,7 @@ use uuid::Uuid;
 
 use crate::{
     args::Args,
-    connector::ConnectorState,
+    connector::{Connector, ConnectorState},
     optimizations::Optimizer,
     quickwit_connector::QuickwitConnector,
     workflow::{
@@ -250,7 +250,28 @@ async fn query_stream(
 async fn get_connectors(
     Extension(state): Extension<SharedState>,
     Path(id): Path<String>,
-) -> Result<Connector, HttpError> {
+) -> Result<Response, HttpError> {
+    let guard = state.read().await;
+    let connector_state = guard.connectors.get(&id).ok_or_else(|| {
+        HttpError::new(
+            StatusCode::NOT_FOUND,
+            format!("connector of id '{id}' not found"),
+        )
+    })?;
+    let connector: &dyn Connector = &*connector_state.connector;
+    Ok(Json(connector).into_response())
+}
+
+async fn get_all_connectors(
+    Extension(state): Extension<SharedState>,
+) -> Result<Response, HttpError> {
+    let guard = state.read().await;
+    let mut connectors_map = BTreeMap::new();
+    for (id, conn_state) in &guard.connectors {
+        let connector: &dyn Connector = &*conn_state.connector;
+        connectors_map.insert(id.clone(), connector);
+    }
+    Ok(Json(connectors_map).into_response())
 }
 
 pub fn create_axum_app(args: &Args) -> Result<Router> {
@@ -281,6 +302,7 @@ pub fn create_axum_app(args: &Args) -> Result<Router> {
 
     Ok(Router::new()
         .route("/query", post(query_stream))
+        .route("/connectors", get(get_all_connectors))
         .route("/connectors/:id", get(get_connectors))
         .layer(Extension(state)))
 }
