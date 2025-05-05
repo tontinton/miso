@@ -11,7 +11,7 @@ use color_eyre::eyre::{bail, Context, Result};
 use futures_util::stream;
 use parking_lot::RwLock;
 use reqwest::Client;
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{ser::SerializeStruct, Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::{json, to_string, Value};
 use tokio::{spawn, sync::watch, task::JoinHandle};
 use tracing::{debug, error, info, instrument};
@@ -222,7 +222,7 @@ fn default_scroll_size() -> u16 {
     10000
 }
 
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct QuickwitConfig {
     url: String,
 
@@ -263,6 +263,34 @@ pub struct QuickwitConnector {
     interval_task: JoinHandle<()>,
     shutdown_tx: watch::Sender<()>,
     client: Client,
+}
+
+impl Serialize for QuickwitConnector {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut state = serializer.serialize_struct("QuickwitConnector", 2)?;
+        state.serialize_field("config", &self.config)?;
+        state.serialize_field("collections", &*self.collections.read())?;
+        state.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for QuickwitConnector {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct QuickwitConnectorConfigOnly {
+            config: QuickwitConfig,
+        }
+
+        let QuickwitConnectorConfigOnly { config } =
+            QuickwitConnectorConfigOnly::deserialize(deserializer)?;
+        Ok(QuickwitConnector::new(config))
+    }
 }
 
 fn filter_ast_to_query(ast: &FilterAst) -> Option<Value> {
@@ -813,6 +841,7 @@ impl QuickwitConnector {
 }
 
 #[async_trait]
+#[typetag::serde(name = "quickwit")]
 impl Connector for QuickwitConnector {
     fn does_collection_exist(&self, collection: &str) -> bool {
         self.collections.read().contains_key(collection)
