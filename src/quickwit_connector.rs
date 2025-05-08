@@ -11,7 +11,7 @@ use color_eyre::eyre::{bail, Context, Result};
 use futures_util::stream;
 use parking_lot::RwLock;
 use reqwest::Client;
-use serde::{ser::SerializeStruct, Deserialize, Deserializer, Serialize, Serializer};
+use serde::{ser::SerializeMap, Deserialize, Serialize, Serializer};
 use serde_json::{json, to_string, Value};
 use tokio::{spawn, sync::watch, task::JoinHandle};
 use tracing::{debug, error, info, instrument};
@@ -270,10 +270,17 @@ impl Serialize for QuickwitConnector {
     where
         S: Serializer,
     {
-        let mut state = serializer.serialize_struct("QuickwitConnector", 2)?;
-        state.serialize_field("config", &self.config)?;
-        state.serialize_field("indexes", &*self.indexes.read())?;
-        state.end()
+        let config_json = serde_json::to_value(&self.config).map_err(serde::ser::Error::custom)?;
+        let config_map = config_json
+            .as_object()
+            .ok_or_else(|| serde::ser::Error::custom("config must serialize to a JSON object"))?;
+
+        let mut map = serializer.serialize_map(Some(config_map.len() + 1))?;
+        for (k, v) in config_map {
+            map.serialize_entry(k, v)?;
+        }
+        map.serialize_entry("indexes", &*self.indexes.read())?;
+        map.end()
     }
 }
 
@@ -282,14 +289,7 @@ impl<'de> Deserialize<'de> for QuickwitConnector {
     where
         D: serde::Deserializer<'de>,
     {
-        #[derive(Deserialize)]
-        struct QuickwitConnectorConfigOnly {
-            config: QuickwitConfig,
-        }
-
-        let QuickwitConnectorConfigOnly { config } =
-            QuickwitConnectorConfigOnly::deserialize(deserializer)?;
-        Ok(QuickwitConnector::new(config))
+        QuickwitConfig::deserialize(deserializer).map(QuickwitConnector::new)
     }
 }
 
