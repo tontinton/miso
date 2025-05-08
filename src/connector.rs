@@ -42,14 +42,14 @@ impl ConnectorState {
         }
     }
 
-    pub fn new_with_stats(connector: Arc<dyn Connector>, interval: Option<Duration>) -> Self {
+    pub fn new_with_stats(connector: Arc<dyn Connector>, interval: Duration) -> Self {
         let stats = Arc::new(Mutex::new(BTreeMap::new()));
         let stats_collector =
-            interval.map(|x| IntervalStatsCollector::new(x, connector.clone(), stats.clone()));
+            IntervalStatsCollector::new(interval, connector.clone(), stats.clone());
         Self {
             connector,
             stats,
-            _stats_collector: stats_collector,
+            _stats_collector: Some(stats_collector),
         }
     }
 

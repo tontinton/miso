@@ -21,6 +21,7 @@ use uuid::Uuid;
 use crate::{
     args::Args,
     connector::{Connector, ConnectorState},
+    humantime_utils::deserialize_duration,
     optimizations::Optimizer,
     quickwit_connector::QuickwitConnector,
     workflow::{
@@ -29,8 +30,7 @@ use crate::{
     },
 };
 
-// Should be a configuration in the future.
-const UPDATE_STATS_INTERVAL: Duration = Duration::from_secs(60 * 60 * 3); // 3 hours.
+const DEFAULT_STATS_FETCH_INTERVAL: Duration = Duration::from_secs(60 * 60 * 3); // 3 hours.
 
 const INTERNAL_SERVER_ERROR: &str = "Internal server error";
 
@@ -247,7 +247,7 @@ async fn query_stream(
     }))
 }
 
-async fn get_connectors(
+async fn get_connector(
     Extension(state): Extension<SharedState>,
     Path(id): Path<String>,
 ) -> Result<Response, HttpError> {
@@ -269,9 +269,45 @@ async fn get_all_connectors(
     let mut connectors_map = BTreeMap::new();
     for (id, conn_state) in &guard.connectors {
         let connector: &dyn Connector = &*conn_state.connector;
-        connectors_map.insert(id.clone(), connector);
+        connectors_map.insert(id, connector);
     }
     Ok(Json(connectors_map).into_response())
+}
+
+fn default_stats_fetch_interval() -> Duration {
+    DEFAULT_STATS_FETCH_INTERVAL
+}
+
+#[derive(Deserialize)]
+struct PostConnectorBody {
+    /// The interval to fetch statistics (e.g. distinct count of each field), and cache in memory.
+    #[serde(
+        default = "default_stats_fetch_interval",
+        deserialize_with = "deserialize_duration"
+    )]
+    stats_fetch_interval: Duration,
+
+    /// The connector config to set.
+    connector: Box<dyn Connector>,
+}
+
+async fn post_connector(
+    Extension(state): Extension<SharedState>,
+    Path(id): Path<String>,
+    Json(PostConnectorBody {
+        stats_fetch_interval,
+        connector,
+    }): Json<PostConnectorBody>,
+) -> Result<(), HttpError> {
+    let connector_state = Arc::new(ConnectorState::new_with_stats(
+        connector.into(),
+        stats_fetch_interval,
+    ));
+
+    let mut guard = state.write().await;
+    guard.connectors.insert(id, connector_state);
+
+    Ok(())
 }
 
 pub fn create_axum_app(args: &Args) -> Result<Router> {
@@ -285,7 +321,7 @@ pub fn create_axum_app(args: &Args) -> Result<Router> {
                     "refresh_interval": "5s"
                 }"#,
             )?)),
-            Some(UPDATE_STATS_INTERVAL),
+            DEFAULT_STATS_FETCH_INTERVAL,
         )),
     );
 
@@ -303,6 +339,7 @@ pub fn create_axum_app(args: &Args) -> Result<Router> {
     Ok(Router::new()
         .route("/query", post(query_stream))
         .route("/connectors", get(get_all_connectors))
-        .route("/connectors/:id", get(get_connectors))
+        .route("/connectors/:id", get(get_connector))
+        .route("/connectors/:id", post(post_connector))
         .layer(Extension(state)))
 }
