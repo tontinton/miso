@@ -4,7 +4,9 @@ use parking_lot::Mutex;
 use tokio::{spawn, sync::watch, task::JoinHandle};
 use tracing::{error, instrument};
 
-use crate::{connector::Connector, run_at_interval::run_at_interval};
+use crate::run_at_interval::run_at_interval;
+
+use super::Connector;
 
 pub type ConnectorStats = BTreeMap<String, CollectionStats>;
 pub type SharedConnectorStats = Arc<Mutex<BTreeMap<String, CollectionStats>>>;

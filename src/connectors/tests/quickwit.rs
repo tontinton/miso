@@ -23,10 +23,12 @@ use tokio_test::block_on;
 use tracing::info;
 
 use crate::{
-    connector::{Connector, ConnectorState},
+    connectors::{
+        quickwit::{QuickwitConfig, QuickwitConnector},
+        Connector, ConnectorState,
+    },
     http_server::{to_workflow_steps, ConnectorsMap},
     optimizations::Optimizer,
-    quickwit_connector::{QuickwitConfig, QuickwitConnector},
     workflow::{sortable_value::SortableValue, Workflow},
 };
 

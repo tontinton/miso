@@ -23,8 +23,10 @@ use topn::topn_stream;
 use tracing::{debug, error, info, instrument};
 
 use crate::{
-    connector::{Connector, ConnectorState, QueryHandle, QueryResponse, Split},
-    connector_stats::{FieldStats, SharedConnectorStats},
+    connectors::{
+        stats::{FieldStats, SharedConnectorStats},
+        Connector, ConnectorState, QueryHandle, QueryResponse, Split,
+    },
     log::{Log, LogStream, LogTryStream},
     workflow::{
         filter::filter_stream, limit::limit_stream, project::project_stream, sort::sort_stream,

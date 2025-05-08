@@ -17,7 +17,6 @@ use tokio::{spawn, sync::watch, task::JoinHandle};
 use tracing::{debug, error, info, instrument};
 
 use crate::{
-    connector::{Connector, QueryHandle, QueryResponse, Split},
     downcast_unwrap,
     humantime_utils::{deserialize_duration, serialize_duration},
     log::{Log, LogTryStream},
@@ -29,6 +28,8 @@ use crate::{
         Workflow, WorkflowStep,
     },
 };
+
+use super::{Connector, QueryHandle, QueryResponse, Split};
 
 static AGGREGATION_RESULTS_NAME: &str = "summarize";
 

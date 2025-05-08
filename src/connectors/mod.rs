@@ -1,3 +1,9 @@
+pub mod quickwit;
+pub mod stats;
+
+#[cfg(test)]
+mod tests;
+
 use std::fmt::Debug;
 use std::sync::Arc;
 use std::time::Duration;
@@ -6,10 +12,9 @@ use std::{any::Any, collections::BTreeMap};
 use axum::async_trait;
 use color_eyre::eyre::Result;
 use parking_lot::Mutex;
+use stats::{ConnectorStats, IntervalStatsCollector, SharedConnectorStats};
 
-use crate::connector_stats::IntervalStatsCollector;
 use crate::{
-    connector_stats::{ConnectorStats, SharedConnectorStats},
     log::LogTryStream,
     workflow::{filter::FilterAst, sort::Sort, summarize::Summarize, Workflow},
 };

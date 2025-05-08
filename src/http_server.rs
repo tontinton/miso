@@ -20,10 +20,9 @@ use uuid::Uuid;
 
 use crate::{
     args::Args,
-    connector::{Connector, ConnectorState},
+    connectors::{quickwit::QuickwitConnector, Connector, ConnectorState},
     humantime_utils::deserialize_duration,
     optimizations::Optimizer,
-    quickwit_connector::QuickwitConnector,
     workflow::{
         filter::FilterAst, join::Join, project::ProjectField, sort::Sort, summarize::Summarize,
         Scan, Workflow, WorkflowStep,

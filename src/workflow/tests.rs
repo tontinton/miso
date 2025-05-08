@@ -17,8 +17,10 @@ use serde::{Deserialize, Deserializer, Serialize};
 use tokio::sync::watch;
 
 use crate::{
-    connector::{Connector, ConnectorState, QueryHandle, QueryResponse, Split},
-    connector_stats::{CollectionStats, ConnectorStats, FieldStats},
+    connectors::{
+        stats::{CollectionStats, ConnectorStats, FieldStats},
+        Connector, ConnectorState, QueryHandle, QueryResponse, Split,
+    },
     http_server::to_workflow_steps,
     log::Log,
     optimizations::Optimizer,
