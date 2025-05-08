@@ -19,6 +19,7 @@ use tracing::{debug, error, info, instrument};
 use crate::{
     connector::{Connector, QueryHandle, QueryResponse, Split},
     downcast_unwrap,
+    humantime_utils::{deserialize_duration, serialize_duration},
     log::{Log, LogTryStream},
     run_at_interval::run_at_interval,
     workflow::{
@@ -208,22 +209,6 @@ fn default_refresh_interval() -> Duration {
 
 fn default_scroll_timeout() -> Duration {
     humantime::parse_duration("1m").expect("Invalid duration format")
-}
-
-pub fn serialize_duration<S>(duration: &Duration, serializer: S) -> Result<S::Ok, S::Error>
-where
-    S: Serializer,
-{
-    let s = humantime::format_duration(*duration).to_string();
-    serializer.serialize_str(&s)
-}
-
-fn deserialize_duration<'de, D>(deserializer: D) -> Result<Duration, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let s = String::deserialize(deserializer)?;
-    humantime::parse_duration(&s).map_err(serde::de::Error::custom)
 }
 
 fn default_scroll_size() -> u16 {
