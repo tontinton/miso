@@ -6,7 +6,7 @@ use axum::{
     extract::Path,
     http::StatusCode,
     response::{sse::Event, IntoResponse, Response, Sse},
-    routing::{get, post},
+    routing::{delete, get, post},
     Extension, Json, Router,
 };
 use color_eyre::Result;
@@ -253,10 +253,7 @@ async fn get_connector(
 ) -> Result<Response, HttpError> {
     let guard = state.read().await;
     let connector_state = guard.connectors.get(&id).ok_or_else(|| {
-        HttpError::new(
-            StatusCode::NOT_FOUND,
-            format!("connector of id '{id}' not found"),
-        )
+        HttpError::new(StatusCode::NOT_FOUND, format!("Connector '{id}' not found"))
     })?;
     let connector: &dyn Connector = &*connector_state.connector;
     Ok(Json(connector).into_response())
@@ -310,6 +307,21 @@ async fn post_connector(
     Ok(())
 }
 
+async fn delete_connector(
+    Extension(state): Extension<SharedState>,
+    Path(id): Path<String>,
+) -> Result<(), HttpError> {
+    let removed = {
+        let mut guard = state.write().await;
+        guard.connectors.remove(&id)
+    };
+
+    removed.ok_or_else(|| {
+        HttpError::new(StatusCode::NOT_FOUND, format!("Connector '{id}' not found"))
+    })?;
+    Ok(())
+}
+
 pub fn create_axum_app(args: &Args) -> Result<Router> {
     let mut connectors = BTreeMap::new();
     connectors.insert(
@@ -341,5 +353,6 @@ pub fn create_axum_app(args: &Args) -> Result<Router> {
         .route("/connectors", get(get_all_connectors))
         .route("/connectors/:id", get(get_connector))
         .route("/connectors/:id", post(post_connector))
+        .route("/connectors/:id", delete(delete_connector))
         .layer(Extension(state)))
 }
