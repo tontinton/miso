@@ -16,7 +16,7 @@ use axum::{
 use color_eyre::{eyre::Context, Result};
 use futures_core::Stream;
 use futures_util::TryStreamExt;
-use prometheus::{Histogram, HistogramOpts, Registry, TextEncoder};
+use prometheus::{Gauge, Histogram, HistogramOpts, Registry, TextEncoder};
 use serde::Deserialize;
 use serde_json::json;
 use tokio::sync::{watch, RwLock};
@@ -46,6 +46,7 @@ struct App {
     /// Metrics.
     registry: Registry,
     query_latency: Histogram,
+    running_queries: Gauge,
 }
 
 impl App {
@@ -54,11 +55,16 @@ impl App {
             "query_duration_seconds",
             "Duration of /query route",
         ))
-        .context("create query_latency histogram")?;
+        .context("create query_latency")?;
+        let running_queries = Gauge::new("running_queries", "Number of live running queries")
+            .context("create running_queries")?;
 
         let registry = Registry::new();
         registry
             .register(Box::new(query_latency.clone()))
+            .context("register metric")?;
+        registry
+            .register(Box::new(running_queries.clone()))
             .context("register metric")?;
 
         Ok(Self {
@@ -67,6 +73,7 @@ impl App {
 
             registry,
             query_latency,
+            running_queries,
         })
     }
 }
@@ -224,7 +231,6 @@ struct RunOnDrop(Box<dyn Fn() + Send>);
 
 impl Drop for RunOnDrop {
     fn drop(&mut self) {
-        debug!("Run on drop");
         self.0();
     }
 }
@@ -234,7 +240,16 @@ async fn query_stream(
     State(state): State<Arc<App>>,
     Json(req): Json<QueryRequest>,
 ) -> Result<Sse<impl Stream<Item = Result<Event, axum::Error>>>, HttpError> {
+    let metrics_state = state.clone();
     let start = Instant::now();
+    metrics_state.running_queries.inc();
+    let _record_metrics = RunOnDrop(Box::new(move || {
+        debug!("Recording query metrics");
+        metrics_state.running_queries.dec();
+        metrics_state
+            .query_latency
+            .observe(start.elapsed().as_secs_f64());
+    }));
 
     let query_id = req.query_id.unwrap_or_else(Uuid::now_v7);
 
@@ -258,9 +273,9 @@ async fn query_stream(
     })?;
 
     Ok(Sse::new(stream! {
-        let _notify_on_drop = RunOnDrop(Box::new(move || {
+        let _cancel_on_drop = RunOnDrop(Box::new(move || {
+            debug!("Cancelling query");
             let _ = cancel_tx.send(());
-            state.query_latency.observe(start.elapsed().as_secs_f64());
         }));
 
         loop {
