@@ -16,7 +16,7 @@ use axum::{
 use color_eyre::{eyre::Context, Result};
 use futures_core::Stream;
 use futures_util::TryStreamExt;
-use prometheus::{Gauge, Histogram, HistogramOpts, Registry, TextEncoder};
+use prometheus::{Histogram, HistogramOpts, IntGauge, Registry, TextEncoder};
 use serde::Deserialize;
 use serde_json::json;
 use tokio::sync::{watch, RwLock};
@@ -28,6 +28,8 @@ use crate::{
     connectors::{quickwit::QuickwitConnector, Connector, ConnectorState},
     humantime_utils::deserialize_duration,
     optimizations::Optimizer,
+    run_at_interval::run_at_interval,
+    shutdown_future::ShutdownFuture,
     workflow::{
         filter::FilterAst, join::Join, project::ProjectField, sort::Sort, summarize::Summarize,
         Scan, Workflow, WorkflowStep,
@@ -35,6 +37,7 @@ use crate::{
 };
 
 const DEFAULT_STATS_FETCH_INTERVAL: Duration = Duration::from_secs(60 * 60 * 3); // 3 hours.
+const TOKIO_METRICS_UPDATE_INTERVAL: Duration = Duration::from_secs(1);
 const INTERNAL_SERVER_ERROR: &str = "Internal server error";
 
 pub type ConnectorsMap = BTreeMap<String, Arc<ConnectorState>>;
@@ -46,7 +49,9 @@ struct App {
     /// Metrics.
     registry: Registry,
     query_latency: Histogram,
-    running_queries: Gauge,
+    running_queries: IntGauge,
+
+    _tokio_metrics_task: ShutdownFuture,
 }
 
 impl App {
@@ -56,16 +61,29 @@ impl App {
             "Duration of /query route",
         ))
         .context("create query_latency")?;
-        let running_queries = Gauge::new("running_queries", "Number of live running queries")
+        let running_queries = IntGauge::new("running_queries", "Number of live running queries")
             .context("create running_queries")?;
+        let tokio_worker_threads = IntGauge::new(
+            "tokio_worker_threads",
+            "Number of worker threads used by the tokio runtime",
+        )
+        .context("create tokio_worker_threads")?;
+        let tokio_alive_tasks = IntGauge::new(
+            "tokio_alive_tasks",
+            "Number of alive tasks in the tokio runtime",
+        )
+        .context("create tokio_alive_tasks")?;
 
         let registry = Registry::new();
-        registry
-            .register(Box::new(query_latency.clone()))
-            .context("register metric")?;
-        registry
-            .register(Box::new(running_queries.clone()))
-            .context("register metric")?;
+        registry.register(Box::new(query_latency.clone()))?;
+        registry.register(Box::new(running_queries.clone()))?;
+        registry.register(Box::new(tokio_worker_threads.clone()))?;
+        registry.register(Box::new(tokio_alive_tasks.clone()))?;
+
+        let tokio_metrics_task = ShutdownFuture::new(
+            collect_tokio_metrics(tokio_worker_threads, tokio_alive_tasks),
+            "Tokio metrics collector",
+        );
 
         Ok(Self {
             connectors: RwLock::new(connectors),
@@ -74,8 +92,25 @@ impl App {
             registry,
             query_latency,
             running_queries,
+
+            _tokio_metrics_task: tokio_metrics_task,
         })
     }
+}
+
+async fn collect_tokio_metrics(tokio_worker_threads: IntGauge, tokio_alive_tasks: IntGauge) {
+    let handle = tokio::runtime::Handle::current();
+    let metrics = handle.metrics();
+
+    run_at_interval(
+        async || {
+            tokio_worker_threads.set(metrics.num_workers() as i64);
+            tokio_alive_tasks.set(metrics.num_alive_tasks() as i64);
+            true
+        },
+        TOKIO_METRICS_UPDATE_INTERVAL,
+    )
+    .await;
 }
 
 #[async_recursion]
