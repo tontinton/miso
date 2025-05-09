@@ -24,7 +24,7 @@ pub enum JoinType {
     Right,
 }
 
-#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Join {
     pub on: (String, String),
 

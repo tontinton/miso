@@ -17,7 +17,7 @@ use color_eyre::{eyre::Context, Result};
 use futures_core::Stream;
 use futures_util::TryStreamExt;
 use prometheus::{Histogram, HistogramOpts, IntGauge, Registry, TextEncoder};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tokio::sync::{watch, RwLock};
 use tracing::{debug, error, info, span, Level};
@@ -38,13 +38,16 @@ use crate::{
 
 const DEFAULT_STATS_FETCH_INTERVAL: Duration = Duration::from_secs(60 * 60 * 3); // 3 hours.
 const TOKIO_METRICS_UPDATE_INTERVAL: Duration = Duration::from_secs(1);
+const VIEWS_CONNECTOR_NAME: &str = "views";
 const INTERNAL_SERVER_ERROR: &str = "Internal server error";
 
-pub type ConnectorsMap = BTreeMap<String, Arc<ConnectorState>>;
+pub(crate) type ConnectorsMap = BTreeMap<String, Arc<ConnectorState>>;
+pub(crate) type ViewsMap = BTreeMap<String, Vec<QueryStep>>;
 
 struct App {
     connectors: RwLock<ConnectorsMap>,
     optimizer: Arc<Optimizer>,
+    views: RwLock<ViewsMap>,
 
     /// Metrics.
     registry: Registry,
@@ -88,6 +91,7 @@ impl App {
         Ok(Self {
             connectors: RwLock::new(connectors),
             optimizer: Arc::new(optimizer),
+            views: RwLock::new(BTreeMap::new()),
 
             registry,
             query_latency,
@@ -116,6 +120,7 @@ async fn collect_tokio_metrics(tokio_worker_threads: IntGauge, tokio_alive_tasks
 #[async_recursion]
 pub(crate) async fn to_workflow_steps(
     connectors: &ConnectorsMap,
+    views: &ViewsMap,
     query_steps: Vec<QueryStep>,
 ) -> Result<Vec<WorkflowStep>, HttpError> {
     if query_steps.is_empty() {
@@ -142,6 +147,16 @@ pub(crate) async fn to_workflow_steps(
                     StatusCode::BAD_REQUEST,
                     "scan can only be the first step of a query".to_string(),
                 ));
+            }
+            QueryStep::Scan(connector_name, view) if connector_name == VIEWS_CONNECTOR_NAME => {
+                let Some(view_steps) = views.get(&view).cloned() else {
+                    return Err(HttpError::new(
+                        StatusCode::NOT_FOUND,
+                        format!("view '{}' not found", view),
+                    ));
+                };
+
+                steps.extend(to_workflow_steps(connectors, views, view_steps).await?);
             }
             QueryStep::Scan(connector_name, collection) => {
                 let Some(connector_state) = connectors.get(&connector_name).cloned() else {
@@ -193,13 +208,13 @@ pub(crate) async fn to_workflow_steps(
             }
             QueryStep::Union(inner_steps) => {
                 steps.push(WorkflowStep::Union(Workflow::new(
-                    to_workflow_steps(connectors, inner_steps).await?,
+                    to_workflow_steps(connectors, views, inner_steps).await?,
                 )));
             }
             QueryStep::Join(config, inner_steps) => {
                 steps.push(WorkflowStep::Join(
                     config,
-                    Workflow::new(to_workflow_steps(connectors, inner_steps).await?),
+                    Workflow::new(to_workflow_steps(connectors, views, inner_steps).await?),
                 ));
             }
             QueryStep::Count => {
@@ -211,7 +226,7 @@ pub(crate) async fn to_workflow_steps(
     Ok(steps)
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum QueryStep {
     Scan(/*connector=*/ String, /*collection=*/ String),
@@ -293,7 +308,12 @@ async fn query_stream(
 
     info!(?req.query, "Starting to run a new query");
     let workflow = {
-        let steps = to_workflow_steps(&state.connectors.read().await.clone(), req.query).await?;
+        let steps = to_workflow_steps(
+            &state.connectors.read().await.clone(),
+            &state.views.read().await.clone(),
+            req.query,
+        )
+        .await?;
         Workflow::new(state.optimizer.optimize(steps).await)
     };
 
@@ -329,6 +349,16 @@ async fn query_stream(
     }))
 }
 
+async fn get_connectors(State(state): State<Arc<App>>) -> Result<Response, HttpError> {
+    let guard = state.connectors.read().await;
+    let mut connectors_map = BTreeMap::new();
+    for (id, conn_state) in &*guard {
+        let connector: &dyn Connector = &*conn_state.connector;
+        connectors_map.insert(id, connector);
+    }
+    Ok(Json(connectors_map).into_response())
+}
+
 async fn get_connector(
     State(state): State<Arc<App>>,
     Path(id): Path<String>,
@@ -339,16 +369,6 @@ async fn get_connector(
     })?;
     let connector: &dyn Connector = &*connector_state.connector;
     Ok(Json(connector).into_response())
-}
-
-async fn get_all_connectors(State(state): State<Arc<App>>) -> Result<Response, HttpError> {
-    let guard = state.connectors.read().await;
-    let mut connectors_map = BTreeMap::new();
-    for (id, conn_state) in &*guard {
-        let connector: &dyn Connector = &*conn_state.connector;
-        connectors_map.insert(id, connector);
-    }
-    Ok(Json(connectors_map).into_response())
 }
 
 fn default_stats_fetch_interval() -> Duration {
@@ -376,6 +396,13 @@ async fn post_connector(
         connector,
     }): Json<PostConnectorBody>,
 ) -> Result<(), HttpError> {
+    if id == VIEWS_CONNECTOR_NAME {
+        return Err(HttpError::new(
+            StatusCode::BAD_REQUEST,
+            format!("Cannot use the internally used id: {VIEWS_CONNECTOR_NAME}"),
+        ));
+    }
+
     let connector_state = Arc::new(ConnectorState::new_with_stats(
         connector.into(),
         stats_fetch_interval,
@@ -404,6 +431,55 @@ async fn delete_connector(
     };
 
     connector_state.close_when_last_owner().await;
+    Ok(())
+}
+
+async fn get_views(State(state): State<Arc<App>>) -> Result<Response, HttpError> {
+    let guard = state.views.read().await;
+    let mut views_map = BTreeMap::new();
+    for (id, steps) in &*guard {
+        views_map.insert(id, steps);
+    }
+    Ok(Json(views_map).into_response())
+}
+
+async fn get_view(
+    State(state): State<Arc<App>>,
+    Path(id): Path<String>,
+) -> Result<Response, HttpError> {
+    let guard = state.views.read().await;
+    let steps = guard
+        .get(&id)
+        .ok_or_else(|| HttpError::new(StatusCode::NOT_FOUND, format!("View '{id}' not found")))?;
+    Ok(Json(steps).into_response())
+}
+
+async fn post_view(
+    State(state): State<Arc<App>>,
+    Path(id): Path<String>,
+    Json(steps): Json<Vec<QueryStep>>,
+) -> Result<(), HttpError> {
+    let mut guard = state.views.write().await;
+    guard.insert(id, steps);
+    Ok(())
+}
+
+async fn delete_view(
+    State(state): State<Arc<App>>,
+    Path(id): Path<String>,
+) -> Result<(), HttpError> {
+    let removed = {
+        let mut guard = state.views.write().await;
+        guard.remove(&id)
+    };
+
+    if removed.is_none() {
+        return Err(HttpError::new(
+            StatusCode::NOT_FOUND,
+            format!("View '{id}' not found"),
+        ));
+    }
+
     Ok(())
 }
 
@@ -448,9 +524,13 @@ pub fn create_axum_app(args: &Args) -> Result<Router> {
     Ok(Router::new()
         .route("/metrics", get(metrics))
         .route("/query", post(query_stream))
-        .route("/connectors", get(get_all_connectors))
+        .route("/connectors", get(get_connectors))
         .route("/connectors/:id", get(get_connector))
         .route("/connectors/:id", post(post_connector))
         .route("/connectors/:id", delete(delete_connector))
+        .route("/views", get(get_views))
+        .route("/views/:id", get(get_view))
+        .route("/views/:id", post(post_view))
+        .route("/views/:id", delete(delete_view))
         .with_state(Arc::new(app)))
 }
