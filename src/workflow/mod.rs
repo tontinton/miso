@@ -9,6 +9,7 @@ use color_eyre::eyre::{bail, Context, Result};
 use futures_util::{future::try_join_all, stream::FuturesUnordered, StreamExt};
 use join::{join_streams, Join, JoinType};
 use kinded::Kinded;
+use parking_lot::Mutex;
 use project::extend_stream;
 use serde_json::Value;
 use sortable_value::SortableValue;
@@ -24,7 +25,7 @@ use tracing::{debug, error, info, instrument};
 
 use crate::{
     connectors::{
-        stats::{FieldStats, SharedConnectorStats},
+        stats::{ConnectorStats, FieldStats},
         Connector, ConnectorState, QueryHandle, QueryResponse, Split,
     },
     log::{Log, LogStream, LogTryStream},
@@ -60,7 +61,7 @@ pub struct Scan {
     pub connector: Arc<dyn Connector>,
     pub splits: Vec<Arc<dyn Split>>,
     pub handle: Arc<dyn QueryHandle>,
-    pub stats: SharedConnectorStats,
+    pub stats: Arc<Mutex<ConnectorStats>>,
 
     pub dynamic_filter_tx: Option<watch::Sender<Option<FilterAst>>>,
     pub dynamic_filter_rx: Option<watch::Receiver<Option<FilterAst>>>,

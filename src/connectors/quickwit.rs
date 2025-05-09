@@ -1,7 +1,7 @@
 use std::{
     any::Any,
     collections::{BTreeMap, HashMap},
-    sync::Arc,
+    sync::{Arc, Weak},
     time::{Duration, Instant},
 };
 
@@ -13,7 +13,6 @@ use parking_lot::RwLock;
 use reqwest::Client;
 use serde::{ser::SerializeMap, Deserialize, Serialize, Serializer};
 use serde_json::{json, to_string, Value};
-use tokio::{spawn, sync::watch, task::JoinHandle};
 use tracing::{debug, error, info, instrument};
 
 use crate::{
@@ -21,6 +20,7 @@ use crate::{
     humantime_utils::{deserialize_duration, serialize_duration},
     log::{Log, LogTryStream},
     run_at_interval::run_at_interval,
+    shutdown_future::ShutdownFuture,
     workflow::{
         filter::FilterAst,
         sort::Sort,
@@ -255,14 +255,12 @@ struct QuickwitIndex {
 }
 
 type QuickwitIndexes = BTreeMap<String, QuickwitIndex>;
-type SharedIndexes = Arc<RwLock<QuickwitIndexes>>;
 
 #[derive(Debug)]
 pub struct QuickwitConnector {
     config: QuickwitConfig,
-    indexes: SharedIndexes,
-    interval_task: JoinHandle<()>,
-    shutdown_tx: watch::Sender<()>,
+    indexes: Arc<RwLock<QuickwitIndexes>>,
+    interval_task: ShutdownFuture,
     client: Client,
 }
 
@@ -609,50 +607,48 @@ async fn get_indexes(client: &Client, base_url: &str) -> Result<QuickwitIndexes>
         .collect())
 }
 
-async fn refresh_indexes(client: &Client, url: &str, collections: &SharedIndexes) {
-    match get_indexes(client, url).await {
-        Ok(indexes) => {
-            debug!("Got indexes: {:?}", &indexes);
-            let mut guard = collections.write();
-            *guard = indexes;
-        }
-        Err(e) => {
-            error!("Failed to get quickwit indexes: {}", e);
-        }
-    }
-}
-
 async fn refresh_indexes_at_interval(
     config: QuickwitConfig,
-    collections: SharedIndexes,
-    shutdown_rx: watch::Receiver<()>,
+    weak_indexes: Weak<RwLock<QuickwitIndexes>>,
 ) {
     let client = Client::new();
 
     run_at_interval(
-        async || refresh_indexes(&client, &config.url, &collections).await,
+        async || {
+            let Some(indexes) = weak_indexes.upgrade() else {
+                return false;
+            };
+
+            match get_indexes(&client, &config.url).await {
+                Ok(response) => {
+                    debug!("Got indexes: {:?}", &response);
+                    let mut guard = indexes.write();
+                    *guard = response;
+                }
+                Err(e) => {
+                    error!("Failed to get quickwit indexes: {}", e);
+                }
+            }
+
+            true
+        },
         config.refresh_interval,
-        shutdown_rx,
-        "Quickwit indexes",
     )
     .await;
 }
 
 impl QuickwitConnector {
     pub fn new(config: QuickwitConfig) -> QuickwitConnector {
-        let (shutdown_tx, shutdown_rx) = watch::channel(());
-        let collections = Arc::new(RwLock::new(BTreeMap::new()));
-        let interval_task = spawn(refresh_indexes_at_interval(
-            config.clone(),
-            collections.clone(),
-            shutdown_rx,
-        ));
+        let indexes = Arc::new(RwLock::new(BTreeMap::new()));
+        let interval_task = ShutdownFuture::new(
+            refresh_indexes_at_interval(config.clone(), Arc::downgrade(&indexes)),
+            "Quickwit indexes refresher",
+        );
 
         Self {
             config,
-            indexes: collections,
+            indexes,
             interval_task,
-            shutdown_tx,
             client: Client::new(),
         }
     }
@@ -1154,13 +1150,7 @@ impl Connector for QuickwitConnector {
         Some(Box::new(handle.with_union(&scan.collection)))
     }
 
-    async fn close(self) {
-        if let Err(e) = self.shutdown_tx.send(()) {
-            error!("Failed to send shutdown to quickwit interval task: {}", e);
-            return;
-        }
-        if let Err(e) = self.interval_task.await {
-            error!("Failed to join quickwit interval task: {}", e);
-        }
+    async fn close(&self) {
+        self.interval_task.shutdown().await;
     }
 }

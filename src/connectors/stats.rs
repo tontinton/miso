@@ -1,15 +1,13 @@
-use std::{collections::BTreeMap, sync::Arc, time::Duration};
+use std::{collections::BTreeMap, sync::Weak, time::Duration};
 
 use parking_lot::Mutex;
-use tokio::{spawn, sync::watch, task::JoinHandle};
-use tracing::{error, instrument};
+use tracing::instrument;
 
-use crate::run_at_interval::run_at_interval;
+use crate::{run_at_interval::run_at_interval, shutdown_future::ShutdownFuture};
 
 use super::Connector;
 
 pub type ConnectorStats = BTreeMap<String, CollectionStats>;
-pub type SharedConnectorStats = Arc<Mutex<BTreeMap<String, CollectionStats>>>;
 pub type CollectionStats = BTreeMap<String, FieldStats>;
 
 #[derive(Debug, Default, Clone)]
@@ -19,60 +17,50 @@ pub struct FieldStats {
 
 async fn refetch_stats_at_interval(
     interval: Duration,
-    connector: Arc<dyn Connector>,
-    stats: SharedConnectorStats,
-    shutdown_rx: watch::Receiver<()>,
+    weak_connector: Weak<dyn Connector>,
+    weak_stats: Weak<Mutex<ConnectorStats>>,
 ) {
     run_at_interval(
         async || {
+            let Some(connector) = weak_connector.upgrade() else {
+                return false;
+            };
+            let Some(stats) = weak_stats.upgrade() else {
+                return false;
+            };
+
             if let Some(fetched) = connector.fetch_stats().await {
                 let mut guard = stats.lock();
                 *guard = fetched;
             };
+
+            true
         },
         interval,
-        shutdown_rx,
-        "Stats collector",
     )
     .await;
 }
 
 #[derive(Debug)]
 pub struct IntervalStatsCollector {
-    _task: JoinHandle<()>,
-    _shutdown_tx: watch::Sender<()>,
+    collector_task: ShutdownFuture,
 }
 
 impl IntervalStatsCollector {
     pub fn new(
         interval: Duration,
-        connector: Arc<dyn Connector>,
-        stats: Arc<Mutex<ConnectorStats>>,
+        connector: Weak<dyn Connector>,
+        stats: Weak<Mutex<ConnectorStats>>,
     ) -> Self {
-        let (shutdown_tx, shutdown_rx) = watch::channel(());
-        let task = spawn(refetch_stats_at_interval(
-            interval,
-            connector,
-            stats,
-            shutdown_rx,
-        ));
-
-        Self {
-            _task: task,
-            _shutdown_tx: shutdown_tx,
-        }
+        let collector_task = ShutdownFuture::new(
+            refetch_stats_at_interval(interval, connector, stats),
+            "Stats collector",
+        );
+        Self { collector_task }
     }
 
     #[instrument(skip_all, name = "Interval stats collector - close")]
-    async fn close(self) {
-        if let Err(e) = self._shutdown_tx.send(()) {
-            error!(
-                "Failed to send shutdown to stats collector interval task: {}",
-                e
-            );
-        }
-        if let Err(e) = self._task.await {
-            error!("Failed to join interval stats task: {}", e);
-        }
+    pub async fn close(&self) {
+        self.collector_task.shutdown().await;
     }
 }

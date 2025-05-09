@@ -12,12 +12,15 @@ use std::{any::Any, collections::BTreeMap};
 use axum::async_trait;
 use color_eyre::eyre::Result;
 use parking_lot::Mutex;
-use stats::{ConnectorStats, IntervalStatsCollector, SharedConnectorStats};
+use stats::{ConnectorStats, IntervalStatsCollector};
+use tokio::time::sleep;
 
 use crate::{
     log::LogTryStream,
     workflow::{filter::FilterAst, sort::Sort, summarize::Summarize, Workflow},
 };
+
+const CLOSE_WHEN_LAST_OWNER_INTERVAL: Duration = Duration::from_millis(100);
 
 #[macro_export]
 macro_rules! downcast_unwrap {
@@ -32,10 +35,8 @@ macro_rules! downcast_unwrap {
 #[derive(Debug)]
 pub struct ConnectorState {
     pub connector: Arc<dyn Connector>,
-    pub stats: SharedConnectorStats,
-
-    // Need to close() this when the connector is deleted.
-    _stats_collector: Option<IntervalStatsCollector>,
+    pub stats: Arc<Mutex<ConnectorStats>>,
+    stats_collector: Option<IntervalStatsCollector>,
 }
 
 impl ConnectorState {
@@ -43,18 +44,22 @@ impl ConnectorState {
         Self {
             connector,
             stats: Arc::new(Mutex::new(BTreeMap::new())),
-            _stats_collector: None,
+            stats_collector: None,
         }
     }
 
     pub fn new_with_stats(connector: Arc<dyn Connector>, interval: Duration) -> Self {
         let stats = Arc::new(Mutex::new(BTreeMap::new()));
-        let stats_collector =
-            IntervalStatsCollector::new(interval, connector.clone(), stats.clone());
+        let stats_collector = Some(IntervalStatsCollector::new(
+            interval,
+            Arc::downgrade(&connector),
+            Arc::downgrade(&stats),
+        ));
+
         Self {
             connector,
             stats,
-            _stats_collector: Some(stats_collector),
+            stats_collector,
         }
     }
 
@@ -66,8 +71,28 @@ impl ConnectorState {
         Self {
             connector,
             stats,
-            _stats_collector: None,
+            stats_collector: None,
         }
+    }
+
+    /// Wait for the given Arc to be the last reference, only then close().
+    /// This is useful when there are some running queries on the connector and you want to allow them
+    /// to finish executing.
+    pub async fn close_when_last_owner(self: Arc<Self>) {
+        while Arc::strong_count(&self) > 1 {
+            sleep(CLOSE_WHEN_LAST_OWNER_INTERVAL).await;
+        }
+
+        if let Some(stats_collector) = &self.stats_collector {
+            stats_collector.close().await;
+        }
+        let connector = self.connector.clone();
+        drop(self);
+
+        while Arc::strong_count(&connector) > 1 {
+            sleep(CLOSE_WHEN_LAST_OWNER_INTERVAL).await;
+        }
+        connector.close().await;
     }
 }
 
@@ -167,5 +192,5 @@ pub trait Connector: Debug + Send + Sync {
         None
     }
 
-    async fn close(self);
+    async fn close(&self);
 }

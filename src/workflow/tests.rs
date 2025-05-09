@@ -150,7 +150,7 @@ impl Connector for TestConnector {
         Some(stats)
     }
 
-    async fn close(self) {}
+    async fn close(&self) {}
 }
 
 fn distinct_field_values(logs: Vec<Log>) -> Vec<(String, u32)> {

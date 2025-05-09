@@ -315,9 +315,14 @@ async fn delete_connector(
         guard.connectors.remove(&id)
     };
 
-    removed.ok_or_else(|| {
-        HttpError::new(StatusCode::NOT_FOUND, format!("Connector '{id}' not found"))
-    })?;
+    let Some(connector_state) = removed else {
+        return Err(HttpError::new(
+            StatusCode::NOT_FOUND,
+            format!("Connector '{id}' not found"),
+        ));
+    };
+
+    connector_state.close_when_last_owner().await;
     Ok(())
 }
 
