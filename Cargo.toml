@@ -40,8 +40,13 @@ uuid = { version = "1.11.0", features = ["v7", "serde"] }
 [dev-dependencies]
 bon = "3.6.3"
 collection_macros = "0.2.0"
+criterion = { version = "0.5.1", features = ["async_tokio"] }
 ctor = "0.2.9"
 test-case = "3.3.1"
 testcontainers = { version = "0.23.3", features = ["blocking"] }
 tokio-retry = "0.3.0"
 tokio-test = "0.4.4"
+
+[[bench]]
+name = "join"
+harness = false
