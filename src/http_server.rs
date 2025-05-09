@@ -1,4 +1,8 @@
-use std::{collections::BTreeMap, sync::Arc, time::Duration};
+use std::{
+    collections::BTreeMap,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use async_recursion::async_recursion;
 use async_stream::stream;
@@ -9,9 +13,10 @@ use axum::{
     routing::{delete, get, post},
     Json, Router,
 };
-use color_eyre::Result;
+use color_eyre::{eyre::Context, Result};
 use futures_core::Stream;
 use futures_util::TryStreamExt;
+use prometheus::{Histogram, HistogramOpts, Registry, TextEncoder};
 use serde::Deserialize;
 use serde_json::json;
 use tokio::sync::{watch, RwLock};
@@ -34,9 +39,36 @@ const INTERNAL_SERVER_ERROR: &str = "Internal server error";
 
 pub type ConnectorsMap = BTreeMap<String, Arc<ConnectorState>>;
 
-struct AppState {
+struct App {
     connectors: RwLock<ConnectorsMap>,
     optimizer: Arc<Optimizer>,
+
+    /// Metrics.
+    registry: Registry,
+    query_latency: Histogram,
+}
+
+impl App {
+    fn new(connectors: ConnectorsMap, optimizer: Optimizer) -> Result<Self> {
+        let query_latency = Histogram::with_opts(HistogramOpts::new(
+            "query_duration_seconds",
+            "Duration of /query route",
+        ))
+        .context("create query_latency histogram")?;
+
+        let registry = Registry::new();
+        registry
+            .register(Box::new(query_latency.clone()))
+            .context("register metric")?;
+
+        Ok(Self {
+            connectors: RwLock::new(connectors),
+            optimizer: Arc::new(optimizer),
+
+            registry,
+            query_latency,
+        })
+    }
 }
 
 #[async_recursion]
@@ -188,20 +220,22 @@ impl IntoResponse for HttpError {
     }
 }
 
-struct NotifyOnDrop(watch::Sender<()>);
+struct RunOnDrop(Box<dyn Fn() + Send>);
 
-impl Drop for NotifyOnDrop {
+impl Drop for RunOnDrop {
     fn drop(&mut self) {
-        debug!("Notify on drop");
-        let _ = self.0.send(());
+        debug!("Run on drop");
+        self.0();
     }
 }
 
 /// Starts running a new query.
 async fn query_stream(
-    State(state): State<Arc<AppState>>,
+    State(state): State<Arc<App>>,
     Json(req): Json<QueryRequest>,
 ) -> Result<Sse<impl Stream<Item = Result<Event, axum::Error>>>, HttpError> {
+    let start = Instant::now();
+
     let query_id = req.query_id.unwrap_or_else(Uuid::now_v7);
 
     let span = span!(Level::INFO, "query", ?query_id);
@@ -224,7 +258,10 @@ async fn query_stream(
     })?;
 
     Ok(Sse::new(stream! {
-        let _notify_on_drop = NotifyOnDrop(cancel_tx);
+        let _notify_on_drop = RunOnDrop(Box::new(move || {
+            let _ = cancel_tx.send(());
+            state.query_latency.observe(start.elapsed().as_secs_f64());
+        }));
 
         loop {
             match logs_stream.try_next().await {
@@ -243,7 +280,7 @@ async fn query_stream(
 }
 
 async fn get_connector(
-    State(state): State<Arc<AppState>>,
+    State(state): State<Arc<App>>,
     Path(id): Path<String>,
 ) -> Result<Response, HttpError> {
     let guard = state.connectors.read().await;
@@ -254,7 +291,7 @@ async fn get_connector(
     Ok(Json(connector).into_response())
 }
 
-async fn get_all_connectors(State(state): State<Arc<AppState>>) -> Result<Response, HttpError> {
+async fn get_all_connectors(State(state): State<Arc<App>>) -> Result<Response, HttpError> {
     let guard = state.connectors.read().await;
     let mut connectors_map = BTreeMap::new();
     for (id, conn_state) in &*guard {
@@ -282,7 +319,7 @@ struct PostConnectorBody {
 }
 
 async fn post_connector(
-    State(state): State<Arc<AppState>>,
+    State(state): State<Arc<App>>,
     Path(id): Path<String>,
     Json(PostConnectorBody {
         stats_fetch_interval,
@@ -301,7 +338,7 @@ async fn post_connector(
 }
 
 async fn delete_connector(
-    State(state): State<Arc<AppState>>,
+    State(state): State<Arc<App>>,
     Path(id): Path<String>,
 ) -> Result<(), HttpError> {
     let removed = {
@@ -320,6 +357,21 @@ async fn delete_connector(
     Ok(())
 }
 
+async fn metrics(State(state): State<Arc<App>>) -> Result<Response, HttpError> {
+    let metric_families = state.registry.gather();
+    let mut buffer = String::new();
+    let encoder = TextEncoder::new();
+    encoder
+        .encode_utf8(&metric_families, &mut buffer)
+        .map_err(|e| {
+            HttpError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("failed to encode metrics: {}", e),
+            )
+        })?;
+    Ok(buffer.into_response())
+}
+
 pub fn create_axum_app(args: &Args) -> Result<Router> {
     let mut connectors = BTreeMap::new();
     connectors.insert(
@@ -335,22 +387,20 @@ pub fn create_axum_app(args: &Args) -> Result<Router> {
         )),
     );
 
-    let optimizer = Arc::new(if args.no_optimizations {
+    let optimizer = if args.no_optimizations {
         Optimizer::empty()
     } else {
         Optimizer::with_dynamic_filtering(args.dynamic_filter_max_distinct_values)
-    });
-
-    let state = AppState {
-        connectors: RwLock::new(connectors),
-        optimizer,
     };
 
+    let app = App::new(connectors, optimizer).context("create axum app state")?;
+
     Ok(Router::new()
+        .route("/metrics", get(metrics))
         .route("/query", post(query_stream))
         .route("/connectors", get(get_all_connectors))
         .route("/connectors/:id", get(get_connector))
         .route("/connectors/:id", post(post_connector))
         .route("/connectors/:id", delete(delete_connector))
-        .with_state(Arc::new(state)))
+        .with_state(Arc::new(app)))
 }
