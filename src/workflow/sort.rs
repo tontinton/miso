@@ -26,7 +26,7 @@ pub enum NullsOrder {
     First,
 }
 
-#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Sort {
     pub by: String,
 

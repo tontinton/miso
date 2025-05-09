@@ -232,6 +232,7 @@ async fn check_multi_connectors(
 
     let steps = to_workflow_steps(
         &connectors,
+        &BTreeMap::new(),
         serde_json::from_str(query).context("parse query steps from json")?,
     )
     .await

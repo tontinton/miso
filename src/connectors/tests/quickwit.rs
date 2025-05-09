@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeMap,
     sync::{Arc, Weak},
     time::Duration,
 };
@@ -294,6 +295,7 @@ async fn predicate_pushdown_same_results(
 
     let steps = to_workflow_steps(
         &connectors,
+        &BTreeMap::new(),
         serde_json::from_str(query).context("parse query steps from json")?,
     )
     .await
@@ -301,6 +303,7 @@ async fn predicate_pushdown_same_results(
 
     let expected_after_optimizations_steps = to_workflow_steps(
         &connectors,
+        &BTreeMap::new(),
         serde_json::from_str(query_after_optimizations)
             .context("parse expected query steps from json")?,
     )
