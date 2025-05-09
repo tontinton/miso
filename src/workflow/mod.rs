@@ -188,7 +188,7 @@ fn rx_to_dynamic_filter_tx_stream(
             values.into_iter().map(|v| FilterAst::Lit(v.0)).collect(),
         );
         if let Err(e) = dynamic_filter_tx.send(Some(ast)) {
-            error!("Failed sending dynamic filter: {e}");
+            error!("Failed sending dynamic filter: {e:?}");
         }
     })
 }
@@ -251,10 +251,10 @@ async fn apply_dynamic_filter(
             }
         }
         Ok(Err(e)) => {
-            error!("Error waiting on dynamic filter: {e}");
+            error!("Error waiting on dynamic filter: {e:?}");
         }
         Err(e) => {
-            debug!("Timeout waiting on dynamic filter: {e}");
+            debug!("Timeout waiting on dynamic filter: {e:?}");
         }
     }
     None

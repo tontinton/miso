@@ -50,10 +50,10 @@ impl ShutdownFuture {
         };
 
         if let Err(e) = self.shutdown_tx.send(()) {
-            error!("{}: Failed to send shutdown to task: {}", self.tag, e);
+            error!("{}: Failed to send shutdown to task: {:?}", self.tag, e);
         }
         if let Err(e) = task.await {
-            error!("{}: Failed to join task: {}", self.tag, e);
+            error!("{}: Failed to join task: {:?}", self.tag, e);
         }
     }
 }
