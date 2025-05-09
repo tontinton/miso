@@ -3,11 +3,11 @@ use std::{collections::BTreeMap, sync::Arc, time::Duration};
 use async_recursion::async_recursion;
 use async_stream::stream;
 use axum::{
-    extract::Path,
+    extract::{Path, State},
     http::StatusCode,
     response::{sse::Event, IntoResponse, Response, Sse},
     routing::{delete, get, post},
-    Extension, Json, Router,
+    Json, Router,
 };
 use color_eyre::Result;
 use futures_core::Stream;
@@ -30,17 +30,14 @@ use crate::{
 };
 
 const DEFAULT_STATS_FETCH_INTERVAL: Duration = Duration::from_secs(60 * 60 * 3); // 3 hours.
-
 const INTERNAL_SERVER_ERROR: &str = "Internal server error";
 
 pub type ConnectorsMap = BTreeMap<String, Arc<ConnectorState>>;
 
-struct State {
-    connectors: ConnectorsMap,
+struct AppState {
+    connectors: RwLock<ConnectorsMap>,
     optimizer: Arc<Optimizer>,
 }
-
-type SharedState = Arc<RwLock<State>>;
 
 #[async_recursion]
 pub(crate) async fn to_workflow_steps(
@@ -202,7 +199,7 @@ impl Drop for NotifyOnDrop {
 
 /// Starts running a new query.
 async fn query_stream(
-    Extension(state): Extension<SharedState>,
+    State(state): State<Arc<AppState>>,
     Json(req): Json<QueryRequest>,
 ) -> Result<Sse<impl Stream<Item = Result<Event, axum::Error>>>, HttpError> {
     let query_id = req.query_id.unwrap_or_else(Uuid::now_v7);
@@ -212,9 +209,8 @@ async fn query_stream(
 
     info!(?req.query, "Starting to run a new query");
     let workflow = {
-        let steps = to_workflow_steps(&state.read().await.connectors.clone(), req.query).await?;
-        let optimizer = state.read().await.optimizer.clone();
-        Workflow::new(optimizer.optimize(steps).await)
+        let steps = to_workflow_steps(&state.connectors.read().await.clone(), req.query).await?;
+        Workflow::new(state.optimizer.optimize(steps).await)
     };
 
     debug!(?workflow, "Executing workflow");
@@ -247,23 +243,21 @@ async fn query_stream(
 }
 
 async fn get_connector(
-    Extension(state): Extension<SharedState>,
+    State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> Result<Response, HttpError> {
-    let guard = state.read().await;
-    let connector_state = guard.connectors.get(&id).ok_or_else(|| {
+    let guard = state.connectors.read().await;
+    let connector_state = guard.get(&id).ok_or_else(|| {
         HttpError::new(StatusCode::NOT_FOUND, format!("Connector '{id}' not found"))
     })?;
     let connector: &dyn Connector = &*connector_state.connector;
     Ok(Json(connector).into_response())
 }
 
-async fn get_all_connectors(
-    Extension(state): Extension<SharedState>,
-) -> Result<Response, HttpError> {
-    let guard = state.read().await;
+async fn get_all_connectors(State(state): State<Arc<AppState>>) -> Result<Response, HttpError> {
+    let guard = state.connectors.read().await;
     let mut connectors_map = BTreeMap::new();
-    for (id, conn_state) in &guard.connectors {
+    for (id, conn_state) in &*guard {
         let connector: &dyn Connector = &*conn_state.connector;
         connectors_map.insert(id, connector);
     }
@@ -288,7 +282,7 @@ struct PostConnectorBody {
 }
 
 async fn post_connector(
-    Extension(state): Extension<SharedState>,
+    State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
     Json(PostConnectorBody {
         stats_fetch_interval,
@@ -300,19 +294,19 @@ async fn post_connector(
         stats_fetch_interval,
     ));
 
-    let mut guard = state.write().await;
-    guard.connectors.insert(id, connector_state);
+    let mut guard = state.connectors.write().await;
+    guard.insert(id, connector_state);
 
     Ok(())
 }
 
 async fn delete_connector(
-    Extension(state): Extension<SharedState>,
+    State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> Result<(), HttpError> {
     let removed = {
-        let mut guard = state.write().await;
-        guard.connectors.remove(&id)
+        let mut guard = state.connectors.write().await;
+        guard.remove(&id)
     };
 
     let Some(connector_state) = removed else {
@@ -347,10 +341,10 @@ pub fn create_axum_app(args: &Args) -> Result<Router> {
         Optimizer::with_dynamic_filtering(args.dynamic_filter_max_distinct_values)
     });
 
-    let state = Arc::new(RwLock::new(State {
-        connectors,
+    let state = AppState {
+        connectors: RwLock::new(connectors),
         optimizer,
-    }));
+    };
 
     Ok(Router::new()
         .route("/query", post(query_stream))
@@ -358,5 +352,5 @@ pub fn create_axum_app(args: &Args) -> Result<Router> {
         .route("/connectors/:id", get(get_connector))
         .route("/connectors/:id", post(post_connector))
         .route("/connectors/:id", delete(delete_connector))
-        .layer(Extension(state)))
+        .with_state(Arc::new(state)))
 }
