@@ -1,6 +1,6 @@
 #![allow(clippy::mutable_key_type)]
 
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, fmt};
 
 use async_stream::try_stream;
 use futures_util::StreamExt;
@@ -22,6 +22,17 @@ pub enum JoinType {
     Outer,
     Left,
     Right,
+}
+
+impl fmt::Display for JoinType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            JoinType::Inner => write!(f, "inner"),
+            JoinType::Outer => write!(f, "outer"),
+            JoinType::Left => write!(f, "left"),
+            JoinType::Right => write!(f, "right"),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
