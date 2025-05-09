@@ -21,7 +21,7 @@ use crate::{
         stats::{CollectionStats, ConnectorStats, FieldStats},
         Connector, ConnectorState, QueryHandle, QueryResponse, Split,
     },
-    http_server::to_workflow_steps,
+    http_server::{to_workflow_steps, QueryStep},
     log::Log,
     optimizations::Optimizer,
     workflow::{sortable_value::SortableValue, Workflow},
@@ -193,6 +193,7 @@ async fn cancel() -> Result<()> {
 async fn check_multi_connectors(
     query: &str,
     input: BTreeMap<&str, BTreeMap<&str, &str>>,
+    views_raw: BTreeMap<&str, &str>,
     expected: &str,
     apply_filter_tx: Option<std::sync::mpsc::Sender<FilterAst>>,
 ) -> Result<()> {
@@ -230,9 +231,19 @@ async fn check_multi_connectors(
         connectors.insert(name, connector_state);
     }
 
+    let views = {
+        let mut views = BTreeMap::new();
+        for (name, steps_raw) in views_raw {
+            let steps = serde_json::from_str::<Vec<QueryStep>>(steps_raw)
+                .context("parse views query steps")?;
+            views.insert(name.to_string(), steps);
+        }
+        views
+    };
+
     let steps = to_workflow_steps(
         &connectors,
-        &BTreeMap::new(),
+        &views,
         serde_json::from_str(query).context("parse query steps from json")?,
     )
     .await
@@ -282,10 +293,18 @@ async fn check_multi_connectors(
 async fn check_multi_collection(
     query: &str,
     input: BTreeMap<&str, &str>,
+    views: Option<BTreeMap<&str, &str>>,
     expect: &str,
     apply_filter_tx: Option<std::sync::mpsc::Sender<FilterAst>>,
 ) -> Result<()> {
-    check_multi_connectors(query, btreemap! {"test" => input}, expect, apply_filter_tx).await
+    check_multi_connectors(
+        query,
+        btreemap! {"test" => input},
+        views.unwrap_or_default(),
+        expect,
+        apply_filter_tx,
+    )
+    .await
 }
 
 /// Creates a test connector named 'test' and a collection named 'c' which will include logs
@@ -303,6 +322,29 @@ async fn check(query: &str, input: &str, expected: &str) -> Result<()> {
 async fn scan() -> Result<()> {
     let logs = r#"[{"hello": "world"}]"#;
     check(r#"[{"scan": ["test", "c"]}]"#, logs, logs).await
+}
+
+#[tokio::test]
+async fn scan_view() -> Result<()> {
+    check_multi_collection()
+        .query(
+            r#"[
+                {"scan": ["views", "v"]},
+                {"filter": {"ends_with": [{"id": "hello"}, {"lit": "rld"}]}}
+            ]"#,
+        )
+        .input(
+            btreemap! {"c" => r#"[{"hello": "world"}, {"hello": "worrrr"}, {"hello2": "world2"}]"#},
+        )
+        .views(btreemap! {
+            "v" => r#"[
+                {"scan": ["test", "c"]},
+                {"filter": {"starts_with": [{"id": "hello"}, {"lit": "wor"}]}}
+            ]"#
+        })
+        .expect(r#"[{"hello": "world"}]"#)
+        .call()
+        .await
 }
 
 #[tokio::test]
