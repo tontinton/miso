@@ -17,10 +17,10 @@ where
 {
     select! {
         _ = fut => {
-            panic!("{}: Interval future unexpectedly finished.", tag);
+            error!("{}: Interval future unexpectedly finished", tag);
         }
         _ = shutdown_rx.changed() => {
-            info!("{}: Shutdown signal received. Stopping interval task.", tag);
+            info!("{}: Shutdown signal received, stopping interval task", tag);
         }
     }
 }
@@ -30,6 +30,7 @@ impl ShutdownFuture {
     where
         Fut: Future<Output = ()> + Send + 'static,
     {
+        info!("{tag}: Spawning task");
         let (shutdown_tx, shutdown_rx) = watch::channel(());
         let task = spawn(shutdown_task(fut, shutdown_rx, tag));
         Self {
