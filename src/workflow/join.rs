@@ -1,16 +1,16 @@
-#![allow(clippy::mutable_key_type)]
-
 use std::{collections::BTreeMap, fmt};
 
 use async_stream::try_stream;
 use futures_util::StreamExt;
-use itertools::iproduct;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::log::{Log, LogStream, LogTryStream};
 
 use super::sortable_value::SortableValue;
+
+const MERGED_LEFT_SUFFIX: &str = "_left";
+const MERGED_RIGHT_SUFFIX: &str = "_right";
 
 type JoinMap = BTreeMap<SortableValue, Vec<Log>>;
 
@@ -43,24 +43,36 @@ pub struct Join {
     pub type_: JoinType,
 }
 
-fn merge_two_logs(join_value: &Value, left: Log, right: Log) -> Log {
-    let mut merged = left;
-
+fn merge_two_logs(join_value: &Value, mut left: Log, right: Log) -> Log {
     for (key, value) in right {
-        if let Some(existing_value) = merged.remove(&key) {
-            if join_value == &existing_value {
-                merged.insert(key, existing_value);
-                continue;
-            }
+        match left.entry(key) {
+            serde_json::map::Entry::Occupied(entry) => {
+                if join_value == entry.get() {
+                    // Keep existing value.
+                    continue;
+                }
 
-            merged.insert(key.as_str().to_string() + "_left", existing_value);
-            merged.insert(key.as_str().to_string() + "_right", value);
-        } else {
-            merged.insert(key, value);
+                let key = entry.key();
+
+                let mut left_key = String::with_capacity(key.len() + MERGED_LEFT_SUFFIX.len());
+                left_key.push_str(key);
+                left_key.push_str(MERGED_LEFT_SUFFIX);
+
+                let mut right_key = String::with_capacity(key.len() + MERGED_RIGHT_SUFFIX.len());
+                right_key.push_str(key);
+                right_key.push_str(MERGED_RIGHT_SUFFIX);
+
+                let existing_value = entry.remove();
+                left.insert(left_key, existing_value);
+                left.insert(right_key, value);
+            }
+            serde_json::map::Entry::Vacant(entry) => {
+                entry.insert(value);
+            }
         }
     }
 
-    merged
+    left
 }
 
 fn inner_join(left: JoinMap, right: JoinMap) -> LogTryStream {
@@ -70,7 +82,7 @@ fn inner_join(left: JoinMap, right: JoinMap) -> LogTryStream {
         let mut left_tuple = left_iter.next();
         let mut right_tuple = right_iter.next();
 
-        while let (Some((left_key, left_logs)), Some((right_key, right_logs))) =
+        while let (Some((left_key, mut left_logs)), Some((right_key, mut right_logs))) =
             (left_tuple, right_tuple)
         {
             match left_key.cmp(&right_key) {
@@ -83,8 +95,20 @@ fn inner_join(left: JoinMap, right: JoinMap) -> LogTryStream {
                     right_tuple = right_iter.next();
                 }
                 std::cmp::Ordering::Equal => {
-                    for (left_log, right_log) in iproduct!(left_logs, right_logs) {
-                        yield merge_two_logs(&left_key, left_log, right_log);
+                    if right_logs.len() == 1 {
+                        for left_log in left_logs.clone() {
+                            yield merge_two_logs(&left_key, left_log, right_logs.pop().unwrap());
+                        }
+                    } else if left_logs.len() == 1 {
+                        for right_log in right_logs.clone() {
+                            yield merge_two_logs(&left_key, left_logs.pop().unwrap(), right_log);
+                        }
+                    } else {
+                        for left_log in &left_logs {
+                            for right_log in &right_logs {
+                                yield merge_two_logs(&left_key, left_log.clone(), right_log.clone());
+                            }
+                        }
                     }
                     left_tuple = left_iter.next();
                     right_tuple = right_iter.next();
@@ -94,29 +118,78 @@ fn inner_join(left: JoinMap, right: JoinMap) -> LogTryStream {
     })
 }
 
-fn outer_join(mut left: JoinMap, mut right: JoinMap) -> LogTryStream {
-    let mut keys: Vec<_> = left.keys().chain(right.keys()).cloned().collect();
-    keys.sort();
-    keys.dedup();
+fn outer_join(left: JoinMap, right: JoinMap) -> LogTryStream {
     Box::pin(try_stream! {
-        for key in keys {
-            match (left.remove(&key), right.remove(&key)) {
-                (Some(left_logs), Some(right_logs)) => {
-                    for (left_log, right_log) in iproduct!(left_logs, right_logs) {
-                        yield merge_two_logs(&key, left_log, right_log);
+        let mut left_iter = left.into_iter();
+        let mut right_iter = right.into_iter();
+        let mut left_next = left_iter.next();
+        let mut right_next = right_iter.next();
+
+        loop {
+            match (left_next, right_next) {
+                (Some((left_key, mut left_logs)), Some((right_key, mut right_logs))) => {
+                    match left_key.cmp(&right_key) {
+                        std::cmp::Ordering::Less => {
+                            for log in left_logs {
+                                yield log;
+                            }
+                            left_next = left_iter.next();
+                            right_next = Some((right_key, right_logs));
+                        }
+                        std::cmp::Ordering::Greater => {
+                            for log in right_logs {
+                                yield log;
+                            }
+                            left_next = Some((left_key, left_logs));
+                            right_next = right_iter.next();
+                        }
+                        std::cmp::Ordering::Equal => {
+                            let key = left_key;
+
+                            if right_logs.len() == 1 {
+                                for left_log in left_logs {
+                                    yield merge_two_logs(&key, left_log, right_logs.pop().unwrap());
+                                }
+                            } else if left_logs.len() == 1 {
+                                for right_log in right_logs {
+                                    yield merge_two_logs(&key, left_logs.pop().unwrap(), right_log);
+                                }
+                            } else {
+                                for left_log in &left_logs {
+                                    for right_log in &right_logs {
+                                        yield merge_two_logs(&key, left_log.clone(), right_log.clone());
+                                    }
+                                }
+                            }
+
+                            left_next = left_iter.next();
+                            right_next = right_iter.next();
+                        }
                     }
                 }
-                (Some(left_logs), None) => {
-                    for log in left_logs {
+                (Some((_, logs)), None) => {
+                    for log in logs {
                         yield log;
                     }
+                    for (_, logs) in left_iter {
+                        for log in logs {
+                            yield log;
+                        }
+                    }
+                    break;
                 }
-                (None, Some(right_logs)) => {
-                    for log in right_logs {
+                (None, Some((_, logs))) => {
+                    for log in logs {
                         yield log;
                     }
+                    for (_, logs) in right_iter {
+                        for log in logs {
+                            yield log;
+                        }
+                    }
+                    break;
                 }
-                _ => panic!("Key doesn't exist in both left and right after merge?"),
+                (None, None) => break,
             }
         }
     })
