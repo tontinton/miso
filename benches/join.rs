@@ -37,6 +37,7 @@ fn bench_join_various_sizes(c: &mut Criterion) {
                     let config = Join {
                         type_: JoinType::Inner,
                         on: (JOIN_KEY.to_string(), JOIN_KEY.to_string()),
+                        ..Default::default()
                     };
 
                     let stream = join_streams(config, left_stream, right_stream).await;
@@ -60,6 +61,7 @@ fn bench_join_different_ratios(c: &mut Criterion) {
                     let config = Join {
                         type_: JoinType::Inner,
                         on: (JOIN_KEY.to_string(), JOIN_KEY.to_string()),
+                        ..Default::default()
                     };
 
                     let stream = join_streams(config, left_stream, right_stream).await;
@@ -92,6 +94,7 @@ fn bench_join_types(c: &mut Criterion) {
                         let config = Join {
                             type_: join_type.clone(),
                             on: (JOIN_KEY.to_string(), JOIN_KEY.to_string()),
+                            ..Default::default()
                         };
 
                         let stream = join_streams(config, left_stream, right_stream).await;
