@@ -1,4 +1,5 @@
 use std::{
+    hash::BuildHasher,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -6,7 +7,7 @@ use std::{
 use async_stream::{stream, try_stream};
 use color_eyre::eyre::{bail, Context, Result};
 use futures_util::{future::try_join_all, stream::FuturesUnordered, StreamExt};
-use hashbrown::HashSet;
+use hashbrown::{DefaultHashBuilder, HashSet};
 use join::{join_streams, Join, JoinType};
 use kinded::Kinded;
 use parking_lot::Mutex;
@@ -259,6 +260,73 @@ async fn apply_dynamic_filter(
     None
 }
 
+pub async fn join_streams_partitioned(
+    config: Join,
+    mut left_stream: LogStream,
+    mut right_stream: LogStream,
+    partitions: usize,
+    output_tx: mpsc::Sender<Log>,
+) -> Result<()> {
+    let mut tasks = Vec::with_capacity(partitions);
+    let mut left_txs = Vec::with_capacity(partitions);
+    let mut right_txs = Vec::with_capacity(partitions);
+
+    for i in 0..partitions {
+        let (left_tx, left_rx) = mpsc::channel(1);
+        let (right_tx, right_rx) = mpsc::channel(1);
+
+        let config = config.clone();
+        let output_tx = output_tx.clone();
+
+        let task = spawn(async move {
+            let stream = join_streams(config, rx_stream(left_rx), rx_stream(right_rx)).await;
+            stream_to_tx(stream, output_tx, &format!("join({i})")).await?;
+            Ok::<(), color_eyre::eyre::Error>(())
+        });
+
+        tasks.push(task);
+        left_txs.push(left_tx);
+        right_txs.push(right_tx);
+    }
+
+    let (left_key, right_key) = &config.on;
+    let build_hasher = DefaultHashBuilder::default();
+
+    loop {
+        tokio::select! {
+            Some(log) = left_stream.next() => {
+                if let Some(value) = log.get(left_key) {
+                    let i = (build_hasher.hash_one(value) % partitions as u64) as usize;
+                    if let Err(e) = left_txs[i].send(log).await {
+                        debug!("Closing partition join step ({i}): {e:?}");
+                        break;
+                    }
+                }
+            },
+            Some(log) = right_stream.next() => {
+                if let Some(value) = log.get(right_key) {
+                    let i = (build_hasher.hash_one(value) % partitions as u64) as usize;
+                    if let Err(e) = right_txs[i].send(log).await {
+                        debug!("Closing partition join step ({i}): {e:?}");
+                        break;
+                    }
+                }
+            },
+            else => break,
+        }
+    }
+
+    drop(left_txs);
+    drop(right_txs);
+
+    let join_results = try_join_all(tasks).await?;
+    for join_result in join_results {
+        join_result?;
+    }
+
+    Ok(())
+}
+
 impl WorkflowStep {
     #[instrument(skip_all, fields(step = %self))]
     async fn execute(
@@ -400,8 +468,14 @@ impl WorkflowStep {
                         _ => (rx_stream(left_rx), rx_stream(right_rx)),
                     };
 
-                    let stream = join_streams(join, left_stream, right_stream).await;
-                    stream_to_tx(stream, tx, "join").await?;
+                    let partitions = join.partitions;
+                    if partitions > 1 {
+                        join_streams_partitioned(join, left_stream, right_stream, partitions, tx)
+                            .await?;
+                    } else {
+                        let stream = join_streams(join, left_stream, right_stream).await;
+                        stream_to_tx(stream, tx, "join").await?;
+                    }
                     Ok(())
                 }));
 
