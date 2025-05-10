@@ -1,5 +1,4 @@
 use std::{
-    collections::BTreeSet,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -7,12 +6,12 @@ use std::{
 use async_stream::{stream, try_stream};
 use color_eyre::eyre::{bail, Context, Result};
 use futures_util::{future::try_join_all, stream::FuturesUnordered, StreamExt};
+use hashbrown::HashSet;
 use join::{join_streams, Join, JoinType};
 use kinded::Kinded;
 use parking_lot::Mutex;
 use project::extend_stream;
 use serde_json::Value;
-use sortable_value::SortableValue;
 use summarize::{summarize_stream, Summarize};
 use tokio::{
     spawn,
@@ -173,19 +172,19 @@ fn rx_to_dynamic_filter_tx_stream(
     field: impl Into<String>,
 ) -> LogStream {
     let field = field.into();
-    let mut values = BTreeSet::new();
+    let mut values = HashSet::new();
 
     Box::pin(stream! {
         while let Some(log) = rx.recv().await {
             if let Some(value) = log.get(&field) {
-                values.insert(SortableValue(value.clone()));
+                values.insert(value.clone());
             }
             yield log;
         }
 
         let ast = FilterAst::In(
             Box::new(FilterAst::Id(field)),
-            values.into_iter().map(|v| FilterAst::Lit(v.0)).collect(),
+            values.into_iter().map(FilterAst::Lit).collect(),
         );
         if let Err(e) = dynamic_filter_tx.send(Some(ast)) {
             error!("Failed sending dynamic filter: {e:?}");

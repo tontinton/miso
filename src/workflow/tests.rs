@@ -1,5 +1,6 @@
 use std::{
     any::Any,
+    cmp::Ordering,
     collections::{BTreeMap, BTreeSet},
     sync::Arc,
 };
@@ -24,7 +25,7 @@ use crate::{
     http_server::{to_workflow_steps, QueryStep},
     log::Log,
     optimizations::Optimizer,
-    workflow::{sortable_value::SortableValue, Workflow},
+    workflow::{serde_json_utils::partial_cmp_values, sortable_value::SortableValue, Workflow},
 };
 
 use super::filter::FilterAst;
@@ -878,17 +879,37 @@ async fn join_inner() -> Result<()> {
         .context("check multi collection")?;
 
     let ast = rx.recv().context("recv() apply dynamic filter")?;
-    assert_eq!(
-        ast,
-        FilterAst::In(
-            Box::new(FilterAst::Id("id".to_string())),
-            vec![
+    match ast {
+        FilterAst::In(id_box, mut actual_vec) => {
+            assert_eq!(id_box, Box::new(FilterAst::Id("id".to_string())));
+
+            let mut expected_vec = vec![
                 FilterAst::Lit(1.into()),
                 FilterAst::Lit(2.into()),
-                FilterAst::Lit(3.into())
-            ]
-        )
-    );
+                FilterAst::Lit(3.into()),
+            ];
+
+            let compare_filter_asts = |a: &FilterAst, b: &FilterAst| -> Ordering {
+                match (a, b) {
+                    (FilterAst::Lit(val_a), FilterAst::Lit(val_b)) => {
+                        partial_cmp_values(val_a, val_b).unwrap_or(Ordering::Equal)
+                    }
+                    _ => panic!(
+                        "Unexpected FilterAst variants in Vec during comparison: {:?} vs {:?}",
+                        a, b
+                    ),
+                }
+            };
+
+            actual_vec.sort_by(compare_filter_asts);
+            expected_vec.sort_by(compare_filter_asts);
+
+            assert_eq!(actual_vec, expected_vec);
+        }
+        _ => {
+            panic!("Expected FilterAst::In variant, but got: {:?}", ast);
+        }
+    }
 
     assert!(matches!(
         rx.try_recv(),
