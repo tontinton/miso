@@ -23,6 +23,7 @@ clap = { version = "4.5.20", features = ["derive"] }
 color-eyre = { version = "0.6.3", default-features = false }
 futures-core = "0.3.31"
 futures-util = "0.3.31"
+hashbrown = "0.15.3"
 humantime = "2.1.0"
 itertools = "0.13.0"
 kinded = "0.3.0"

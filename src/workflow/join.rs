@@ -1,18 +1,15 @@
-use std::{collections::BTreeMap, fmt};
+use std::fmt;
 
 use async_stream::try_stream;
 use futures_util::StreamExt;
+use hashbrown::HashMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::log::{Log, LogStream, LogTryStream};
 
-use super::sortable_value::SortableValue;
-
 const MERGED_LEFT_SUFFIX: &str = "_left";
 const MERGED_RIGHT_SUFFIX: &str = "_right";
-
-type JoinMap = BTreeMap<SortableValue, Vec<Log>>;
 
 #[derive(Debug, Serialize, Deserialize, Default, Clone, PartialEq)]
 #[serde(rename_all = "snake_case")]
@@ -75,127 +72,50 @@ fn merge_two_logs(join_value: &Value, mut left: Log, right: Log) -> Log {
     left
 }
 
-fn inner_join(left: JoinMap, right: JoinMap) -> LogTryStream {
+fn hash_inner_join(mut build: HashMap<Value, Vec<Log>>, probe: Vec<(Value, Log)>) -> LogTryStream {
     Box::pin(try_stream! {
-        let mut left_iter = left.into_iter();
-        let mut right_iter = right.into_iter();
-        let mut left_tuple = left_iter.next();
-        let mut right_tuple = right_iter.next();
-
-        while let (Some((left_key, mut left_logs)), Some((right_key, mut right_logs))) =
-            (left_tuple, right_tuple)
-        {
-            match left_key.cmp(&right_key) {
-                std::cmp::Ordering::Less => {
-                    left_tuple = left_iter.next();
-                    right_tuple = Some((right_key, right_logs));
-                }
-                std::cmp::Ordering::Greater => {
-                    left_tuple = Some((left_key, left_logs));
-                    right_tuple = right_iter.next();
-                }
-                std::cmp::Ordering::Equal => {
-                    if right_logs.len() == 1 {
-                        for left_log in left_logs {
-                            yield merge_two_logs(&left_key, left_log, right_logs.pop().unwrap());
-                        }
-                    } else if left_logs.len() == 1 {
-                        for right_log in right_logs {
-                            yield merge_two_logs(&left_key, left_logs.pop().unwrap(), right_log);
-                        }
-                    } else {
-                        for left_log in &left_logs {
-                            for right_log in &right_logs {
-                                yield merge_two_logs(&left_key, left_log.clone(), right_log.clone());
-                            }
-                        }
-                    }
-                    left_tuple = left_iter.next();
-                    right_tuple = right_iter.next();
-                }
-            };
-        }
-    })
-}
-
-fn outer_join(left: JoinMap, right: JoinMap) -> LogTryStream {
-    Box::pin(try_stream! {
-        let mut left_iter = left.into_iter();
-        let mut right_iter = right.into_iter();
-        let mut left_next = left_iter.next();
-        let mut right_next = right_iter.next();
-
-        loop {
-            match (left_next, right_next) {
-                (Some((left_key, mut left_logs)), Some((right_key, mut right_logs))) => {
-                    match left_key.cmp(&right_key) {
-                        std::cmp::Ordering::Less => {
-                            for log in left_logs {
-                                yield log;
-                            }
-                            left_next = left_iter.next();
-                            right_next = Some((right_key, right_logs));
-                        }
-                        std::cmp::Ordering::Greater => {
-                            for log in right_logs {
-                                yield log;
-                            }
-                            left_next = Some((left_key, left_logs));
-                            right_next = right_iter.next();
-                        }
-                        std::cmp::Ordering::Equal => {
-                            let key = left_key;
-
-                            if right_logs.len() == 1 {
-                                for left_log in left_logs {
-                                    yield merge_two_logs(&key, left_log, right_logs.pop().unwrap());
-                                }
-                            } else if left_logs.len() == 1 {
-                                for right_log in right_logs {
-                                    yield merge_two_logs(&key, left_logs.pop().unwrap(), right_log);
-                                }
-                            } else {
-                                for left_log in &left_logs {
-                                    for right_log in &right_logs {
-                                        yield merge_two_logs(&key, left_log.clone(), right_log.clone());
-                                    }
-                                }
-                            }
-
-                            left_next = left_iter.next();
-                            right_next = right_iter.next();
-                        }
+        for (probe_key, probe_log) in probe {
+            if let Some(mut build_logs) = build.remove(&probe_key) {
+                if build_logs.len() == 1 {
+                    yield merge_two_logs(&probe_key, build_logs.pop().unwrap(), probe_log);
+                } else {
+                    for build_log in build_logs {
+                        yield merge_two_logs(&probe_key, build_log, probe_log.clone());
                     }
                 }
-                (Some((_, logs)), None) => {
-                    for log in logs {
-                        yield log;
-                    }
-                    for (_, logs) in left_iter {
-                        for log in logs {
-                            yield log;
-                        }
-                    }
-                    break;
-                }
-                (None, Some((_, logs))) => {
-                    for log in logs {
-                        yield log;
-                    }
-                    for (_, logs) in right_iter {
-                        for log in logs {
-                            yield log;
-                        }
-                    }
-                    break;
-                }
-                (None, None) => break,
             }
         }
     })
 }
 
-fn left_join(left: JoinMap, mut right: JoinMap) -> LogTryStream {
+fn hash_outer_join(mut build: HashMap<Value, Vec<Log>>, probe: Vec<(Value, Log)>) -> LogTryStream {
+    Box::pin(try_stream! {
+        for (probe_key, probe_log) in probe {
+            if let Some(mut build_logs) = build.remove(&probe_key) {
+                if build_logs.len() == 1 {
+                    yield merge_two_logs(&probe_key, build_logs.pop().unwrap(), probe_log);
+                } else {
+                    for build_log in build_logs {
+                        yield merge_two_logs(&probe_key, build_log.clone(), probe_log.clone());
+                    }
+                }
+            } else {
+                yield probe_log;
+            }
+        }
+
+        for (_, build_logs) in build {
+            for build_log in build_logs {
+                yield build_log;
+            }
+        }
+    })
+}
+
+fn hash_left_join(
+    left: HashMap<Value, Vec<Log>>,
+    mut right: HashMap<Value, Vec<Log>>,
+) -> LogTryStream {
     Box::pin(try_stream! {
         for (left_key, left_logs) in left {
             for mut left_log in left_logs {
@@ -212,36 +132,96 @@ fn left_join(left: JoinMap, mut right: JoinMap) -> LogTryStream {
     })
 }
 
-pub async fn join_streams(
+async fn collect_to_build_and_probe(
     config: Join,
     mut left_stream: LogStream,
     mut right_stream: LogStream,
-) -> LogTryStream {
-    let mut left = JoinMap::new();
-    let mut right = JoinMap::new();
-    let left_key = &config.on.0;
-    let right_key = &config.on.1;
+) -> (HashMap<Value, Vec<Log>>, Vec<(Value, Log)>) {
+    let mut left = Vec::new();
+    let mut right = Vec::new();
+    let (left_key, right_key) = &config.on;
 
     loop {
         tokio::select! {
             Some(log) = left_stream.next() => {
                 if let Some(value) = log.get(left_key) {
-                    left.entry(SortableValue(value.clone())).or_default().push(log);
+                    left.push((value.clone(), log));
                 }
             },
             Some(log) = right_stream.next() => {
                 if let Some(value) = log.get(right_key) {
-                    right.entry(SortableValue(value.clone())).or_default().push(log);
+                    right.push((value.clone(), log));
                 }
             },
             else => break,
         }
     }
 
+    let (build, probe) = if left.len() <= right.len() {
+        (left, right)
+    } else {
+        (right, left)
+    };
+
+    let mut hash_map: HashMap<Value, Vec<Log>> = HashMap::with_capacity(build.len());
+    for (key, log) in build {
+        hash_map.entry(key).or_default().push(log);
+    }
+
+    (hash_map, probe)
+}
+
+async fn collect_to_hash_maps(
+    config: Join,
+    mut left_stream: LogStream,
+    mut right_stream: LogStream,
+) -> (HashMap<Value, Vec<Log>>, HashMap<Value, Vec<Log>>) {
+    let mut left: HashMap<Value, Vec<Log>> = HashMap::new();
+    let mut right: HashMap<Value, Vec<Log>> = HashMap::new();
+    let (left_key, right_key) = &config.on;
+
+    loop {
+        tokio::select! {
+            Some(log) = left_stream.next() => {
+                if let Some(value) = log.get(left_key) {
+                    left.entry(value.clone()).or_default().push(log);
+                }
+            },
+            Some(log) = right_stream.next() => {
+                if let Some(value) = log.get(right_key) {
+                    right.entry(value.clone()).or_default().push(log);
+                }
+            },
+            else => break,
+        }
+    }
+
+    (left, right)
+}
+
+pub async fn join_streams(
+    config: Join,
+    left_stream: LogStream,
+    right_stream: LogStream,
+) -> LogTryStream {
     match config.type_ {
-        JoinType::Inner => inner_join(left, right),
-        JoinType::Outer => outer_join(left, right),
-        JoinType::Left => left_join(left, right),
-        JoinType::Right => left_join(right, left),
+        JoinType::Inner => {
+            let (build, probe) =
+                collect_to_build_and_probe(config, left_stream, right_stream).await;
+            hash_inner_join(build, probe)
+        }
+        JoinType::Outer => {
+            let (build, probe) =
+                collect_to_build_and_probe(config, left_stream, right_stream).await;
+            hash_outer_join(build, probe)
+        }
+        JoinType::Left => {
+            let (left, right) = collect_to_hash_maps(config, left_stream, right_stream).await;
+            hash_left_join(left, right)
+        }
+        JoinType::Right => {
+            let (left, right) = collect_to_hash_maps(config, left_stream, right_stream).await;
+            hash_left_join(right, left)
+        }
     }
 }
