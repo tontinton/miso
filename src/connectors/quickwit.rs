@@ -974,8 +974,8 @@ impl Connector for QuickwitConnector {
         handle: &dyn QueryHandle,
     ) -> Option<Box<dyn QueryHandle>> {
         let handle = downcast_unwrap!(handle, QuickwitHandle);
-        if handle.sorts.is_some() {
-            // Cannot filter over top-n in Quickwit.
+        if handle.sorts.is_some() || !handle.group_by.is_empty() {
+            // Cannot filter over top-n / group by in Quickwit.
             return None;
         }
         Some(Box::new(handle.with_filter(filter_ast_to_query(ast)?)))
@@ -1047,7 +1047,7 @@ impl Connector for QuickwitConnector {
         handle: &dyn QueryHandle,
     ) -> Option<Box<dyn QueryHandle>> {
         let handle = downcast_unwrap!(handle, QuickwitHandle);
-        if handle.limit.is_some() || handle.sorts.is_some() {
+        if handle.limit.is_some() || handle.sorts.is_some() || !handle.group_by.is_empty() {
             // Quickwit's query (like Elasticsearch's) is not pipelined, most similar to SQL.
             // When you request it to both sort (or limit) and aggregate, it will always first
             // aggregate and then sort (or limit), no way to control the order of these 2 AFAIK.
