@@ -82,7 +82,7 @@ impl Scan {
         let connector = connector_state.connector.clone();
         Self {
             collection,
-            splits: connector.get_splits().await,
+            splits: connector.get_splits(),
             handle: connector.get_handle().into(),
             connector,
             stats: connector_state.stats.clone(),

@@ -101,7 +101,7 @@ impl Connector for TestConnector {
         Box::new(TestHandle {})
     }
 
-    async fn get_splits(&self) -> Vec<Arc<dyn Split>> {
+    fn get_splits(&self) -> Vec<Arc<dyn Split>> {
         vec![Arc::new(TestSplit {}) as Arc<dyn Split>]
     }
 

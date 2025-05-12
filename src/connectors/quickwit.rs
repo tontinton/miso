@@ -846,7 +846,7 @@ impl Connector for QuickwitConnector {
         self.indexes.read().contains_key(collection)
     }
 
-    async fn get_splits(&self) -> Vec<Arc<dyn Split>> {
+    fn get_splits(&self) -> Vec<Arc<dyn Split>> {
         vec![Arc::new(QuickwitSplit {}) as Arc<dyn Split>]
     }
 
