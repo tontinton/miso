@@ -41,8 +41,7 @@ fn bench_join_various_sizes(c: &mut Criterion) {
                     };
 
                     let stream = join_streams(config, left_stream, right_stream).await;
-                    let count = stream.fold(0, |acc, _| async move { acc + 1 }).await;
-                    count
+                    stream.fold(0, |acc, _| async move { acc + 1 }).await
                 });
         });
     }
@@ -65,8 +64,7 @@ fn bench_join_different_ratios(c: &mut Criterion) {
                     };
 
                     let stream = join_streams(config, left_stream, right_stream).await;
-                    let count = stream.fold(0, |acc, _| async move { acc + 1 }).await;
-                    count
+                    stream.fold(0, |acc, _| async move { acc + 1 }).await
                 });
         });
     }
@@ -98,8 +96,7 @@ fn bench_join_types(c: &mut Criterion) {
                         };
 
                         let stream = join_streams(config, left_stream, right_stream).await;
-                        let count = stream.fold(0, |acc, _| async move { acc + 1 }).await;
-                        count
+                        stream.fold(0, |acc, _| async move { acc + 1 }).await
                     });
             },
         );
