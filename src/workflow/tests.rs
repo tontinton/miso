@@ -864,13 +864,15 @@ async fn join_inner() -> Result<()> {
             ]"#
         )
         .input(btreemap!{
-            "left"  => r#"[{"id": 1, "value": "one"}, {"id": 2, "value": "two"}, {"id": 3, "value": "three"}]"#,
-            "right" => r#"[{"id": 1, "value": "ONE"}, {"id": 2, "value": "TWO"}, {"id": 4, "value": "FOUR"}]"#,
+            "left"  => r#"[{"id": 1, "value": "one"}, {"id": 1, "value": "dup"}, {"id": 2, "value": "two"}, {"id": 3, "value": "three"}]"#,
+            "right" => r#"[{"id": 1, "value": "ONE"}, {"id": 2, "value": "DUP"}, {"id": 2, "value": "TWO"}, {"id": 4, "value": "FOUR"}]"#,
         })
         .expect(
             r#"[
                 {"id": 1, "value_left": "one", "value_right": "ONE"},
-                {"id": 2, "value_left": "two", "value_right": "TWO"}
+                {"id": 1, "value_left": "dup", "value_right": "ONE"},
+                {"id": 2, "value_left": "two", "value_right": "TWO"},
+                {"id": 2, "value_left": "two", "value_right": "DUP"}
             ]"#
         )
         .apply_filter_tx(tx)
@@ -934,13 +936,15 @@ async fn join_outer() -> Result<()> {
             ]"#
         )
         .input(btreemap!{
-            "left"  => r#"[{"id": 1, "value": "one"}, {"id": 2, "value": "two"}, {"id": 3, "value": "three"}]"#,
-            "right" => r#"[{"id": 1, "value": "ONE"}, {"id": 2, "value": "TWO"}, {"id": 4, "value": "FOUR"}]"#,
+            "left"  => r#"[{"id": 1, "value": "one"}, {"id": 1, "value": "dup"}, {"id": 2, "value": "two"}, {"id": 3, "value": "three"}]"#,
+            "right" => r#"[{"id": 1, "value": "ONE"}, {"id": 2, "value": "TWO"}, {"id": 2, "value": "DUP"}, {"id": 4, "value": "FOUR"}]"#,
         })
         .expect(
             r#"[
                 {"id": 1, "value_left": "one", "value_right": "ONE"},
+                {"id": 1, "value_left": "dup", "value_right": "ONE"},
                 {"id": 2, "value_left": "two", "value_right": "TWO"},
+                {"id": 2, "value_left": "two", "value_right": "DUP"},
                 {"id": 3, "value": "three"},
                 {"id": 4, "value": "FOUR"}
             ]"#

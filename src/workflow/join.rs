@@ -88,19 +88,15 @@ fn merge_logs(join_value: &Value, left: Log, right: Log, flip: bool) -> Log {
 }
 
 fn hash_inner_join(
-    mut build: HashMap<Value, Vec<Log>>,
+    build: HashMap<Value, Vec<Log>>,
     probe: Vec<(Value, Log)>,
     flip: bool,
 ) -> LogTryStream {
     Box::pin(try_stream! {
         for (probe_key, probe_log) in probe {
-            if let Some(mut build_logs) = build.remove(&probe_key) {
-                if build_logs.len() == 1 {
-                    yield merge_logs(&probe_key, build_logs.pop().unwrap(), probe_log, flip);
-                } else {
-                    for build_log in build_logs {
-                        yield merge_logs(&probe_key, build_log, probe_log.clone(), flip);
-                    }
+            if let Some(build_logs) = build.get(&probe_key) {
+                for build_log in build_logs {
+                    yield merge_logs(&probe_key, build_log.clone(), probe_log.clone(), flip);
                 }
             }
         }
@@ -108,28 +104,27 @@ fn hash_inner_join(
 }
 
 fn hash_outer_join(
-    mut build: HashMap<Value, Vec<Log>>,
+    mut build: HashMap<Value, (Vec<Log>, bool)>,
     probe: Vec<(Value, Log)>,
     flip: bool,
 ) -> LogTryStream {
     Box::pin(try_stream! {
         for (probe_key, probe_log) in probe {
-            if let Some(mut build_logs) = build.remove(&probe_key) {
-                if build_logs.len() == 1 {
-                    yield merge_logs(&probe_key, build_logs.pop().unwrap(), probe_log, flip);
-                } else {
-                    for build_log in build_logs {
-                        yield merge_logs(&probe_key, build_log.clone(), probe_log.clone(), flip);
-                    }
+            if let Some((build_logs, matched)) = build.get_mut(&probe_key) {
+                for build_log in build_logs {
+                    yield merge_logs(&probe_key, build_log.clone(), probe_log.clone(), flip);
                 }
+                *matched = true;
             } else {
                 yield probe_log;
             }
         }
 
-        for (_, build_logs) in build {
-            for build_log in build_logs {
-                yield build_log;
+        for (_, (build_logs, matched)) in build {
+            if !matched {
+                for build_log in build_logs {
+                    yield build_log;
+                }
             }
         }
     })
@@ -159,7 +154,7 @@ async fn collect_to_build_and_probe(
     config: Join,
     mut left_stream: LogStream,
     mut right_stream: LogStream,
-) -> (HashMap<Value, Vec<Log>>, Vec<(Value, Log)>, bool) {
+) -> (Vec<(Value, Log)>, Vec<(Value, Log)>, bool) {
     let mut left = Vec::new();
     let mut right = Vec::new();
     let (left_key, right_key) = &config.on;
@@ -186,12 +181,7 @@ async fn collect_to_build_and_probe(
         (right, left, false)
     };
 
-    let mut hash_map: HashMap<Value, Vec<Log>> = HashMap::with_capacity(build.len());
-    for (key, log) in build {
-        hash_map.entry(key).or_default().push(log);
-    }
-
-    (hash_map, probe, flip)
+    (build, probe, flip)
 }
 
 async fn collect_to_hash_maps(
@@ -231,12 +221,24 @@ pub async fn join_streams(
         JoinType::Inner => {
             let (build, probe, flip) =
                 collect_to_build_and_probe(config, left_stream, right_stream).await;
-            hash_inner_join(build, probe, flip)
+
+            let mut build_map: HashMap<Value, Vec<Log>> = HashMap::new();
+            for (key, log) in build {
+                build_map.entry(key).or_default().push(log);
+            }
+
+            hash_inner_join(build_map, probe, flip)
         }
         JoinType::Outer => {
             let (build, probe, flip) =
                 collect_to_build_and_probe(config, left_stream, right_stream).await;
-            hash_outer_join(build, probe, flip)
+
+            let mut build_map: HashMap<Value, (Vec<Log>, bool)> = HashMap::new();
+            for (key, log) in build {
+                build_map.entry(key).or_default().0.push(log);
+            }
+
+            hash_outer_join(build_map, probe, flip)
         }
         JoinType::Left => {
             let (left, right) = collect_to_hash_maps(config, left_stream, right_stream).await;
