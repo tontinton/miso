@@ -26,7 +26,7 @@ use tracing::{debug, error, info, instrument};
 use crate::{
     connectors::{
         stats::{ConnectorStats, FieldStats},
-        Connector, ConnectorState, QueryHandle, QueryResponse, Split,
+        Connector, ConnectorState, QueryHandle, QueryResponse,
     },
     log::{Log, LogStream, LogTryStream},
     workflow::{
@@ -59,7 +59,6 @@ type WorkflowTasks = FuturesUnordered<JoinHandle<Result<()>>>;
 pub struct Scan {
     pub collection: String,
     pub connector: Arc<dyn Connector>,
-    pub splits: Vec<Arc<dyn Split>>,
     pub handle: Arc<dyn QueryHandle>,
     pub stats: Arc<Mutex<ConnectorStats>>,
 
@@ -82,7 +81,6 @@ impl Scan {
         let connector = connector_state.connector.clone();
         Self {
             collection,
-            splits: connector.get_splits(),
             handle: connector.get_handle().into(),
             connector,
             stats: connector_state.stats.clone(),
@@ -341,7 +339,6 @@ impl WorkflowStep {
             WorkflowStep::Scan(Scan {
                 collection,
                 connector,
-                splits,
                 mut handle,
                 dynamic_filter_rx,
                 ..
@@ -354,7 +351,8 @@ impl WorkflowStep {
                     }
                 }
 
-                let mut split_tasks = Vec::new();
+                let splits = connector.get_splits();
+                let mut split_tasks = Vec::with_capacity(splits.len());
 
                 for (i, split) in splits.into_iter().enumerate() {
                     let collection = collection.clone();
