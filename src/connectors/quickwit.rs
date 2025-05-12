@@ -846,8 +846,8 @@ impl Connector for QuickwitConnector {
         self.indexes.read().contains_key(collection)
     }
 
-    fn get_splits(&self) -> Vec<Arc<dyn Split>> {
-        vec![Arc::new(QuickwitSplit {}) as Arc<dyn Split>]
+    fn get_splits(&self) -> Vec<Box<dyn Split>> {
+        vec![Box::new(QuickwitSplit {}) as Box<dyn Split>]
     }
 
     fn get_handle(&self) -> Box<dyn QueryHandle> {
