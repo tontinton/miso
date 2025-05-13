@@ -277,14 +277,6 @@ impl IntoResponse for HttpError {
     }
 }
 
-struct RunOnDrop(Box<dyn Fn() + Send>);
-
-impl Drop for RunOnDrop {
-    fn drop(&mut self) {
-        self.0();
-    }
-}
-
 /// Starts running a new query.
 async fn query_stream(
     State(state): State<Arc<App>>,
@@ -293,13 +285,13 @@ async fn query_stream(
     let metrics_state = state.clone();
     let start = Instant::now();
     metrics_state.running_queries.inc();
-    let _record_metrics = RunOnDrop(Box::new(move || {
+    let _record_metrics = scopeguard::guard(metrics_state, |metrics_state| {
         debug!("Recording query metrics");
         metrics_state.running_queries.dec();
         metrics_state
             .query_latency
             .observe(start.elapsed().as_secs_f64());
-    }));
+    });
 
     let query_id = req.query_id.unwrap_or_else(Uuid::now_v7);
 
@@ -328,10 +320,10 @@ async fn query_stream(
     })?;
 
     Ok(Sse::new(stream! {
-        let _cancel_on_drop = RunOnDrop(Box::new(move || {
+        let _cancel_on_drop = scopeguard::guard(cancel_tx, |cancel_tx| {
             debug!("Cancelling query");
             let _ = cancel_tx.send(());
-        }));
+        });
 
         loop {
             match logs_stream.try_next().await {
