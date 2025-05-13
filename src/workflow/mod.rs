@@ -334,6 +334,10 @@ impl WorkflowStep {
         cancel_rx: watch::Receiver<()>,
     ) -> Result<()> {
         let start = Instant::now();
+        let _guard = scopeguard::guard((), |_| {
+            let duration = start.elapsed();
+            info!(elapsed_time = ?duration, "Workflow step execution time");
+        });
 
         match self {
             WorkflowStep::Scan(Scan {
@@ -504,9 +508,6 @@ impl WorkflowStep {
                 count_to_tx(count, tx).await;
             }
         }
-
-        let duration = start.elapsed();
-        info!(elapsed_time = ?duration, "Workflow step execution time");
 
         Ok(())
     }
