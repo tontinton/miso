@@ -3,7 +3,7 @@ use collection_macros::btreemap;
 use crate::workflow::{
     filter::FilterAst,
     sort::{NullsOrder, Sort, SortOrder},
-    summarize::{Aggregation, Summarize},
+    summarize::{Aggregation, Summarize, SummarizeType},
     Workflow, WorkflowStep as S,
 };
 
@@ -178,6 +178,7 @@ async fn summarize_into_union() {
             "s".to_string() => Aggregation::Sum("y".to_string()),
         },
         by: vec!["x".to_string()],
+        type_: SummarizeType::Single,
     });
     let post = S::Summarize(Summarize {
         aggs: btreemap! {
@@ -185,6 +186,7 @@ async fn summarize_into_union() {
             "s".to_string() => Aggregation::Sum("s".to_string()),
         },
         by: vec!["x".to_string()],
+        type_: SummarizeType::Final,
     });
 
     check_default(

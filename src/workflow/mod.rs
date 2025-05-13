@@ -351,7 +351,7 @@ impl WorkflowStep {
                     }
                 }
 
-                let splits = connector.get_splits();
+                let splits = connector.get_splits(handle.as_ref());
                 let mut split_tasks = Vec::with_capacity(splits.len());
 
                 for (i, split) in splits.into_iter().enumerate() {

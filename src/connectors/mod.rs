@@ -118,7 +118,7 @@ pub trait Connector: Debug + Send + Sync {
 
     fn get_handle(&self) -> Box<dyn QueryHandle>;
 
-    fn get_splits(&self) -> Vec<Box<dyn Split>>;
+    fn get_splits(&self, handle: &dyn QueryHandle) -> Vec<Box<dyn Split>>;
 
     async fn query(
         &self,
