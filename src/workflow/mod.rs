@@ -352,6 +352,20 @@ impl WorkflowStep {
                 }
 
                 let splits = connector.get_splits(handle.as_ref());
+
+                if splits.is_empty() {
+                    let response = connector.query(&collection, handle.as_ref(), None).await?;
+                    match response {
+                        QueryResponse::Logs(stream) => {
+                            stream_to_tx(stream, tx, "scan").await?;
+                        }
+                        QueryResponse::Count(count) => {
+                            count_to_tx(count, tx).await;
+                        }
+                    }
+                    return Ok(());
+                }
+
                 let mut split_tasks = Vec::with_capacity(splits.len());
 
                 for (i, split) in splits.into_iter().enumerate() {
@@ -362,7 +376,7 @@ impl WorkflowStep {
 
                     split_tasks.push(spawn(async move {
                         let response = connector
-                            .query(&collection, split.as_ref(), handle.as_ref())
+                            .query(&collection, handle.as_ref(), Some(split.as_ref()))
                             .await?;
 
                         match response {

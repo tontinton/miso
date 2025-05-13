@@ -118,13 +118,15 @@ pub trait Connector: Debug + Send + Sync {
 
     fn get_handle(&self) -> Box<dyn QueryHandle>;
 
-    fn get_splits(&self, handle: &dyn QueryHandle) -> Vec<Box<dyn Split>>;
+    fn get_splits(&self, _handle: &dyn QueryHandle) -> Vec<Box<dyn Split>> {
+        vec![]
+    }
 
     async fn query(
         &self,
         collection: &str,
-        split: &dyn Split,
         handle: &dyn QueryHandle,
+        split: Option<&dyn Split>,
     ) -> Result<QueryResponse>;
 
     /// Returns the handle with the filter AST the connector should predicate pushdown.
