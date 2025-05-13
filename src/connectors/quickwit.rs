@@ -857,12 +857,14 @@ impl Connector for QuickwitConnector {
     async fn query(
         &self,
         collection: &str,
-        split: &dyn Split,
         handle: &dyn QueryHandle,
+        split: Option<&dyn Split>,
     ) -> Result<QueryResponse> {
-        let Some(_) = split.as_any().downcast_ref::<QuickwitSplit>() else {
-            bail!("Downcasting split to wrong struct?");
-        };
+        if let Some(split) = split {
+            let Some(_) = split.as_any().downcast_ref::<QuickwitSplit>() else {
+                bail!("Downcasting split to wrong struct?");
+            };
+        }
 
         let url = self.config.url.clone();
         let scroll_timeout = self.config.scroll_timeout;

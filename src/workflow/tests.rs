@@ -108,8 +108,8 @@ impl Connector for TestConnector {
     async fn query(
         &self,
         collection: &str,
-        _split: &dyn Split,
         _handle: &dyn QueryHandle,
+        _split: Option<&dyn Split>,
     ) -> Result<QueryResponse> {
         let logs = self
             .collections
