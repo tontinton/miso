@@ -1,6 +1,7 @@
 use std::{
     cmp::Ordering,
     collections::{BTreeMap, BTreeSet},
+    fmt,
     sync::{
         atomic::{self, AtomicI64},
         Arc,
@@ -26,6 +27,17 @@ pub enum Aggregation {
     Sum(/*field=*/ String),
     Min(/*field=*/ String),
     Max(/*field=*/ String),
+}
+
+impl fmt::Display for Aggregation {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Aggregation::Count => write!(f, "Count"),
+            Aggregation::Sum(x) => write!(f, "Sum({})", x),
+            Aggregation::Min(x) => write!(f, "Min({})", x),
+            Aggregation::Max(x) => write!(f, "Max({})", x),
+        }
+    }
 }
 
 impl Aggregation {
@@ -55,6 +67,15 @@ pub enum SummarizeType {
     Final,
 }
 
+impl fmt::Display for SummarizeType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            SummarizeType::Single => write!(f, "Single"),
+            SummarizeType::Final => write!(f, "Final"),
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct Summarize {
     pub aggs: BTreeMap<String, Aggregation>,
@@ -62,6 +83,26 @@ pub struct Summarize {
 
     #[serde(rename = "type", skip_deserializing, default)]
     pub type_: SummarizeType,
+}
+
+impl fmt::Display for Summarize {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "type={}, by=[", self.type_)?;
+        for (i, by) in self.by.iter().enumerate() {
+            if i > 0 {
+                write!(f, ", ")?;
+            }
+            write!(f, "{}", by)?;
+        }
+        write!(f, "], aggs=[")?;
+        for (i, (key, agg)) in self.aggs.iter().enumerate() {
+            if i > 0 {
+                write!(f, ", ")?;
+            }
+            write!(f, "{}={}", key, agg)?;
+        }
+        write!(f, "]")
+    }
 }
 
 impl Summarize {

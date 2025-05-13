@@ -47,6 +47,16 @@ pub struct Join {
     pub partitions: usize,
 }
 
+impl fmt::Display for Join {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "on=({}, {}), type={}, partitions={}",
+            self.on.0, self.on.1, self.type_, self.partitions
+        )
+    }
+}
+
 fn merge_left_with_right(join_value: &Value, mut left: Log, right: Log) -> Log {
     for (key, value) in right {
         match left.entry(key) {

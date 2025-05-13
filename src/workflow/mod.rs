@@ -1,4 +1,5 @@
 use std::{
+    fmt,
     hash::BuildHasher,
     sync::Arc,
     time::{Duration, Instant},
@@ -52,6 +53,8 @@ mod tests;
 
 const COUNT_LOG_FIELD_NAME: &str = "count";
 const DYNAMIC_FILTER_TIMEOUT: Duration = Duration::from_secs(30);
+
+const DISPLAY_INDENT: &str = "    ";
 
 type WorkflowTasks = FuturesUnordered<JoinHandle<Result<()>>>;
 
@@ -138,27 +141,132 @@ pub enum WorkflowStep {
     Count,
 }
 
-impl std::fmt::Display for WorkflowStep {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            WorkflowStep::Scan(..) => write!(f, "scan"),
-            WorkflowStep::Filter(..) => write!(f, "filter"),
-            WorkflowStep::Project(..) => write!(f, "project"),
-            WorkflowStep::Extend(..) => write!(f, "extend"),
-            WorkflowStep::Limit(limit) => write!(f, "limit({})", limit),
-            WorkflowStep::Sort(..) => write!(f, "sort"),
-            WorkflowStep::TopN(.., limit) => write!(f, "top-n({})", limit),
-            WorkflowStep::Summarize(..) => write!(f, "summarize"),
-            WorkflowStep::Union(..) => write!(f, "union"),
-            WorkflowStep::Join(..) => write!(f, "join"),
-            WorkflowStep::Count => write!(f, "count"),
+#[derive(Debug, Clone, PartialEq)]
+pub struct Workflow {
+    pub steps: Vec<WorkflowStep>,
+}
+
+impl fmt::Display for WorkflowStep {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let display_step = DisplayableWorkflowStep {
+            step: self,
+            indent: 0,
+        };
+        write!(f, "{}", display_step)
+    }
+}
+
+pub struct DisplayableWorkflowStep<'a> {
+    step: &'a WorkflowStep,
+    indent: usize,
+}
+
+impl<'a> fmt::Display for DisplayableWorkflowStep<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let pre = DISPLAY_INDENT.repeat(self.indent);
+
+        match self.step {
+            WorkflowStep::Scan(scan) if scan.dynamic_filter_rx.is_some() => {
+                write!(
+                    f,
+                    "{}Scan({}.{}) <Dynamic filter RX>",
+                    pre, scan.connector_name, scan.collection
+                )
+            }
+            WorkflowStep::Scan(scan) => write!(
+                f,
+                "{}Scan({}.{})",
+                pre, scan.connector_name, scan.collection
+            ),
+            WorkflowStep::Filter(..) => write!(f, "{}Filter", pre),
+            WorkflowStep::Project(..) => write!(f, "{}Project", pre),
+            WorkflowStep::Extend(..) => write!(f, "{}Extend", pre),
+            WorkflowStep::Limit(limit) => write!(f, "{}Limit({})", pre, limit),
+            WorkflowStep::Sort(sorts) => {
+                write!(f, "{}Sort(", pre)?;
+                for (i, sort) in sorts.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{}", sort)?;
+                }
+                write!(f, ")")
+            }
+            WorkflowStep::TopN(sorts, limit) => {
+                write!(f, "{}TopN({})(", pre, limit)?;
+                for (i, sort) in sorts.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{}", sort)?;
+                }
+                write!(f, ")")
+            }
+            WorkflowStep::Summarize(summarize) => write!(f, "{}Summarize({})", pre, summarize),
+            WorkflowStep::Union(workflow) => {
+                let display_steps = DisplayableWorkflowSteps {
+                    steps: &workflow.steps,
+                    indent: self.indent,
+                };
+                write!(f, "{}Union: {}", pre, display_steps)
+            }
+            WorkflowStep::Join(join, workflow) => {
+                let dynamic_filter_tx = match workflow.steps.first() {
+                    Some(WorkflowStep::Scan(scan)) if scan.dynamic_filter_tx.is_some() => {
+                        " <Dynamic filter TX>".to_string()
+                    }
+                    _ => String::new(),
+                };
+
+                let display_steps = DisplayableWorkflowSteps {
+                    steps: &workflow.steps,
+                    indent: self.indent,
+                };
+                write!(
+                    f,
+                    "{}Join({}){}: {}",
+                    pre, join, dynamic_filter_tx, display_steps
+                )
+            }
+            WorkflowStep::Count => write!(f, "{}Count", pre),
         }
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub struct Workflow {
-    pub steps: Vec<WorkflowStep>,
+impl fmt::Display for Workflow {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{}",
+            DisplayableWorkflowSteps {
+                steps: &self.steps,
+                indent: 0,
+            }
+        )
+    }
+}
+
+pub struct DisplayableWorkflowSteps<'a> {
+    steps: &'a Vec<WorkflowStep>,
+    indent: usize,
+}
+
+impl<'a> fmt::Display for DisplayableWorkflowSteps<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "[\n")?;
+        for (i, step) in self.steps.iter().enumerate() {
+            if i > 0 {
+                write!(f, ",\n")?;
+            }
+            let display_step = DisplayableWorkflowStep {
+                step,
+                indent: self.indent + 1,
+            };
+            write!(f, "{}", display_step)?;
+        }
+        let pre = DISPLAY_INDENT.repeat(self.indent);
+        write!(f, "\n{}]", pre)
+    }
 }
 
 fn rx_stream(mut rx: mpsc::Receiver<Log>) -> LogStream {
