@@ -29,8 +29,11 @@ impl Optimization for PushSummarizeIntoUnion {
         let WorkflowStep::Summarize(summarize) = summarize_step.clone() else {
             return None;
         };
+        if summarize.is_final() {
+            return None;
+        }
 
-        let post_summarize_step = WorkflowStep::Summarize(summarize.map_into_combined());
+        let post_summarize_step = WorkflowStep::Summarize(summarize.convert_to_final());
 
         let mut new_steps = Vec::with_capacity(1 + steps.len());
         new_steps.push(summarize_step.clone());

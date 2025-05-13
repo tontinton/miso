@@ -10,18 +10,29 @@ impl Optimization for PushSummarizeIntoScan {
     }
 
     fn apply(&self, steps: &[WorkflowStep], _groups: &[Group]) -> Option<Vec<WorkflowStep>> {
-        let WorkflowStep::Scan(mut scan) = steps[0].clone() else {
+        let WorkflowStep::Summarize(summarize) = &steps[1] else {
             return None;
         };
-        let WorkflowStep::Summarize(config) = &steps[1] else {
+        if summarize.is_final() {
+            return None;
+        }
+        let WorkflowStep::Scan(mut scan) = steps[0].clone() else {
             return None;
         };
 
         scan.handle = scan
             .connector
-            .apply_summarize(config, scan.handle.as_ref())?
+            .apply_summarize(summarize, scan.handle.as_ref())?
             .into();
 
-        Some(vec![WorkflowStep::Scan(scan)])
+        let splits = scan.connector.get_splits(scan.handle.as_ref());
+        if splits.len() > 1 {
+            Some(vec![
+                WorkflowStep::Scan(scan),
+                WorkflowStep::Summarize(summarize.clone().convert_to_final()),
+            ])
+        } else {
+            Some(vec![WorkflowStep::Scan(scan)])
+        }
     }
 }

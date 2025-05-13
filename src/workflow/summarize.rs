@@ -48,20 +48,37 @@ impl Aggregation {
     }
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
+pub enum SummarizeType {
+    #[default]
+    Single,
+    Final,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct Summarize {
     pub aggs: BTreeMap<String, Aggregation>,
     pub by: Vec<String>,
+
+    #[serde(rename = "type", skip_deserializing, default)]
+    pub type_: SummarizeType,
 }
 
 impl Summarize {
-    #[must_use]
-    pub fn map_into_combined(self) -> Self {
+    pub fn convert_to_final(self) -> Self {
         let mut aggs = BTreeMap::new();
         for (field, agg) in self.aggs {
             aggs.insert(field.clone(), agg.map_into_combine_agg(field));
         }
-        Self { aggs, by: self.by }
+        Self {
+            aggs,
+            by: self.by,
+            type_: SummarizeType::Final,
+        }
+    }
+
+    pub fn is_final(&self) -> bool {
+        matches!(self.type_, SummarizeType::Final)
     }
 }
 
