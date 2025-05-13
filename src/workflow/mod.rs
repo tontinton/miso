@@ -1,4 +1,5 @@
 use std::{
+    fmt,
     hash::BuildHasher,
     sync::Arc,
     time::{Duration, Instant},
@@ -134,21 +135,88 @@ pub enum WorkflowStep {
     Count,
 }
 
-impl std::fmt::Display for WorkflowStep {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            WorkflowStep::Scan(..) => write!(f, "scan"),
-            WorkflowStep::Filter(..) => write!(f, "filter"),
-            WorkflowStep::Project(..) => write!(f, "project"),
-            WorkflowStep::Extend(..) => write!(f, "extend"),
-            WorkflowStep::Limit(limit) => write!(f, "limit({})", limit),
-            WorkflowStep::Sort(..) => write!(f, "sort"),
-            WorkflowStep::TopN(.., limit) => write!(f, "top-n({})", limit),
-            WorkflowStep::Summarize(..) => write!(f, "summarize"),
-            WorkflowStep::Union(..) => write!(f, "union"),
-            WorkflowStep::Join(..) => write!(f, "join"),
-            WorkflowStep::Count => write!(f, "count"),
+pub struct DisplayableWorkflowStep<'a> {
+    pub step: &'a WorkflowStep,
+    pub indent: usize,
+}
+
+impl<'a> fmt::Display for DisplayableWorkflowStep<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let pre = "    ".repeat(self.indent);
+
+        match self.step {
+            WorkflowStep::Scan(scan) if scan.dynamic_filter_rx.is_some() => {
+                write!(
+                    f,
+                    "{}Scan({}) - Receiving dynamic filter",
+                    pre, scan.collection
+                )
+            }
+            WorkflowStep::Scan(scan) if scan.dynamic_filter_tx.is_some() => {
+                write!(
+                    f,
+                    "{}Scan({}) - Sending dynamic filter at end of containing workflow",
+                    pre, scan.collection
+                )
+            }
+            WorkflowStep::Scan(scan) => write!(f, "{}Scan({})", pre, scan.collection),
+            WorkflowStep::Filter(..) => write!(f, "{}Filter", pre),
+            WorkflowStep::Project(..) => write!(f, "{}Project", pre),
+            WorkflowStep::Extend(..) => write!(f, "{}Extend", pre),
+            WorkflowStep::Limit(limit) => write!(f, "{}Limit({})", pre, limit),
+            WorkflowStep::Sort(sorts) => {
+                write!(f, "{}Sort(", pre)?;
+                for (i, sort) in sorts.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{}", sort)?;
+                }
+                write!(f, ")")
+            }
+            WorkflowStep::TopN(sorts, limit) => {
+                write!(f, "{}TopN({})(", pre, limit)?;
+                for (i, sort) in sorts.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{}", sort)?;
+                }
+                write!(f, ")")
+            }
+            WorkflowStep::Summarize(summarize) => write!(f, "{}Summarize({})", pre, summarize),
+            WorkflowStep::Union(workflow) => {
+                write!(f, "{}Union: [\n", pre)?;
+                for (i, inner_step) in workflow.steps.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ",\n")?;
+                    }
+                    let child = DisplayableWorkflowStep {
+                        step: inner_step,
+                        indent: self.indent + 1,
+                    };
+                    write!(f, "{}", child)?;
+                }
+                write!(f, "\n{}]", pre)
+            }
+            WorkflowStep::Join(..) => write!(f, "{}Join", pre),
+            WorkflowStep::Count => write!(f, "{}Count", pre),
         }
+    }
+}
+
+impl<'a> fmt::Display for Vec<DisplayableWorkflowStep<'a>> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let pre = "    ".repeat(self.indent);
+
+        write!(f, "[\n")?;
+        for (i, step) in self.iter().enumerate() {
+            if i > 0 {
+                write!(f, ",\n")?;
+            }
+            write!(f, "{}", step)?;
+        }
+        write!(f, "]")
     }
 }
 

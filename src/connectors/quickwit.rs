@@ -1,6 +1,7 @@
 use std::{
     any::Any,
     collections::{BTreeMap, HashMap},
+    fmt,
     sync::{Arc, Weak},
     time::{Duration, Instant},
 };

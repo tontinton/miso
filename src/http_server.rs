@@ -341,6 +341,26 @@ async fn query_stream(
     }))
 }
 
+async fn get_explain(
+    State(state): State<Arc<App>>,
+    Json(req): Json<QueryRequest>,
+) -> Result<Response, HttpError> {
+    let query_id = req.query_id.unwrap_or_else(Uuid::now_v7);
+
+    let span = span!(Level::INFO, "explain", ?query_id);
+    let _enter = span.enter();
+
+    let mut steps = to_workflow_steps(
+        &state.connectors.read().await.clone(),
+        &state.views.read().await.clone(),
+        req.query,
+    )
+    .await?;
+    steps = state.optimizer.optimize(steps).await;
+
+    Ok(format!("{steps}").into_response())
+}
+
 async fn get_connectors(State(state): State<Arc<App>>) -> Result<Response, HttpError> {
     let guard = state.connectors.read().await;
     let mut connectors_map = BTreeMap::new();
@@ -516,6 +536,7 @@ pub fn create_axum_app(args: &Args) -> Result<Router> {
     Ok(Router::new()
         .route("/metrics", get(metrics))
         .route("/query", post(query_stream))
+        .route("/explain", get(get_explain))
         .route("/connectors", get(get_connectors))
         .route("/connectors/:id", get(get_connector))
         .route("/connectors/:id", post(post_connector))
