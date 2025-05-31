@@ -4,7 +4,7 @@ pub mod stats;
 #[cfg(test)]
 mod tests;
 
-use std::fmt::Debug;
+use std::fmt::{self, Debug};
 use std::sync::Arc;
 use std::time::Duration;
 use std::{any::Any, collections::BTreeMap};
@@ -107,7 +107,7 @@ pub trait Split: Any + Debug + Send + Sync {
 }
 
 #[typetag::serde(tag = "type")]
-pub trait QueryHandle: Any + Debug + Send + Sync {
+pub trait QueryHandle: Any + Debug + fmt::Display + Send + Sync {
     fn as_any(&self) -> &dyn Any;
 }
 

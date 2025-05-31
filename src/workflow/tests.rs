@@ -2,6 +2,7 @@ use std::{
     any::Any,
     cmp::Ordering,
     collections::{BTreeMap, BTreeSet},
+    fmt,
     sync::Arc,
 };
 
@@ -44,6 +45,12 @@ impl Split for TestSplit {
 impl QueryHandle for TestHandle {
     fn as_any(&self) -> &dyn Any {
         self
+    }
+}
+
+impl fmt::Display for TestHandle {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "?")
     }
 }
 

@@ -1,6 +1,7 @@
 use std::{
     any::Any,
     collections::{BTreeMap, HashMap},
+    fmt,
     sync::{Arc, Weak},
     time::{Duration, Instant},
 };
@@ -63,6 +64,54 @@ struct QuickwitHandle {
 impl QueryHandle for QuickwitHandle {
     fn as_any(&self) -> &dyn Any {
         self
+    }
+}
+
+impl fmt::Display for QuickwitHandle {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut items = Vec::new();
+
+        if self.count {
+            items.push("count".to_string());
+        }
+
+        if !self.queries.is_empty() {
+            let mut s = "filters=[".to_string();
+            for (i, query) in self.queries.iter().enumerate() {
+                if i > 0 {
+                    s.push_str(", ");
+                }
+                s.push_str(&format!("{}", query));
+            }
+            s.push(']');
+            items.push(s);
+        }
+
+        if let Some(aggs) = &self.aggs {
+            items.push(format!("aggs={aggs}"));
+        }
+
+        if !self.group_by.is_empty() {
+            let mut s = "group_by=[".to_string();
+            for (i, key) in self.group_by.iter().enumerate() {
+                if i > 0 {
+                    s.push_str(", ");
+                }
+                s.push_str(key);
+            }
+            s.push(']');
+            items.push(s);
+        }
+
+        if let Some(sorts) = &self.sorts {
+            items.push(format!("sorts={sorts}"));
+        }
+
+        if let Some(limit) = self.limit {
+            items.push(format!("limit={limit}"));
+        }
+
+        write!(f, "{}", items.join(", "))
     }
 }
 

@@ -73,14 +73,14 @@ impl fmt::Display for DisplayableWorkflowStep<'_> {
             WorkflowStep::Scan(scan) if scan.dynamic_filter_rx.is_some() => {
                 write!(
                     f,
-                    "{}Scan({}.{})[→DF]",
-                    pre, scan.connector_name, scan.collection
+                    "{}Scan({}.{}){{{}}}[→DF]",
+                    pre, scan.connector_name, scan.collection, scan.handle
                 )
             }
             WorkflowStep::Scan(scan) => write!(
                 f,
-                "{}Scan({}.{})",
-                pre, scan.connector_name, scan.collection
+                "{}Scan({}.{}){{{}}}",
+                pre, scan.connector_name, scan.collection, scan.handle
             ),
             WorkflowStep::Filter(..) => write!(f, "{}Filter", pre),
             WorkflowStep::Project(..) => write!(f, "{}Project", pre),
