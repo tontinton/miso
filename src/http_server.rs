@@ -176,7 +176,7 @@ pub(crate) async fn to_workflow_steps(
                 }
 
                 steps.push(WorkflowStep::Scan(
-                    Scan::from_connector_state(connector_state, collection).await,
+                    Scan::from_connector_state(connector_state, connector_name, collection).await,
                 ));
             }
             _ if steps.is_empty() => {
