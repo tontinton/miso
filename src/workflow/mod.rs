@@ -215,7 +215,7 @@ impl<'a> fmt::Display for DisplayableWorkflowStep<'a> {
             WorkflowStep::Scan(scan) if scan.dynamic_filter_rx.is_some() => {
                 write!(
                     f,
-                    "{}Scan({}.{}) <Dynamic filter RX>",
+                    "{}Scan({}.{})[→DF]",
                     pre, scan.connector_name, scan.collection
                 )
             }
@@ -259,7 +259,7 @@ impl<'a> fmt::Display for DisplayableWorkflowStep<'a> {
             WorkflowStep::Join(join, workflow) => {
                 let dynamic_filter_tx = match workflow.steps.first() {
                     Some(WorkflowStep::Scan(scan)) if scan.dynamic_filter_tx.is_some() => {
-                        " <Dynamic filter TX>".to_string()
+                        "[DF→]".to_string()
                     }
                     _ => String::new(),
                 };
