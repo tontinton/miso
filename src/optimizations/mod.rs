@@ -132,16 +132,13 @@ impl Optimizer {
                 // Union.
                 opt!(PushUnionIntoScan),
                 opt!(PushFilterIntoUnion),
+                opt_once!(PushSummarizeIntoUnion),
+                opt_once!(PushLimitIntoUnion),
             ],
             vec![
                 // Merge filters into AND only after no more filters to pushdown, as this
                 // optimization is only good for in-process filtering.
                 opt!(MergeFiltersIntoAndFilter),
-            ],
-            vec![
-                // Union.
-                opt_once!(PushSummarizeIntoUnion),
-                opt_once!(PushLimitIntoUnion),
             ],
         ])
     }
