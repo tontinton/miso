@@ -40,7 +40,7 @@ pub struct Sort {
 #[derive(Debug)]
 pub struct SortConfig {
     by: Vec<String>,
-    pub sort_orders: Vec<SortOrder>,
+    sort_orders: Vec<SortOrder>,
     nulls_orders: Vec<NullsOrder>,
 }
 
