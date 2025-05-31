@@ -54,8 +54,6 @@ mod tests;
 const COUNT_LOG_FIELD_NAME: &str = "count";
 const DYNAMIC_FILTER_TIMEOUT: Duration = Duration::from_secs(30);
 
-const DISPLAY_INDENT: &str = "    ";
-
 type WorkflowTasks = FuturesUnordered<JoinHandle<Result<()>>>;
 
 #[derive(Clone, Debug)]
@@ -151,19 +149,67 @@ impl fmt::Display for WorkflowStep {
         let display_step = DisplayableWorkflowStep {
             step: self,
             indent: 0,
+            section: None,
         };
         write!(f, "{}", display_step)
     }
 }
 
+#[derive(Clone, Copy)]
+enum DisplayableSection {
+    Start,
+    Middle,
+    End,
+
+    Single,
+}
+
 pub struct DisplayableWorkflowStep<'a> {
     step: &'a WorkflowStep,
     indent: usize,
+    section: Option<DisplayableSection>,
 }
 
 impl<'a> fmt::Display for DisplayableWorkflowStep<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let pre = DISPLAY_INDENT.repeat(self.indent);
+        let mut pre = String::new();
+
+        if let Some(section) = self.section {
+            let c = match (section, self.indent == 0) {
+                (_, false) => '│',
+                (DisplayableSection::Single, _) => '─',
+                (DisplayableSection::Start, true) => '┌',
+                (DisplayableSection::Middle, true) => '├',
+                (DisplayableSection::End, true) => '└',
+            };
+            pre.push(c);
+
+            for i in 1..=self.indent {
+                pre.push(' ');
+                if i == self.indent {
+                    let c = match section {
+                        DisplayableSection::Start | DisplayableSection::Middle => '├',
+                        DisplayableSection::Single | DisplayableSection::End => '└',
+                    };
+                    pre.push(c);
+                    pre.push('─');
+                } else {
+                    let c = match section {
+                        DisplayableSection::Start | DisplayableSection::Middle => '│',
+                        DisplayableSection::Single | DisplayableSection::End => ' ',
+                    };
+                    pre.push(c);
+                    pre.push(' ');
+                }
+            }
+
+            pre.push('─');
+            match self.step {
+                WorkflowStep::Join(..) | WorkflowStep::Union(..) => pre.push('┬'),
+                _ => pre.push('─'),
+            }
+            pre.push('─');
+        }
 
         match self.step {
             WorkflowStep::Scan(scan) if scan.dynamic_filter_rx.is_some() => {
@@ -206,9 +252,9 @@ impl<'a> fmt::Display for DisplayableWorkflowStep<'a> {
             WorkflowStep::Union(workflow) => {
                 let display_steps = DisplayableWorkflowSteps {
                     steps: &workflow.steps,
-                    indent: self.indent,
+                    indent: self.indent + 1,
                 };
-                write!(f, "{}Union: {}", pre, display_steps)
+                write!(f, "{}Union\n{}", pre, display_steps)
             }
             WorkflowStep::Join(join, workflow) => {
                 let dynamic_filter_tx = match workflow.steps.first() {
@@ -220,11 +266,11 @@ impl<'a> fmt::Display for DisplayableWorkflowStep<'a> {
 
                 let display_steps = DisplayableWorkflowSteps {
                     steps: &workflow.steps,
-                    indent: self.indent,
+                    indent: self.indent + 1,
                 };
                 write!(
                     f,
-                    "{}Join({}){}: {}",
+                    "{}Join({}){}\n{}",
                     pre, join, dynamic_filter_tx, display_steps
                 )
             }
@@ -237,7 +283,7 @@ impl fmt::Display for Workflow {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "{}",
+            "{}\n",
             DisplayableWorkflowSteps {
                 steps: &self.steps,
                 indent: 0,
@@ -253,19 +299,29 @@ pub struct DisplayableWorkflowSteps<'a> {
 
 impl<'a> fmt::Display for DisplayableWorkflowSteps<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "[\n")?;
         for (i, step) in self.steps.iter().enumerate() {
+            let section = if self.steps.len() == 1 {
+                DisplayableSection::Single
+            } else if i == 0 {
+                DisplayableSection::Start
+            } else if i == self.steps.len() - 1 {
+                DisplayableSection::End
+            } else {
+                DisplayableSection::Middle
+            };
+
             if i > 0 {
-                write!(f, ",\n")?;
+                write!(f, "\n")?;
             }
+
             let display_step = DisplayableWorkflowStep {
                 step,
-                indent: self.indent + 1,
+                indent: self.indent,
+                section: Some(section),
             };
             write!(f, "{}", display_step)?;
         }
-        let pre = DISPLAY_INDENT.repeat(self.indent);
-        write!(f, "\n{}]", pre)
+        Ok(())
     }
 }
 
