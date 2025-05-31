@@ -57,7 +57,9 @@ type WorkflowTasks = FuturesUnordered<JoinHandle<Result<()>>>;
 
 #[derive(Clone, Debug)]
 pub struct Scan {
+    pub connector_name: String,
     pub collection: String,
+
     pub connector: Arc<dyn Connector>,
     pub handle: Arc<dyn QueryHandle>,
     pub stats: Arc<Mutex<ConnectorStats>>,
@@ -68,18 +70,20 @@ pub struct Scan {
 
 impl PartialEq for Scan {
     fn eq(&self, other: &Self) -> bool {
-        // Only checking the collection for now.
-        self.collection == other.collection
+        // Only checking the name for now.
+        self.connector_name == other.connector_name && self.collection == other.collection
     }
 }
 
 impl Scan {
     pub async fn from_connector_state(
         connector_state: Arc<ConnectorState>,
+        connector_name: String,
         collection: String,
     ) -> Self {
         let connector = connector_state.connector.clone();
         Self {
+            connector_name,
             collection,
             handle: connector.get_handle().into(),
             connector,
