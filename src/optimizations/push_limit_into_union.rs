@@ -16,11 +16,11 @@ impl Optimization for PushLimitIntoUnion {
     fn apply(&self, steps: &[WorkflowStep], _groups: &[Group]) -> Option<Vec<WorkflowStep>> {
         let limit_step = &steps[steps.len() - 1];
 
-        let mut new_steps = Vec::with_capacity(steps.len());
+        let mut new_steps = Vec::with_capacity(1 + steps.len());
         new_steps.push(limit_step.clone());
-        new_steps.extend(steps[..steps.len() - 1].to_vec());
+        new_steps.extend(steps.to_vec());
 
-        for step in &mut new_steps[1..steps.len()] {
+        for step in &mut new_steps[1..steps.len() - 1] {
             if let WorkflowStep::Union(ref mut workflow) = step {
                 workflow.steps.push(limit_step.clone());
             }
