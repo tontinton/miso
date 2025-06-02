@@ -1144,3 +1144,22 @@ async fn union_summarize() -> Result<()> {
         .call()
         .await
 }
+
+#[tokio::test]
+async fn union_count() -> Result<()> {
+    check_multi_collection()
+        .query(
+            r#"[
+                {"scan": ["test", "x"]},
+                {"union": [{"scan": ["test", "y"]}]},
+                "count"
+            ]"#,
+        )
+        .input(btreemap! {
+            "x" => r#"[{"x": 0}, {"x": 1}, {"x": 2}]"#,
+            "y" => r#"[{"x": 3}, {"x": 4}, {"x": 5}, {"x": 6}]"#,
+        })
+        .expect(r#"[{"count": 7}]"#)
+        .call()
+        .await
+}
