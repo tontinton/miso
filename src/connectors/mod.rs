@@ -118,7 +118,9 @@ pub trait Connector: Debug + Send + Sync {
 
     fn get_handle(&self) -> Box<dyn QueryHandle>;
 
-    fn get_splits(&self, _handle: &dyn QueryHandle) -> Vec<Box<dyn Split>> {
+    /// Returns splits to run multiple shorter queries in parallel (which we union).
+    /// Empty vec (default implementation) means no need to split the query.
+    fn get_splits(&self) -> Vec<Box<dyn Split>> {
         vec![]
     }
 
