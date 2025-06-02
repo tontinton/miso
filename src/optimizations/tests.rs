@@ -245,3 +245,12 @@ async fn reorder_filter_before_sort() {
     )
     .await;
 }
+
+#[tokio::test]
+async fn reorder_filter_before_mux() {
+    let filter = S::Filter(FilterAst::Eq(
+        Box::new(FilterAst::Id("a".to_string())),
+        Box::new(FilterAst::Lit(serde_json::Value::String("b".to_string()))),
+    ));
+    check_default(vec![S::MuxCount, filter.clone()], vec![filter, S::MuxCount]).await;
+}

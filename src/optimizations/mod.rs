@@ -17,6 +17,7 @@ use push_topn_into_scan::PushTopNIntoScan;
 use push_union_into_scan::PushUnionIntoScan;
 use remove_redundant_sorts_before_count::RemoveRedundantSortsBeforeCount;
 use reorder_filter_before_sort::ReorderFilterBeforeSort;
+use reorder_steps_before_mux::ReorderStepsBeforeMux;
 use split_scan_to_union::SplitScanIntoUnion;
 use tokio::task::yield_now;
 
@@ -38,6 +39,7 @@ mod push_topn_into_scan;
 mod push_union_into_scan;
 mod remove_redundant_sorts_before_count;
 mod reorder_filter_before_sort;
+mod reorder_steps_before_mux;
 mod split_scan_to_union;
 
 #[cfg(test)]
@@ -135,7 +137,9 @@ impl Optimizer {
                 // Union.
                 opt!(PushUnionIntoScan),
                 opt!(PushStepsIntoUnion),
+                // Mux.
                 opt!(MuxIntoUnion),
+                opt!(ReorderStepsBeforeMux),
             ],
             // Post predicate pushdowns.
             vec![
