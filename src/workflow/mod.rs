@@ -5,7 +5,7 @@ use std::{
 };
 
 use async_stream::{stream, try_stream};
-use color_eyre::eyre::{bail, Context, Result};
+use color_eyre::eyre::{Context, Result};
 use futures_util::{future::try_join_all, stream::FuturesUnordered, StreamExt};
 use hashbrown::{DefaultHashBuilder, HashSet};
 use join::{join_streams, Join, JoinType};
@@ -26,7 +26,7 @@ use tracing::{debug, error, info, instrument};
 use crate::{
     connectors::{
         stats::{ConnectorStats, FieldStats},
-        Connector, ConnectorState, QueryHandle, QueryResponse,
+        Connector, ConnectorState, QueryHandle, QueryResponse, Split,
     },
     log::{Log, LogStream, LogTryStream},
     workflow::{
@@ -63,6 +63,7 @@ pub struct Scan {
 
     pub connector: Arc<dyn Connector>,
     pub handle: Arc<dyn QueryHandle>,
+    pub split: Option<Arc<dyn Split>>,
     pub stats: Arc<Mutex<ConnectorStats>>,
 
     pub dynamic_filter_tx: Option<watch::Sender<Option<FilterAst>>>,
@@ -83,12 +84,15 @@ impl Scan {
         collection: String,
     ) -> Self {
         let connector = connector_state.connector.clone();
+        let handle = connector.get_handle().into();
+        let stats = connector_state.stats.clone();
         Self {
             connector_name,
             collection,
-            handle: connector.get_handle().into(),
             connector,
-            stats: connector_state.stats.clone(),
+            handle,
+            split: None,
+            stats,
             dynamic_filter_tx: None,
             dynamic_filter_rx: None,
         }
@@ -331,6 +335,7 @@ impl WorkflowStep {
                 collection,
                 connector,
                 mut handle,
+                split,
                 dynamic_filter_rx,
                 ..
             }) => {
@@ -342,62 +347,16 @@ impl WorkflowStep {
                     }
                 }
 
-                let splits = connector.get_splits(handle.as_ref());
-
-                if splits.is_empty() {
-                    let response = connector.query(&collection, handle.as_ref(), None).await?;
-                    match response {
-                        QueryResponse::Logs(stream) => {
-                            stream_to_tx(stream, tx, "scan").await?;
-                        }
-                        QueryResponse::Count(count) => {
-                            count_to_tx(count, tx).await;
-                        }
+                let response = connector
+                    .query(&collection, handle.as_ref(), split.as_deref())
+                    .await?;
+                match response {
+                    QueryResponse::Logs(stream) => {
+                        stream_to_tx(stream, tx, "scan").await?;
                     }
-                    return Ok(());
-                }
-
-                let mut split_tasks = Vec::with_capacity(splits.len());
-
-                for (i, split) in splits.into_iter().enumerate() {
-                    let collection = collection.clone();
-                    let connector = connector.clone();
-                    let handle = handle.clone();
-                    let tx = tx.clone();
-
-                    split_tasks.push(spawn(async move {
-                        let response = connector
-                            .query(&collection, handle.as_ref(), Some(split.as_ref()))
-                            .await?;
-
-                        match response {
-                            QueryResponse::Logs(stream) => {
-                                stream_to_tx(stream, tx, &format!("scan({i})")).await?;
-                            }
-                            QueryResponse::Count(count) => return Ok(Some(count)),
-                        }
-
-                        Ok::<Option<u64>, color_eyre::eyre::Error>(None)
-                    }));
-                }
-
-                let join_results = try_join_all(split_tasks).await?;
-
-                let mut count = None;
-                for join_result in join_results {
-                    if let Some(split_count) = join_result? {
-                        if let Some(ref mut inner) = count {
-                            *inner += split_count;
-                        } else {
-                            count = Some(split_count);
-                        }
-                    } else if count.is_some() {
-                        bail!("some queries responded with count and some with logs");
+                    QueryResponse::Count(count) => {
+                        count_to_tx(count, tx).await;
                     }
-                }
-
-                if let Some(inner) = count {
-                    count_to_tx(inner, tx).await;
                 }
             }
             WorkflowStep::Filter(ast) => {

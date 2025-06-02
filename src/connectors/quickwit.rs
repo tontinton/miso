@@ -895,7 +895,7 @@ impl Connector for QuickwitConnector {
         self.indexes.read().contains_key(collection)
     }
 
-    fn get_splits(&self, _handle: &dyn QueryHandle) -> Vec<Box<dyn Split>> {
+    fn get_splits(&self) -> Vec<Box<dyn Split>> {
         vec![Box::new(QuickwitSplit {}) as Box<dyn Split>]
     }
 

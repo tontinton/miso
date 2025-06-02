@@ -19,6 +19,7 @@ use push_topn_into_scan::PushTopNIntoScan;
 use push_union_into_scan::PushUnionIntoScan;
 use remove_redundant_sorts_before_count::RemoveRedundantSortsBeforeCount;
 use reorder_filter_before_sort::ReorderFilterBeforeSort;
+use split_scan_to_union::SplitScanIntoUnion;
 use tokio::task::yield_now;
 
 use crate::workflow::{WorkflowStep, WorkflowStepKind};
@@ -41,6 +42,7 @@ mod push_topn_into_scan;
 mod push_union_into_scan;
 mod remove_redundant_sorts_before_count;
 mod reorder_filter_before_sort;
+mod split_scan_to_union;
 
 #[cfg(test)]
 mod tests;
@@ -112,7 +114,14 @@ impl Optimizer {
 
     pub fn with_dynamic_filtering(max_distinct_values: u32) -> Self {
         Self::new(vec![
-            vec![opt_once!(DynamicFilter::new(max_distinct_values))],
+            // Pre predicate pushdowns.
+            vec![
+                opt_once!(DynamicFilter::new(max_distinct_values)),
+                // Must come after dynamic filtering, so the split scan nodes will also receive
+                // the dynamic filter.
+                opt_once!(SplitScanIntoUnion),
+            ],
+            // Predicate pushdowns + optimizations that help predicate pushdowns.
             vec![
                 // Filter.
                 opt!(ReorderFilterBeforeSort),
@@ -135,6 +144,7 @@ impl Optimizer {
                 opt_once!(PushSummarizeIntoUnion),
                 opt_once!(PushLimitIntoUnion),
             ],
+            // Post predicate pushdowns.
             vec![
                 // Merge filters into AND only after no more filters to pushdown, as this
                 // optimization is only good for in-process filtering.

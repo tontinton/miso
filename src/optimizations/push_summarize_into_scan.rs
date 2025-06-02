@@ -25,14 +25,6 @@ impl Optimization for PushSummarizeIntoScan {
             .apply_summarize(summarize, scan.handle.as_ref())?
             .into();
 
-        let splits = scan.connector.get_splits(scan.handle.as_ref());
-        if splits.len() > 1 {
-            Some(vec![
-                WorkflowStep::Scan(scan),
-                WorkflowStep::Summarize(summarize.clone().convert_to_final()),
-            ])
-        } else {
-            Some(vec![WorkflowStep::Scan(scan)])
-        }
+        Some(vec![WorkflowStep::Scan(scan)])
     }
 }
