@@ -4,7 +4,6 @@ use async_recursion::async_recursion;
 use convert_sort_limit_to_topn::ConvertSortLimitToTopN;
 use dynamic_filter::DynamicFilter;
 use merge_filters_into_and_filter::MergeFiltersIntoAndFilter;
-use merge_topn_limit::MergeTopNLimit;
 use mux_into_union::MuxIntoUnion;
 use pattern::{Group, Pattern};
 use push_count_into_scan::PushCountIntoScan;
@@ -26,7 +25,6 @@ use crate::workflow::{WorkflowStep, WorkflowStepKind};
 mod convert_sort_limit_to_topn;
 mod dynamic_filter;
 mod merge_filters_into_and_filter;
-mod merge_topn_limit;
 mod mux_into_union;
 mod pattern;
 mod push_count_into_scan;
@@ -105,7 +103,6 @@ impl Optimizer {
             opt!(PushLimitIntoLimit),
             opt!(ConvertSortLimitToTopN),
             opt!(PushLimitIntoTopN),
-            opt!(MergeTopNLimit),
             opt!(RemoveRedundantSortsBeforeCount),
         ]])
     }
@@ -129,7 +126,6 @@ impl Optimizer {
                 opt!(ConvertSortLimitToTopN),
                 opt!(PushLimitIntoTopN),
                 opt!(PushLimitIntoScan),
-                opt!(MergeTopNLimit),
                 opt!(PushTopNIntoScan),
                 // Count.
                 opt!(PushCountIntoScan),
