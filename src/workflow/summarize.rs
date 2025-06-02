@@ -9,6 +9,7 @@ use std::{
 };
 
 use atomic_float::AtomicF64;
+use axum::async_trait;
 use color_eyre::{eyre::bail, Result};
 use futures_util::StreamExt;
 use parking_lot::Mutex;
@@ -216,115 +217,212 @@ fn create_aggregate(aggregation: Aggregation) -> Arc<dyn Aggregate> {
     }
 }
 
-async fn summarize_all(
-    mut input_stream: LogStream,
-    output_fields: Vec<String>,
-    aggregations: Vec<Aggregation>,
-) -> Result<Vec<Log>> {
-    let aggregates: Vec<Arc<dyn Aggregate>> =
-        aggregations.into_iter().map(create_aggregate).collect();
-
-    while let Some(log) = input_stream.next().await {
-        for aggregate in &aggregates {
-            aggregate.input(&log);
-        }
-    }
-
-    let mut log = Log::new();
-    for (output_field, aggregate) in output_fields.clone().into_iter().zip(aggregates) {
-        log.insert(output_field, aggregate.value());
-    }
-
-    Ok(vec![log])
+#[async_trait]
+pub trait SummarizeExecutor {
+    async fn execute(&self, input_stream: LogStream) -> Result<Vec<Log>>;
+    fn get_partial(&self) -> Vec<Log>;
 }
 
-async fn summarize_group_by(
+/// Executes summarize without grouping, only aggregations.
+pub struct SummarizeAllExecutor {
+    output_fields: Vec<String>,
+    aggregates: Vec<Arc<dyn Aggregate>>,
+}
+
+impl SummarizeAllExecutor {
+    fn new(output_fields: Vec<String>, aggregations: Vec<Aggregation>) -> Self {
+        let aggregates: Vec<Arc<dyn Aggregate>> =
+            aggregations.into_iter().map(create_aggregate).collect();
+        Self {
+            output_fields,
+            aggregates,
+        }
+    }
+}
+
+#[async_trait]
+impl SummarizeExecutor for SummarizeAllExecutor {
+    async fn execute(&self, mut input_stream: LogStream) -> Result<Vec<Log>> {
+        while let Some(log) = input_stream.next().await {
+            for aggregate in &self.aggregates {
+                aggregate.input(&log);
+            }
+        }
+        Ok(self.get_partial())
+    }
+
+    fn get_partial(&self) -> Vec<Log> {
+        let mut log = Log::new();
+        for (output_field, aggregate) in self
+            .output_fields
+            .clone()
+            .into_iter()
+            .zip(self.aggregates.iter().map(Arc::as_ref))
+        {
+            log.insert(output_field, aggregate.value());
+        }
+        vec![log]
+    }
+}
+
+type GroupAggregates = BTreeMap<Vec<SortableValue>, Vec<Arc<dyn Aggregate>>>;
+
+/// Executes summarize with some aggregations.
+pub struct SummarizeGroupByExecutor {
     group_by: Vec<String>,
-    mut input_stream: LogStream,
     output_fields: Vec<String>,
     aggregations: Vec<Aggregation>,
-) -> Result<Vec<Log>> {
-    let agg_fields: BTreeSet<String> = aggregations.iter().flat_map(Aggregation::field).collect();
-    let get_value_fn = if group_by.iter().any(|x| agg_fields.contains(x)) {
-        |log: &mut Log, key: &String| log.get(key).cloned().unwrap_or(Value::Null)
-    } else {
-        // Optimization: remove item from map instead of cloning when no aggregation references
-        // a field that is grouped by.
-        |log: &mut Log, key: &String| log.remove(key).unwrap_or(Value::Null)
-    };
 
     // All of HashMap, HashSet, BTreeMap and BtreeSet rely on either the hash or the order of keys
     // be unchanging, so having types with interior mutability is a bad idea.
     // We don't mutate the key, so we ignore the lint error here.
     #[allow(clippy::mutable_key_type)]
-    let mut group_aggregates: BTreeMap<Vec<SortableValue>, Vec<Arc<dyn Aggregate>>> =
-        BTreeMap::new();
-
-    let mut tracked_types = vec![None; group_by.len()];
-
-    while let Some(mut log) = input_stream.next().await {
-        let mut group_keys = Vec::with_capacity(group_by.len());
-
-        for (tracked_type, key) in tracked_types.iter_mut().zip(&group_by) {
-            let value = get_value_fn(&mut log, key);
-            if value == Value::Null {
-                group_keys.push(SortableValue(value));
-                continue;
-            }
-
-            let value_type = std::mem::discriminant(&value);
-            if let Some(t) = tracked_type {
-                if *t != value_type {
-                    bail!(
-                        "cannot summarize over differing types (key '{}'): {:?} != {:?}",
-                        key,
-                        *t,
-                        value_type
-                    );
-                }
-            } else {
-                *tracked_type = Some(value_type);
-            }
-
-            group_keys.push(SortableValue(value));
-        }
-
-        let entry = group_aggregates
-            .entry(group_keys)
-            .or_insert_with(|| aggregations.iter().cloned().map(create_aggregate).collect());
-
-        for aggregate in entry {
-            aggregate.input(&log);
-        }
-    }
-
-    let mut logs = Vec::with_capacity(group_aggregates.len());
-    for (group_keys, aggregates) in group_aggregates {
-        let mut log = Log::new();
-
-        for (key, value) in group_by.clone().into_iter().zip(group_keys) {
-            log.insert(key, value.0);
-        }
-
-        for (output_field, aggregate) in output_fields.clone().into_iter().zip(aggregates) {
-            log.insert(output_field, aggregate.value());
-        }
-
-        logs.push(log);
-    }
-
-    Ok(logs)
+    group_aggregates: Mutex<GroupAggregates>,
 }
 
-pub async fn summarize_stream(config: Summarize, input_stream: LogStream) -> Result<Vec<Log>> {
+impl SummarizeGroupByExecutor {
+    fn new(
+        group_by: Vec<String>,
+        output_fields: Vec<String>,
+        aggregations: Vec<Aggregation>,
+    ) -> Self {
+        Self {
+            group_by,
+            output_fields,
+            aggregations,
+            group_aggregates: Mutex::new(GroupAggregates::new()),
+        }
+    }
+}
+
+#[async_trait]
+impl SummarizeExecutor for SummarizeGroupByExecutor {
+    async fn execute(&self, mut input_stream: LogStream) -> Result<Vec<Log>> {
+        let agg_fields: BTreeSet<String> = self
+            .aggregations
+            .iter()
+            .flat_map(Aggregation::field)
+            .collect();
+
+        let get_value_fn = if self.group_by.iter().any(|x| agg_fields.contains(x)) {
+            |log: &mut Log, key: &String| log.get(key).cloned().unwrap_or(Value::Null)
+        } else {
+            // Optimization: remove item from map instead of cloning when no aggregation references
+            // a field that is grouped by.
+            |log: &mut Log, key: &String| log.remove(key).unwrap_or(Value::Null)
+        };
+
+        let mut tracked_types = vec![None; self.group_by.len()];
+
+        while let Some(mut log) = input_stream.next().await {
+            let mut group_keys = Vec::with_capacity(self.group_by.len());
+
+            for (tracked_type, key) in tracked_types.iter_mut().zip(&self.group_by) {
+                let value = get_value_fn(&mut log, key);
+                if value == Value::Null {
+                    group_keys.push(SortableValue(value));
+                    continue;
+                }
+
+                let value_type = std::mem::discriminant(&value);
+                if let Some(t) = tracked_type {
+                    if *t != value_type {
+                        bail!(
+                            "cannot summarize over differing types (key '{}'): {:?} != {:?}",
+                            key,
+                            *t,
+                            value_type
+                        );
+                    }
+                } else {
+                    *tracked_type = Some(value_type);
+                }
+
+                group_keys.push(SortableValue(value));
+            }
+
+            {
+                let mut guard = self.group_aggregates.lock();
+
+                let entry = guard.entry(group_keys).or_insert_with(|| {
+                    self.aggregations
+                        .iter()
+                        .cloned()
+                        .map(create_aggregate)
+                        .collect()
+                });
+
+                for aggregate in entry {
+                    aggregate.input(&log);
+                }
+            }
+        }
+
+        let group_aggregates = std::mem::take(&mut *self.group_aggregates.lock());
+
+        let mut logs = Vec::with_capacity(group_aggregates.len());
+        for (group_keys, aggregates) in group_aggregates {
+            let mut log = Log::new();
+
+            for (key, value) in self.group_by.clone().into_iter().zip(group_keys) {
+                log.insert(key, value.0);
+            }
+
+            for (output_field, aggregate) in self
+                .output_fields
+                .clone()
+                .into_iter()
+                .zip(aggregates.iter().map(Arc::as_ref))
+            {
+                log.insert(output_field, aggregate.value());
+            }
+
+            logs.push(log);
+        }
+
+        Ok(logs)
+    }
+
+    fn get_partial(&self) -> Vec<Log> {
+        let guard = self.group_aggregates.lock();
+
+        let mut logs = Vec::with_capacity(guard.len());
+        for (group_keys, aggregates) in guard.iter() {
+            let mut log = Log::new();
+
+            for (key, value) in self.group_by.clone().into_iter().zip(group_keys) {
+                log.insert(key, value.0.clone());
+            }
+
+            for (output_field, aggregate) in self
+                .output_fields
+                .clone()
+                .into_iter()
+                .zip(aggregates.iter().map(Arc::as_ref))
+            {
+                log.insert(output_field, aggregate.value());
+            }
+
+            logs.push(log);
+        }
+
+        logs
+    }
+}
+
+pub fn create_summarize_executor(config: Summarize) -> Box<dyn SummarizeExecutor + Send + Sync> {
     info!("{config:?}");
 
     let (output_fields, aggregations): (Vec<String>, Vec<Aggregation>) =
         config.aggs.into_iter().unzip();
 
     if config.by.is_empty() {
-        summarize_all(input_stream, output_fields, aggregations).await
+        Box::new(SummarizeAllExecutor::new(output_fields, aggregations))
     } else {
-        summarize_group_by(config.by, input_stream, output_fields, aggregations).await
+        Box::new(SummarizeGroupByExecutor::new(
+            config.by,
+            output_fields,
+            aggregations,
+        ))
     }
 }

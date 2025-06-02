@@ -7,7 +7,8 @@ use std::{
 use async_stream::{stream, try_stream};
 use color_eyre::eyre::{Context, Result};
 use futures_util::{
-    future::try_join_all,
+    future::{join, join_all, try_join_all},
+    pin_mut,
     stream::{select_all, FuturesUnordered},
     StreamExt,
 };
@@ -16,13 +17,14 @@ use join::{join_streams, Join, JoinType};
 use kinded::Kinded;
 use parking_lot::Mutex;
 use project::extend_stream;
-use serde_json::Value;
-use summarize::{summarize_stream, Summarize};
+use serde::Deserialize;
+use serde_json::{json, Map, Value};
+use summarize::{create_summarize_executor, Summarize};
 use tokio::{
     spawn,
-    sync::{mpsc, watch},
+    sync::{mpsc, watch, Notify},
     task::JoinHandle,
-    time::timeout,
+    time::{sleep, timeout},
 };
 use topn::topn_stream;
 use tracing::{debug, error, info, instrument};
@@ -32,6 +34,7 @@ use crate::{
         stats::{ConnectorStats, FieldStats},
         Connector, ConnectorState, QueryHandle, QueryResponse, Split,
     },
+    humantime_utils::deserialize_duration,
     log::{Log, LogStream, LogTryStream},
     workflow::{
         filter::filter_stream, limit::limit_stream, project::project_stream, sort::sort_stream,
@@ -55,11 +58,28 @@ pub mod topn;
 #[cfg(test)]
 mod tests;
 
-pub const MUX_SIGNAL_ID_FIELD_NAME: &str = "__MUX_ID";
+const MISO_METADATA_FIELD_NAME: &str = "_miso";
+const PARTIAL_STREAM_ID_FIELD_NAME: &str = "id";
+const PARTIAL_STREAM_DONE_FIELD_NAME: &str = "done";
 const COUNT_LOG_FIELD_NAME: &str = "count";
 const DYNAMIC_FILTER_TIMEOUT: Duration = Duration::from_secs(30);
 
 type WorkflowTasks = FuturesUnordered<JoinHandle<Result<()>>>;
+
+fn default_debounce() -> Duration {
+    Duration::from_secs(1)
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct PartialStream {
+    /// If a split is currently streaming partial results, and another finishes soon after (less
+    /// than the debounce), the partial results of the second iteration won't be sent.
+    #[serde(
+        default = "default_debounce",
+        deserialize_with = "deserialize_duration"
+    )]
+    debounce: Duration,
+}
 
 #[derive(Clone, Debug)]
 pub struct Scan {
@@ -152,9 +172,19 @@ pub enum WorkflowStep {
     MuxCount,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct Workflow {
     pub steps: Vec<WorkflowStep>,
+
+    /// Only the root workflow (not union or join for example) can currently have this set.
+    partial_stream: Option<PartialStream>,
+}
+
+impl PartialEq for Workflow {
+    fn eq(&self, other: &Self) -> bool {
+        // Ignore partial stream, we only care about comparing the steps that make up the workflow.
+        self.steps == other.steps
+    }
 }
 
 fn rx_stream(mut rx: mpsc::Receiver<Log>) -> LogStream {
@@ -165,8 +195,25 @@ fn rx_stream(mut rx: mpsc::Receiver<Log>) -> LogStream {
     })
 }
 
+fn rx_stream_notify(mut rx: mpsc::Receiver<Log>, notify: Arc<Notify>) -> LogStream {
+    Box::pin(stream! {
+        while let Some(log) = rx.recv().await {
+            yield log
+        }
+        notify.notify_one();
+    })
+}
+
 fn rx_union_stream(rxs: Vec<mpsc::Receiver<Log>>) -> LogStream {
     let streams: Vec<LogStream> = rxs.into_iter().map(rx_stream).collect();
+    Box::pin(select_all(streams))
+}
+
+fn rx_union_stream_notify(rxs: Vec<mpsc::Receiver<Log>>, notify: Arc<Notify>) -> LogStream {
+    let streams: Vec<LogStream> = rxs
+        .into_iter()
+        .map(|rx| rx_stream_notify(rx, notify.clone()))
+        .collect();
     Box::pin(select_all(streams))
 }
 
@@ -214,12 +261,46 @@ async fn stream_to_tx(mut stream: LogTryStream, tx: mpsc::Sender<Log>, tag: &str
     Ok(())
 }
 
-async fn logs_vec_to_tx(logs: Vec<Log>, tx: mpsc::Sender<Log>, tag: &str) {
+async fn logs_iter_to_tx<I>(logs: I, tx: mpsc::Sender<Log>, tag: &str)
+where
+    I: IntoIterator<Item = Log>,
+{
     for log in logs {
         if let Err(e) = tx.send(log).await {
             debug!("Closing {} step: {:?}", tag, e);
             break;
         }
+    }
+}
+
+async fn partial_logs_iter_to_tx<I>(logs: I, id: usize, tx: mpsc::Sender<Log>, tag: &str)
+where
+    I: IntoIterator<Item = Log>,
+{
+    for mut log in logs {
+        log.entry(MISO_METADATA_FIELD_NAME)
+            .or_insert_with(|| Value::Object(Map::new()))
+            .as_object_mut()
+            .unwrap()
+            .insert(PARTIAL_STREAM_ID_FIELD_NAME.to_string(), Value::from(id));
+
+        if let Err(e) = tx.send(log).await {
+            debug!("Closing {} step: {:?}", tag, e);
+            break;
+        }
+    }
+
+    let mut done_log = Map::with_capacity(1);
+    done_log.insert(
+        MISO_METADATA_FIELD_NAME.to_string(),
+        json!({
+            PARTIAL_STREAM_ID_FIELD_NAME: id,
+            PARTIAL_STREAM_DONE_FIELD_NAME: true,
+        }),
+    );
+
+    if let Err(e) = tx.send(done_log).await {
+        debug!("Closing {} step: {:?}", tag, e);
     }
 }
 
@@ -336,6 +417,7 @@ impl WorkflowStep {
         self: WorkflowStep,
         rxs: Vec<mpsc::Receiver<Log>>,
         tx: mpsc::Sender<Log>,
+        partial_stream: Option<PartialStream>,
         cancel_rx: watch::Receiver<()>,
     ) -> Result<()> {
         let start = Instant::now();
@@ -393,15 +475,58 @@ impl WorkflowStep {
             }
             WorkflowStep::Sort(sorts) => {
                 let logs = sort_stream(sorts, rx_union_stream(rxs)).await?;
-                logs_vec_to_tx(logs, tx, "sort").await;
+                logs_iter_to_tx(logs, tx, "sort").await;
             }
             WorkflowStep::TopN(sorts, limit) | WorkflowStep::MuxTopN(sorts, limit) => {
                 let logs = topn_stream(sorts, limit, rx_union_stream(rxs)).await?;
-                logs_vec_to_tx(logs, tx, "top-n").await;
+                logs_iter_to_tx(logs, tx, "top-n").await;
+            }
+            WorkflowStep::MuxSummarize(config) if partial_stream.is_some() => {
+                let executor = create_summarize_executor(config);
+                let stream_done_notify = Arc::new(Notify::new());
+                let debounce = partial_stream.unwrap().debounce;
+
+                let summarize_fut =
+                    executor.execute(rx_union_stream_notify(rxs, stream_done_notify.clone()));
+                pin_mut!(summarize_fut);
+
+                let mut partial_sender_tasks = Vec::new();
+                let mut partial_send_id = 0;
+
+                let logs = loop {
+                    tokio::select! {
+                        logs = &mut summarize_fut => break logs,
+                        () = stream_done_notify.notified() => {},
+                    }
+
+                    let sleep_fut = sleep(debounce);
+
+                    let logs = executor.get_partial();
+                    partial_sender_tasks.push(spawn(partial_logs_iter_to_tx(
+                        logs,
+                        partial_send_id,
+                        tx.clone(),
+                        "partial-summarize",
+                    )));
+                    partial_send_id += 1;
+
+                    tokio::select! {
+                        logs = &mut summarize_fut => break logs,
+                        () = sleep_fut => {}
+                    }
+                }
+                .context("debounce mux summarize stream")?;
+
+                join(
+                    join_all(partial_sender_tasks),
+                    logs_iter_to_tx(logs, tx, "summarize"),
+                )
+                .await;
             }
             WorkflowStep::Summarize(config) | WorkflowStep::MuxSummarize(config) => {
-                let logs = summarize_stream(config, rx_union_stream(rxs)).await?;
-                logs_vec_to_tx(logs, tx, "summarize").await;
+                let executor = create_summarize_executor(config);
+                let logs = executor.execute(rx_union_stream(rxs)).await?;
+                logs_iter_to_tx(logs, tx, "summarize").await;
             }
             WorkflowStep::Union(workflow) => {
                 assert!(rxs.is_empty());
@@ -525,8 +650,18 @@ async fn execute_tasks(mut tasks: WorkflowTasks, mut cancel_rx: watch::Receiver<
 }
 
 impl Workflow {
+    pub fn new_with_partial_stream(
+        steps: Vec<WorkflowStep>,
+        partial_stream: Option<PartialStream>,
+    ) -> Self {
+        Self {
+            steps,
+            partial_stream,
+        }
+    }
+
     pub fn new(steps: Vec<WorkflowStep>) -> Self {
-        Self { steps }
+        Self::new_with_partial_stream(steps, None)
     }
 
     fn create_tasks(self, cancel_rx: watch::Receiver<()>) -> Result<(WorkflowTasks, LogStream)> {
@@ -546,7 +681,12 @@ impl Workflow {
                 std::mem::take(&mut mux_rxs)
             };
 
-            tasks.push(spawn(step.execute(rxs, tx, cancel_rx.clone())));
+            tasks.push(spawn(step.execute(
+                rxs,
+                tx,
+                self.partial_stream.clone(),
+                cancel_rx.clone(),
+            )));
 
             mux_rxs.push(rx);
             (tx, rx) = mpsc::channel(1);
