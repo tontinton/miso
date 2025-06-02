@@ -50,7 +50,7 @@ impl Aggregation {
     }
 
     #[must_use]
-    pub fn map_into_combine_agg(self, field: String) -> Self {
+    pub fn convert_to_mux(self, field: String) -> Self {
         match self {
             Self::Count => Self::Sum(field),
             Self::Sum(..) => Self::Sum(field),
@@ -60,34 +60,15 @@ impl Aggregation {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
-pub enum SummarizeType {
-    #[default]
-    Single,
-    Final,
-}
-
-impl fmt::Display for SummarizeType {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            SummarizeType::Single => write!(f, "Single"),
-            SummarizeType::Final => write!(f, "Final"),
-        }
-    }
-}
-
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct Summarize {
     pub aggs: BTreeMap<String, Aggregation>,
     pub by: Vec<String>,
-
-    #[serde(rename = "type", skip_deserializing, default)]
-    pub type_: SummarizeType,
 }
 
 impl fmt::Display for Summarize {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "type={}, by=[", self.type_)?;
+        write!(f, "by=[")?;
         for (i, by) in self.by.iter().enumerate() {
             if i > 0 {
                 write!(f, ", ")?;
@@ -106,20 +87,12 @@ impl fmt::Display for Summarize {
 }
 
 impl Summarize {
-    pub fn convert_to_final(self) -> Self {
+    pub fn convert_to_mux(self) -> Self {
         let mut aggs = BTreeMap::new();
         for (field, agg) in self.aggs {
-            aggs.insert(field.clone(), agg.map_into_combine_agg(field));
+            aggs.insert(field.clone(), agg.convert_to_mux(field));
         }
-        Self {
-            aggs,
-            by: self.by,
-            type_: SummarizeType::Final,
-        }
-    }
-
-    pub fn is_final(&self) -> bool {
-        matches!(self.type_, SummarizeType::Final)
+        Self { aggs, by: self.by }
     }
 }
 

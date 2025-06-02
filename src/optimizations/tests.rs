@@ -3,7 +3,7 @@ use collection_macros::btreemap;
 use crate::workflow::{
     filter::FilterAst,
     sort::{NullsOrder, Sort, SortOrder},
-    summarize::{Aggregation, Summarize, SummarizeType},
+    summarize::{Aggregation, Summarize},
     Workflow, WorkflowStep as S,
 };
 
@@ -148,24 +148,30 @@ async fn limit_into_union() {
     let limit = S::Limit(1);
     check_default(
         vec![S::Union(Workflow::new(vec![])), limit.clone()],
-        vec![limit.clone(), S::Union(Workflow::new(vec![limit]))],
+        vec![
+            limit.clone(),
+            S::Union(Workflow::new(vec![limit])),
+            S::MuxLimit(1),
+        ],
     )
     .await;
 }
 
 #[tokio::test]
 async fn topn_into_union() {
-    let topn = S::TopN(
-        vec![Sort {
-            by: "a".to_string(),
-            order: SortOrder::Asc,
-            nulls: NullsOrder::Last,
-        }],
-        1,
-    );
+    let sorts = vec![Sort {
+        by: "a".to_string(),
+        order: SortOrder::Asc,
+        nulls: NullsOrder::Last,
+    }];
+    let topn = S::TopN(sorts.clone(), 1);
     check_default(
         vec![S::Union(Workflow::new(vec![])), topn.clone()],
-        vec![topn.clone(), S::Union(Workflow::new(vec![topn]))],
+        vec![
+            topn.clone(),
+            S::Union(Workflow::new(vec![topn])),
+            S::MuxTopN(sorts, 1),
+        ],
     )
     .await;
 }
@@ -178,15 +184,13 @@ async fn summarize_into_union() {
             "s".to_string() => Aggregation::Sum("y".to_string()),
         },
         by: vec!["x".to_string()],
-        type_: SummarizeType::Single,
     });
-    let post = S::Summarize(Summarize {
+    let post = S::MuxSummarize(Summarize {
         aggs: btreemap! {
             "c".to_string() => Aggregation::Sum("c".to_string()),
             "s".to_string() => Aggregation::Sum("s".to_string()),
         },
         by: vec!["x".to_string()],
-        type_: SummarizeType::Final,
     });
 
     check_default(

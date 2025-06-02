@@ -13,9 +13,6 @@ impl Optimization for PushSummarizeIntoScan {
         let WorkflowStep::Summarize(summarize) = &steps[1] else {
             return None;
         };
-        if summarize.is_final() {
-            return None;
-        }
         let WorkflowStep::Scan(mut scan) = steps[0].clone() else {
             return None;
         };

@@ -1,0 +1,43 @@
+use crate::{pattern, workflow::WorkflowStep};
+
+use super::{Group, Optimization, Pattern};
+
+/// Some steps after unions, when inserted as a step into the union subquery, can allow for
+/// predicate pushdowns.
+/// Also insert these steps right before the union, for the same reasons, just for
+/// the outer query before the union step.
+pub struct MuxIntoUnion;
+
+impl Optimization for MuxIntoUnion {
+    fn pattern(&self) -> Pattern {
+        pattern!(Union+ [Limit TopN Count Summarize])
+    }
+
+    fn apply(&self, steps: &[WorkflowStep], _groups: &[Group]) -> Option<Vec<WorkflowStep>> {
+        let orig_step = &steps[steps.len() - 1];
+
+        let mux_step = match orig_step.clone() {
+            WorkflowStep::Limit(limit) => WorkflowStep::MuxLimit(limit),
+            WorkflowStep::TopN(sort, limit) => WorkflowStep::MuxTopN(sort, limit),
+            WorkflowStep::Count => WorkflowStep::MuxCount,
+            WorkflowStep::Summarize(summarize) => {
+                WorkflowStep::MuxSummarize(summarize.convert_to_mux())
+            }
+
+            _ => return None,
+        };
+
+        let mut new_steps = Vec::with_capacity(1 + steps.len());
+        new_steps.push(orig_step.clone());
+        new_steps.extend(steps[..steps.len() - 1].to_vec());
+        new_steps.push(mux_step);
+
+        for step in &mut new_steps[1..steps.len()] {
+            if let WorkflowStep::Union(ref mut workflow) = step {
+                workflow.steps.push(orig_step.clone());
+            }
+        }
+
+        Some(new_steps)
+    }
+}

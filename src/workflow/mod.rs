@@ -6,7 +6,11 @@ use std::{
 
 use async_stream::{stream, try_stream};
 use color_eyre::eyre::{Context, Result};
-use futures_util::{future::try_join_all, stream::FuturesUnordered, StreamExt};
+use futures_util::{
+    future::try_join_all,
+    stream::{select_all, FuturesUnordered},
+    StreamExt,
+};
 use hashbrown::{DefaultHashBuilder, HashSet};
 use join::{join_streams, Join, JoinType};
 use kinded::Kinded;
@@ -51,6 +55,7 @@ pub mod topn;
 #[cfg(test)]
 mod tests;
 
+pub const MUX_SIGNAL_ID_FIELD_NAME: &str = "__MUX_ID";
 const COUNT_LOG_FIELD_NAME: &str = "count";
 const DYNAMIC_FILTER_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -123,15 +128,18 @@ pub enum WorkflowStep {
 
     /// Limit to X amount of records.
     Limit(u32),
+    MuxLimit(u32),
 
     /// Sort records.
     Sort(Vec<Sort>),
 
     /// Basically like Sort -> Limit, but more memory efficient (holding only N records).
     TopN(Vec<Sort>, u32),
+    MuxTopN(Vec<Sort>, u32),
 
     /// Group records by fields, and aggregate the grouped buckets.
     Summarize(Summarize),
+    MuxSummarize(Summarize),
 
     /// Union results from another query.
     Union(Workflow),
@@ -141,6 +149,7 @@ pub enum WorkflowStep {
 
     /// Returns 1 record with a field named "count" containing the number of records.
     Count,
+    MuxCount,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -156,8 +165,13 @@ fn rx_stream(mut rx: mpsc::Receiver<Log>) -> LogStream {
     })
 }
 
-fn rx_to_dynamic_filter_tx_stream(
-    mut rx: mpsc::Receiver<Log>,
+fn rx_union_stream(rxs: Vec<mpsc::Receiver<Log>>) -> LogStream {
+    let streams: Vec<LogStream> = rxs.into_iter().map(rx_stream).collect();
+    Box::pin(select_all(streams))
+}
+
+fn stream_to_dynamic_filter_tx_stream(
+    mut stream: LogStream,
     dynamic_filter_tx: watch::Sender<Option<FilterAst>>,
     field: impl Into<String>,
 ) -> LogStream {
@@ -165,7 +179,7 @@ fn rx_to_dynamic_filter_tx_stream(
     let mut values = HashSet::new();
 
     Box::pin(stream! {
-        while let Some(log) = rx.recv().await {
+        while let Some(log) = stream.next().await {
             if let Some(value) = log.get(&field) {
                 values.insert(value.clone());
             }
@@ -209,15 +223,15 @@ async fn logs_vec_to_tx(logs: Vec<Log>, tx: mpsc::Sender<Log>, tag: &str) {
     }
 }
 
-async fn pipe(mut rx: mpsc::Receiver<Log>, tx: mpsc::Sender<Log>) {
-    while let Some(log) = rx.recv().await {
+async fn pipe(mut rx: LogStream, tx: mpsc::Sender<Log>) {
+    while let Some(log) = rx.next().await {
         if tx.send(log).await.is_err() {
             break;
         }
     }
 }
 
-async fn pipe_task(rx: mpsc::Receiver<Log>, tx: mpsc::Sender<Log>) -> Result<()> {
+async fn pipe_task(rx: LogStream, tx: mpsc::Sender<Log>) -> Result<()> {
     pipe(rx, tx).await;
     Ok(())
 }
@@ -320,7 +334,7 @@ impl WorkflowStep {
     #[instrument(skip_all, fields(step = %self))]
     async fn execute(
         self: WorkflowStep,
-        rx: Option<mpsc::Receiver<Log>>,
+        rxs: Vec<mpsc::Receiver<Log>>,
         tx: mpsc::Sender<Log>,
         cancel_rx: watch::Receiver<()>,
     ) -> Result<()> {
@@ -339,6 +353,8 @@ impl WorkflowStep {
                 dynamic_filter_rx,
                 ..
             }) => {
+                assert!(rxs.is_empty());
+
                 if let Some(filter_rx) = dynamic_filter_rx {
                     if let Some(dynamic_filtered_handle) =
                         apply_dynamic_filter(connector.as_ref(), handle.as_ref(), filter_rx).await
@@ -360,49 +376,50 @@ impl WorkflowStep {
                 }
             }
             WorkflowStep::Filter(ast) => {
-                let stream = filter_stream(ast, rx_stream(rx.unwrap()))?;
+                let stream = filter_stream(ast, rx_union_stream(rxs))?;
                 stream_to_tx(stream, tx, "filter").await?;
             }
             WorkflowStep::Project(fields) => {
-                let stream = project_stream(fields, rx_stream(rx.unwrap())).await?;
+                let stream = project_stream(fields, rx_union_stream(rxs)).await?;
                 stream_to_tx(stream, tx, "project").await?;
             }
             WorkflowStep::Extend(fields) => {
-                let stream = extend_stream(fields, rx_stream(rx.unwrap())).await?;
+                let stream = extend_stream(fields, rx_union_stream(rxs)).await?;
                 stream_to_tx(stream, tx, "extend").await?;
             }
-            WorkflowStep::Limit(limit) => {
-                let stream = limit_stream(limit, rx_stream(rx.unwrap()))?;
+            WorkflowStep::Limit(limit) | WorkflowStep::MuxLimit(limit) => {
+                let stream = limit_stream(limit, rx_union_stream(rxs))?;
                 stream_to_tx(stream, tx, "limit").await?;
             }
             WorkflowStep::Sort(sorts) => {
-                let logs = sort_stream(sorts, rx_stream(rx.unwrap())).await?;
+                let logs = sort_stream(sorts, rx_union_stream(rxs)).await?;
                 logs_vec_to_tx(logs, tx, "sort").await;
             }
-            WorkflowStep::TopN(sorts, limit) => {
-                let logs = topn_stream(sorts, limit, rx_stream(rx.unwrap())).await?;
+            WorkflowStep::TopN(sorts, limit) | WorkflowStep::MuxTopN(sorts, limit) => {
+                let logs = topn_stream(sorts, limit, rx_union_stream(rxs)).await?;
                 logs_vec_to_tx(logs, tx, "top-n").await;
             }
-            WorkflowStep::Summarize(config) => {
-                let logs = summarize_stream(config, rx_stream(rx.unwrap())).await?;
+            WorkflowStep::Summarize(config) | WorkflowStep::MuxSummarize(config) => {
+                let logs = summarize_stream(config, rx_union_stream(rxs)).await?;
                 logs_vec_to_tx(logs, tx, "summarize").await;
             }
             WorkflowStep::Union(workflow) => {
+                assert!(rxs.is_empty());
+
                 if workflow.steps.is_empty() {
                     return Ok(());
                 }
 
-                let (tasks, union_rx) = workflow.create_tasks(cancel_rx.clone())?;
-
-                tasks.push(spawn(pipe_task(union_rx, tx.clone())));
-                tasks.push(spawn(pipe_task(rx.unwrap(), tx)));
+                let (tasks, rx) = workflow.create_tasks(cancel_rx.clone())?;
+                tasks.push(spawn(pipe_task(rx, tx)));
 
                 execute_tasks(tasks, cancel_rx).await?;
             }
             WorkflowStep::Join(join, workflow) => {
+                let input_stream = rx_union_stream(rxs);
                 if workflow.steps.is_empty() {
                     if matches!(join.type_, JoinType::Left | JoinType::Outer) {
-                        pipe(rx.unwrap(), tx).await;
+                        pipe(input_stream, tx).await;
                     }
                     return Ok(());
                 }
@@ -413,21 +430,21 @@ impl WorkflowStep {
                 let is_left_sending_dynamic_filter = scan.dynamic_filter_rx.is_some();
                 let dynamic_filter_tx = scan.dynamic_filter_tx.clone();
 
-                let (tasks, right_rx) = workflow.create_tasks(cancel_rx.clone())?;
+                let (tasks, right_stream) = workflow.create_tasks(cancel_rx.clone())?;
 
                 tasks.push(spawn(async move {
-                    let left_rx = rx.unwrap();
+                    let left_stream = input_stream;
 
                     let (left_stream, right_stream) = match dynamic_filter_tx {
                         Some(tx) if is_left_sending_dynamic_filter => (
-                            rx_to_dynamic_filter_tx_stream(left_rx, tx, &join.on.0),
-                            rx_stream(right_rx),
+                            stream_to_dynamic_filter_tx_stream(left_stream, tx, &join.on.0),
+                            right_stream,
                         ),
                         Some(tx) => (
-                            rx_stream(left_rx),
-                            rx_to_dynamic_filter_tx_stream(right_rx, tx, &join.on.1),
+                            left_stream,
+                            stream_to_dynamic_filter_tx_stream(right_stream, tx, &join.on.1),
                         ),
-                        _ => (rx_stream(left_rx), rx_stream(right_rx)),
+                        _ => (left_stream, right_stream),
                     };
 
                     let partitions = join.partitions;
@@ -444,13 +461,23 @@ impl WorkflowStep {
                 execute_tasks(tasks, cancel_rx).await?;
             }
             WorkflowStep::Count => {
-                let mut rx = rx.unwrap();
-
-                let mut count: u64 = 0;
-                while rx.recv().await.is_some() {
+                let mut stream = rx_union_stream(rxs);
+                let mut count = 0;
+                while stream.next().await.is_some() {
                     count += 1;
                 }
-
+                count_to_tx(count, tx).await;
+            }
+            WorkflowStep::MuxCount => {
+                let mut stream = rx_union_stream(rxs);
+                let mut count = 0;
+                while let Some(mut log) = stream.next().await {
+                    if let Some(value) = log.remove(COUNT_LOG_FIELD_NAME) {
+                        if let Some(c) = value.as_u64() {
+                            count += c;
+                        }
+                    }
+                }
                 count_to_tx(count, tx).await;
             }
         }
@@ -502,27 +529,30 @@ impl Workflow {
         Self { steps }
     }
 
-    fn create_tasks(
-        self,
-        cancel_rx: watch::Receiver<()>,
-    ) -> Result<(WorkflowTasks, mpsc::Receiver<Log>)> {
+    fn create_tasks(self, cancel_rx: watch::Receiver<()>) -> Result<(WorkflowTasks, LogStream)> {
         assert!(!self.steps.is_empty());
 
-        let (mut tx, mut next_rx) = mpsc::channel(1);
-        let mut rx: Option<mpsc::Receiver<Log>> = None;
+        let (mut tx, mut rx) = mpsc::channel(1);
+        let mut mux_rxs: Vec<mpsc::Receiver<Log>> = Vec::new();
 
         let tasks = FuturesUnordered::new();
 
         for step in self.steps {
             debug!("Spawning step: {:?}", step);
 
-            tasks.push(spawn(step.execute(rx.take(), tx, cancel_rx.clone())));
+            let rxs = if matches!(step, WorkflowStep::Scan(..) | WorkflowStep::Union(..)) {
+                Vec::new()
+            } else {
+                std::mem::take(&mut mux_rxs)
+            };
 
-            rx = Some(next_rx);
-            (tx, next_rx) = mpsc::channel(1);
+            tasks.push(spawn(step.execute(rxs, tx, cancel_rx.clone())));
+
+            mux_rxs.push(rx);
+            (tx, rx) = mpsc::channel(1);
         }
 
-        Ok((tasks, rx.unwrap()))
+        Ok((tasks, rx_union_stream(mux_rxs)))
     }
 
     pub fn execute(self, cancel_rx: watch::Receiver<()>) -> Result<LogTryStream> {
@@ -530,13 +560,13 @@ impl Workflow {
             return Ok(Box::pin(futures_util::stream::empty()));
         }
 
-        let (tasks, mut rx) = self.create_tasks(cancel_rx.clone())?;
+        let (tasks, mut stream) = self.create_tasks(cancel_rx.clone())?;
         let mut task = spawn(execute_tasks(tasks, cancel_rx));
 
         Ok(Box::pin(try_stream! {
             let task_alive = loop {
                 tokio::select! {
-                    log = rx.recv() => {
+                    log = stream.next() => {
                         if let Some(log) = log {
                             yield log;
                         } else {
@@ -547,7 +577,7 @@ impl Workflow {
                         match result {
                             Ok(Ok(())) => {
                                 // Finish reading whatever is left in the channel.
-                                while let Some(log) = rx.recv().await {
+                                while let Some(log) = stream.next().await {
                                     yield log;
                                 }
                                 break Ok(false);
