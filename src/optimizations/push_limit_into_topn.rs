@@ -6,19 +6,22 @@ pub struct PushLimitIntoTopN;
 
 impl Optimization for PushLimitIntoTopN {
     fn pattern(&self) -> Pattern {
-        pattern!(TopN Limit)
+        pattern!([TopN MuxTopN] Limit)
     }
 
     fn apply(&self, steps: &[WorkflowStep], _groups: &[Group]) -> Option<Vec<WorkflowStep>> {
-        let WorkflowStep::TopN(sorts, b) = &steps[0] else {
-            return None;
+        let (sorts, b, is_mux) = match &steps[0] {
+            WorkflowStep::TopN(sorts, b) => (sorts, b, false),
+            WorkflowStep::MuxTopN(sorts, b) => (sorts, b, true),
+            _ => return None,
         };
         let WorkflowStep::Limit(a) = &steps[1] else {
             return None;
         };
-        Some(vec![WorkflowStep::TopN(
-            sorts.clone(),
-            std::cmp::min(*a, *b),
-        )])
+        Some(vec![if is_mux {
+            WorkflowStep::MuxTopN(sorts.clone(), std::cmp::min(*a, *b))
+        } else {
+            WorkflowStep::TopN(sorts.clone(), std::cmp::min(*a, *b))
+        }])
     }
 }

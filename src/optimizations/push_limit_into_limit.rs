@@ -6,16 +6,22 @@ pub struct PushLimitIntoLimit;
 
 impl Optimization for PushLimitIntoLimit {
     fn pattern(&self) -> Pattern {
-        pattern!(Limit Limit)
+        pattern!([Limit MuxLimit] Limit)
     }
 
     fn apply(&self, steps: &[WorkflowStep], _groups: &[Group]) -> Option<Vec<WorkflowStep>> {
-        let WorkflowStep::Limit(a) = &steps[0] else {
-            return None;
+        let (a, is_mux) = match &steps[0] {
+            WorkflowStep::Limit(a) => (a, false),
+            WorkflowStep::MuxLimit(a) => (a, true),
+            _ => return None,
         };
         let WorkflowStep::Limit(b) = &steps[1] else {
             return None;
         };
-        Some(vec![WorkflowStep::Limit(std::cmp::min(*a, *b))])
+        Some(vec![if is_mux {
+            WorkflowStep::MuxLimit(std::cmp::min(*a, *b))
+        } else {
+            WorkflowStep::Limit(std::cmp::min(*a, *b))
+        }])
     }
 }
