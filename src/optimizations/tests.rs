@@ -63,7 +63,7 @@ async fn topn_limit_into_topn() {
             S::TopN(vec![], 15),
             S::Limit(35),
         ],
-        vec![S::TopN(vec![], 1), S::TopN(vec![], 15)],
+        vec![S::Limit(1), S::TopN(vec![], 10), S::TopN(vec![], 15)],
     )
     .await;
 }
