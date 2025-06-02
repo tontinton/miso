@@ -117,11 +117,7 @@ fn calculate_max_distinct_count(
             WorkflowStep::Sort(..) | WorkflowStep::Filter(..) => {}
 
             // Unsupported (need to think about project & extend):
-            WorkflowStep::Scan(..)
-            | WorkflowStep::Join(..)
-            | WorkflowStep::Union(..)
-            | WorkflowStep::Project(..)
-            | WorkflowStep::Extend(..) => return None,
+            _ => return None,
         }
     }
 
