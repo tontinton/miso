@@ -5,6 +5,7 @@ use convert_sort_limit_to_topn::ConvertSortLimitToTopN;
 use dynamic_filter::DynamicFilter;
 use merge_filters_into_and_filter::MergeFiltersIntoAndFilter;
 use merge_topn_limit::MergeTopNLimit;
+use mux_into_union::MuxIntoUnion;
 use pattern::{Group, Pattern};
 use push_count_into_scan::PushCountIntoScan;
 use push_filter_into_scan::PushFilterIntoScan;
@@ -12,9 +13,7 @@ use push_filter_into_union::PushFilterIntoUnion;
 use push_limit_into_limit::PushLimitIntoLimit;
 use push_limit_into_scan::PushLimitIntoScan;
 use push_limit_into_topn::PushLimitIntoTopN;
-use push_limit_into_union::PushLimitIntoUnion;
 use push_summarize_into_scan::PushSummarizeIntoScan;
-use push_summarize_into_union::PushSummarizeIntoUnion;
 use push_topn_into_scan::PushTopNIntoScan;
 use push_union_into_scan::PushUnionIntoScan;
 use remove_redundant_sorts_before_count::RemoveRedundantSortsBeforeCount;
@@ -28,6 +27,7 @@ mod convert_sort_limit_to_topn;
 mod dynamic_filter;
 mod merge_filters_into_and_filter;
 mod merge_topn_limit;
+mod mux_into_union;
 mod pattern;
 mod push_count_into_scan;
 mod push_filter_into_scan;
@@ -35,9 +35,7 @@ mod push_filter_into_union;
 mod push_limit_into_limit;
 mod push_limit_into_scan;
 mod push_limit_into_topn;
-mod push_limit_into_union;
 mod push_summarize_into_scan;
-mod push_summarize_into_union;
 mod push_topn_into_scan;
 mod push_union_into_scan;
 mod remove_redundant_sorts_before_count;
@@ -141,8 +139,7 @@ impl Optimizer {
                 // Union.
                 opt!(PushUnionIntoScan),
                 opt!(PushFilterIntoUnion),
-                opt_once!(PushSummarizeIntoUnion),
-                opt_once!(PushLimitIntoUnion),
+                opt!(MuxIntoUnion),
             ],
             // Post predicate pushdowns.
             vec![

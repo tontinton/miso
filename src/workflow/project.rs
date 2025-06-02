@@ -29,8 +29,8 @@ pub enum ProjectAst {
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub struct ProjectField {
-    from: ProjectAst,
-    to: String,
+    pub from: ProjectAst,
+    pub to: String,
 }
 
 struct ProjectInterpreter<'a> {

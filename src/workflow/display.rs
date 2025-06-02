@@ -1,6 +1,6 @@
 use std::fmt;
 
-use super::{Workflow, WorkflowStep};
+use super::{sort::Sort, Workflow, WorkflowStep};
 
 impl fmt::Display for WorkflowStep {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -86,27 +86,23 @@ impl fmt::Display for DisplayableWorkflowStep<'_> {
             WorkflowStep::Project(..) => write!(f, "{}Project", pre),
             WorkflowStep::Extend(..) => write!(f, "{}Extend", pre),
             WorkflowStep::Limit(limit) => write!(f, "{}Limit({})", pre, limit),
+            WorkflowStep::MuxLimit(limit) => write!(f, "{}MuxLimit({})", pre, limit),
             WorkflowStep::Sort(sorts) => {
-                write!(f, "{}Sort(", pre)?;
-                for (i, sort) in sorts.iter().enumerate() {
-                    if i > 0 {
-                        write!(f, ", ")?;
-                    }
-                    write!(f, "{}", sort)?;
-                }
-                write!(f, ")")
+                write!(f, "{}Sort", pre)?;
+                fmt_sorts(f, sorts)
             }
             WorkflowStep::TopN(sorts, limit) => {
-                write!(f, "{}TopN({})(", pre, limit)?;
-                for (i, sort) in sorts.iter().enumerate() {
-                    if i > 0 {
-                        write!(f, ", ")?;
-                    }
-                    write!(f, "{}", sort)?;
-                }
-                write!(f, ")")
+                write!(f, "{}TopN({})", pre, limit)?;
+                fmt_sorts(f, sorts)
+            }
+            WorkflowStep::MuxTopN(sorts, limit) => {
+                write!(f, "{}MuxTopN({})", pre, limit)?;
+                fmt_sorts(f, sorts)
             }
             WorkflowStep::Summarize(summarize) => write!(f, "{}Summarize({})", pre, summarize),
+            WorkflowStep::MuxSummarize(summarize) => {
+                write!(f, "{}MuxSummarize({})", pre, summarize)
+            }
             WorkflowStep::Union(workflow) => {
                 let display_steps = DisplayableWorkflowSteps {
                     steps: &workflow.steps,
@@ -133,8 +129,20 @@ impl fmt::Display for DisplayableWorkflowStep<'_> {
                 )
             }
             WorkflowStep::Count => write!(f, "{}Count", pre),
+            WorkflowStep::MuxCount => write!(f, "{}MuxCount", pre),
         }
     }
+}
+
+fn fmt_sorts(f: &mut fmt::Formatter<'_>, sorts: &[Sort]) -> fmt::Result {
+    write!(f, "(")?;
+    for (i, sort) in sorts.iter().enumerate() {
+        if i > 0 {
+            write!(f, ", ")?;
+        }
+        write!(f, "{}", sort)?;
+    }
+    write!(f, ")")
 }
 
 impl fmt::Display for Workflow {
