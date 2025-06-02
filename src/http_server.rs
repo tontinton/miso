@@ -32,7 +32,7 @@ use crate::{
     shutdown_future::ShutdownFuture,
     workflow::{
         filter::FilterAst, join::Join, project::ProjectField, sort::Sort, summarize::Summarize,
-        Scan, Workflow, WorkflowStep,
+        PartialStream, Scan, Workflow, WorkflowStep,
     },
 };
 
@@ -249,6 +249,9 @@ struct QueryRequest {
 
     /// The query steps to run.
     query: Vec<QueryStep>,
+
+    /// If set, send partial results as soon as a split / union subquery finishes.
+    partial_stream: Option<PartialStream>,
 }
 
 #[derive(Debug)]
@@ -306,7 +309,7 @@ async fn query_stream(
             req.query,
         )
         .await?;
-        Workflow::new(state.optimizer.optimize(steps).await)
+        Workflow::new_with_partial_stream(state.optimizer.optimize(steps).await, req.partial_stream)
     };
 
     debug!(?workflow, "Executing workflow");
