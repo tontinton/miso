@@ -2,15 +2,15 @@ use crate::{pattern, workflow::WorkflowStep};
 
 use super::{Group, Optimization, Pattern};
 
-/// Filters after unions, when inserted as a step into the union subquery, can allow for
+/// Some steps after unions, when inserted as a step into the union subquery, can allow for
 /// predicate pushdowns.
 /// Also insert these steps right before the union, for the same reasons, just for
 /// the outer query before the union step.
-pub struct PushFilterIntoUnion;
+pub struct PushStepsIntoUnion;
 
-impl Optimization for PushFilterIntoUnion {
+impl Optimization for PushStepsIntoUnion {
     fn pattern(&self) -> Pattern {
-        pattern!(Union + Filter)
+        pattern!(Union + [Filter Project Extend])
     }
 
     fn apply(&self, steps: &[WorkflowStep], _groups: &[Group]) -> Option<Vec<WorkflowStep>> {

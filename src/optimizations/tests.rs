@@ -2,6 +2,7 @@ use collection_macros::btreemap;
 
 use crate::workflow::{
     filter::FilterAst,
+    project::{ProjectAst, ProjectField},
     sort::{NullsOrder, Sort, SortOrder},
     summarize::{Aggregation, Summarize},
     Workflow, WorkflowStep as S,
@@ -139,6 +140,34 @@ async fn filter_into_union() {
     check_default(
         vec![S::Union(Workflow::new(vec![])), filter.clone()],
         vec![filter.clone(), S::Union(Workflow::new(vec![filter]))],
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn project_into_union() {
+    let project = S::Project(vec![ProjectField {
+        from: ProjectAst::Id("a".to_string()),
+        to: "b".to_string(),
+    }]);
+
+    check_default(
+        vec![S::Union(Workflow::new(vec![])), project.clone()],
+        vec![project.clone(), S::Union(Workflow::new(vec![project]))],
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn extend_into_union() {
+    let extend = S::Extend(vec![ProjectField {
+        from: ProjectAst::Id("a".to_string()),
+        to: "b".to_string(),
+    }]);
+
+    check_default(
+        vec![S::Union(Workflow::new(vec![])), extend.clone()],
+        vec![extend.clone(), S::Union(Workflow::new(vec![extend]))],
     )
     .await;
 }

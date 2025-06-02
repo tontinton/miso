@@ -9,10 +9,10 @@ use mux_into_union::MuxIntoUnion;
 use pattern::{Group, Pattern};
 use push_count_into_scan::PushCountIntoScan;
 use push_filter_into_scan::PushFilterIntoScan;
-use push_filter_into_union::PushFilterIntoUnion;
 use push_limit_into_limit::PushLimitIntoLimit;
 use push_limit_into_scan::PushLimitIntoScan;
 use push_limit_into_topn::PushLimitIntoTopN;
+use push_steps_into_union::PushStepsIntoUnion;
 use push_summarize_into_scan::PushSummarizeIntoScan;
 use push_topn_into_scan::PushTopNIntoScan;
 use push_union_into_scan::PushUnionIntoScan;
@@ -31,10 +31,10 @@ mod mux_into_union;
 mod pattern;
 mod push_count_into_scan;
 mod push_filter_into_scan;
-mod push_filter_into_union;
 mod push_limit_into_limit;
 mod push_limit_into_scan;
 mod push_limit_into_topn;
+mod push_steps_into_union;
 mod push_summarize_into_scan;
 mod push_topn_into_scan;
 mod push_union_into_scan;
@@ -138,7 +138,7 @@ impl Optimizer {
                 opt!(PushSummarizeIntoScan),
                 // Union.
                 opt!(PushUnionIntoScan),
-                opt!(PushFilterIntoUnion),
+                opt!(PushStepsIntoUnion),
                 opt!(MuxIntoUnion),
             ],
             // Post predicate pushdowns.
