@@ -232,3 +232,16 @@ async fn summarize_into_union() {
     )
     .await;
 }
+
+#[tokio::test]
+async fn reorder_filter_before_sort() {
+    let filter = S::Filter(FilterAst::Eq(
+        Box::new(FilterAst::Id("a".to_string())),
+        Box::new(FilterAst::Lit(serde_json::Value::String("b".to_string()))),
+    ));
+    check_default(
+        vec![S::Sort(vec![]), S::Sort(vec![]), filter.clone()],
+        vec![filter, S::Sort(vec![]), S::Sort(vec![])],
+    )
+    .await;
+}
