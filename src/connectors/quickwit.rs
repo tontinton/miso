@@ -1106,6 +1106,11 @@ impl Connector for QuickwitConnector {
             return None;
         }
 
+        if config.by.is_empty() {
+            // Most likely supported, needs to be implemented.
+            return None;
+        }
+
         let mut count_fields = Vec::new();
         let mut inner_aggs = BTreeMap::new();
 
