@@ -456,7 +456,7 @@ impl WorkflowStep {
                 stream_to_tx(stream, tx, "extend").await?;
             }
             WorkflowStep::Limit(limit) | WorkflowStep::MuxLimit(limit) => {
-                let stream = limit_stream(limit, rx_union_stream(rxs))?;
+                let stream = limit_stream(limit, rx_union_stream(rxs));
                 stream_to_tx(stream, tx, "limit").await?;
             }
             WorkflowStep::Sort(sorts) => {
