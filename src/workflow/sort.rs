@@ -45,11 +45,21 @@ pub struct SortConfig {
 }
 
 impl SortConfig {
-    pub fn new(sorts: &[Sort]) -> Self {
+    pub fn new(sorts: Vec<Sort>) -> Self {
+        let mut by = Vec::with_capacity(sorts.len());
+        let mut sort_orders = Vec::with_capacity(sorts.len());
+        let mut nulls_orders = Vec::with_capacity(sorts.len());
+
+        for sort in sorts {
+            by.push(sort.by);
+            sort_orders.push(sort.order);
+            nulls_orders.push(sort.nulls);
+        }
+
         Self {
-            by: sorts.iter().map(|sort| sort.by.clone()).collect(),
-            sort_orders: sorts.iter().map(|sort| sort.clone().order).collect(),
-            nulls_orders: sorts.iter().map(|sort| sort.clone().nulls).collect(),
+            by,
+            sort_orders,
+            nulls_orders,
         }
     }
 }
@@ -163,7 +173,7 @@ pub async fn sort_stream(sorts: Vec<Sort>, input_stream: LogStream) -> Result<Ve
             .join(", ")
     );
 
-    let config = SortConfig::new(&sorts);
+    let config = SortConfig::new(sorts);
     let mut logs = collect_logs(&config.by, input_stream).await?;
 
     logs.sort_unstable_by(|a, b| {
