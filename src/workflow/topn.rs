@@ -2,11 +2,15 @@ use std::{cmp::Ordering, collections::BinaryHeap};
 
 use async_stream::try_stream;
 use futures_util::StreamExt;
+use hashbrown::HashMap;
 use tokio::task_local;
 
 use crate::log::{Log, LogStream, LogTryStream};
 
-use super::sort::{cmp_logs, Sort, SortConfig};
+use super::{
+    partial_stream::get_partial_id,
+    sort::{cmp_logs, Sort, SortConfig},
+};
 
 task_local! {
     pub static SORT_CONFIG: SortConfig;
@@ -81,9 +85,30 @@ pub async fn topn_stream(
 ) -> (LogTryStream, SortConfig) {
     let stream = Box::pin(try_stream! {
         let mut state = TopNState::new(limit as usize);
+        let mut partial_states: HashMap<usize, TopNState> = HashMap::new();
+
         while let Some(log) = input_stream.next().await {
-            state.push(log);
+            match get_partial_id(&log) {
+                None => {
+                    state.push(log);
+                }
+                Some((id, false)) => {
+                    partial_states
+                        .entry(id)
+                        .or_insert_with(|| TopNState::new(limit as usize))
+                        .push(log);
+                }
+                Some((id, true)) => {
+                    if let Some(state) = partial_states.remove(&id) {
+                        for log in state.into_sorted_iter() {
+                            yield log;
+                        }
+                        yield log;
+                    }
+                }
+            }
         }
+
         for log in state.into_sorted_iter() {
             yield log;
         }

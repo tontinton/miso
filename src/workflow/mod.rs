@@ -619,13 +619,15 @@ impl WorkflowStep {
             | Self::MuxSummarize(..)
             | Self::Limit(..)
             | Self::MuxLimit(..)
-            | Self::TopN(..)
-            | Self::MuxTopN(..)
             | Self::Count
             | Self::MuxCount
             | Self::Union(..) => false,
 
-            Self::Filter(..) | Self::Extend(..) | Self::Sort(..) => true,
+            Self::Filter(..)
+            | Self::Extend(..)
+            | Self::Sort(..)
+            | Self::TopN(..)
+            | Self::MuxTopN(..) => true,
         }
     }
 }
