@@ -404,7 +404,7 @@ impl WorkflowStep {
         rxs: Vec<mpsc::Receiver<Log>>,
         tx: mpsc::Sender<Log>,
         partial_stream: Option<PartialStream>,
-        cancel_rx: watch::Receiver<()>,
+        cancel: Arc<Notify>,
     ) -> Result<()> {
         let start = Instant::now();
         let _guard = scopeguard::guard((), |_| {
@@ -523,10 +523,10 @@ impl WorkflowStep {
                     return Ok(());
                 }
 
-                let (tasks, rx) = workflow.create_tasks(cancel_rx.clone())?;
+                let (tasks, rx) = workflow.create_tasks(cancel.clone())?;
                 tasks.push(spawn(pipe_task(rx, tx)));
 
-                execute_tasks(tasks, cancel_rx).await?;
+                execute_tasks(tasks, cancel).await?;
             }
             WorkflowStep::Join(join, workflow) => {
                 let input_stream = rx_union_stream(rxs);
@@ -543,7 +543,7 @@ impl WorkflowStep {
                 let is_left_sending_dynamic_filter = scan.dynamic_filter_rx.is_some();
                 let dynamic_filter_tx = scan.dynamic_filter_tx.clone();
 
-                let (tasks, right_stream) = workflow.create_tasks(cancel_rx.clone())?;
+                let (tasks, right_stream) = workflow.create_tasks(cancel.clone())?;
 
                 tasks.push(spawn(async move {
                     let left_stream = input_stream;
@@ -571,7 +571,7 @@ impl WorkflowStep {
                     Ok(())
                 }));
 
-                execute_tasks(tasks, cancel_rx).await?;
+                execute_tasks(tasks, cancel).await?;
             }
             WorkflowStep::Count => {
                 let mut stream = rx_union_stream(rxs);
@@ -633,7 +633,7 @@ impl WorkflowStep {
 }
 
 #[instrument(skip_all)]
-async fn execute_tasks(mut tasks: WorkflowTasks, mut cancel_rx: watch::Receiver<()>) -> Result<()> {
+async fn execute_tasks(mut tasks: WorkflowTasks, cancel: Arc<Notify>) -> Result<()> {
     let start = Instant::now();
 
     loop {
@@ -641,7 +641,7 @@ async fn execute_tasks(mut tasks: WorkflowTasks, mut cancel_rx: watch::Receiver<
             // First select cancel, and only then the tasks.
             biased;
 
-            _ = cancel_rx.changed() => {
+            _ = cancel.notified() => {
                 info!("Workflow cancelled");
                 for handle in &tasks {
                     handle.abort();
@@ -711,7 +711,7 @@ impl Workflow {
         partial_stream_step_idx
     }
 
-    fn create_tasks(self, cancel_rx: watch::Receiver<()>) -> Result<(WorkflowTasks, LogStream)> {
+    fn create_tasks(self, cancel: Arc<Notify>) -> Result<(WorkflowTasks, LogStream)> {
         assert!(!self.steps.is_empty());
 
         let (mut tx, mut rx) = mpsc::channel(1);
@@ -735,12 +735,7 @@ impl Workflow {
                 None
             };
 
-            tasks.push(spawn(step.execute(
-                rxs,
-                tx,
-                partial_stream,
-                cancel_rx.clone(),
-            )));
+            tasks.push(spawn(step.execute(rxs, tx, partial_stream, cancel.clone())));
 
             mux_rxs.push(rx);
             (tx, rx) = mpsc::channel(1);
@@ -749,13 +744,13 @@ impl Workflow {
         Ok((tasks, rx_union_stream(mux_rxs)))
     }
 
-    pub fn execute(self, cancel_rx: watch::Receiver<()>) -> Result<LogTryStream> {
+    pub fn execute(self, cancel: Arc<Notify>) -> Result<LogTryStream> {
         if self.steps.is_empty() {
             return Ok(Box::pin(stream::empty()));
         }
 
-        let (tasks, mut stream) = self.create_tasks(cancel_rx.clone())?;
-        let mut task = spawn(execute_tasks(tasks, cancel_rx));
+        let (tasks, mut stream) = self.create_tasks(cancel.clone())?;
+        let mut task = spawn(execute_tasks(tasks, cancel));
 
         Ok(Box::pin(try_stream! {
             let task_alive = loop {

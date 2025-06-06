@@ -18,7 +18,7 @@ use testcontainers::{
     runners::AsyncRunner,
     ContainerAsync, GenericImage, ImageExt,
 };
-use tokio::sync::{watch, OnceCell};
+use tokio::sync::{Notify, OnceCell};
 use tokio_retry::{strategy::FixedInterval, Retry};
 use tokio_test::block_on;
 use tracing::info;
@@ -323,14 +323,14 @@ async fn predicate_pushdown_same_results(
     let pushdown_workflow = Workflow::new(predicate_pushdown_steps);
     let no_pushdown_workflow = Workflow::new(no_pushdown_optimizer.optimize(steps).await);
 
-    let (_cancel_tx1, cancel_rx1) = watch::channel(());
-    let (_cancel_tx2, cancel_rx2) = watch::channel(());
+    let cancel1 = Arc::new(Notify::new());
+    let cancel2 = Arc::new(Notify::new());
 
     let mut pushdown_stream = pushdown_workflow
-        .execute(cancel_rx1)
+        .execute(cancel1.clone())
         .context("execute predicate pushdown workflow")?;
     let mut no_pushdown_stream = no_pushdown_workflow
-        .execute(cancel_rx2)
+        .execute(cancel2.clone())
         .context("execute no predicate pushdown workflow")?;
 
     let mut pushdown_results = Vec::with_capacity(count);

@@ -19,7 +19,7 @@ use futures_util::TryStreamExt;
 use prometheus::{Histogram, HistogramOpts, IntGauge, Registry, TextEncoder};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use tokio::sync::{watch, RwLock};
+use tokio::sync::{Notify, RwLock};
 use tracing::{debug, error, info, span, Level};
 use uuid::Uuid;
 
@@ -314,8 +314,8 @@ async fn query_stream(
 
     debug!(?workflow, "Executing workflow");
 
-    let (cancel_tx, cancel_rx) = watch::channel(());
-    let mut logs_stream = workflow.execute(cancel_rx).map_err(|e| {
+    let cancel = Arc::new(Notify::new());
+    let mut logs_stream = workflow.execute(cancel.clone()).map_err(|e| {
         HttpError::new(
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("failed to execute workflow: {}", e),
@@ -323,9 +323,9 @@ async fn query_stream(
     })?;
 
     Ok(Sse::new(stream! {
-        let _cancel_on_drop = scopeguard::guard(cancel_tx, |cancel_tx| {
+        let _cancel_on_drop = scopeguard::guard(cancel, |cancel| {
             debug!("Cancelling query");
-            let _ = cancel_tx.send(());
+            cancel.notify_one();
         });
 
         loop {

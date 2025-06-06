@@ -16,7 +16,7 @@ use color_eyre::{
 use ctor::ctor;
 use futures_util::TryStreamExt;
 use serde::{Deserialize, Deserializer, Serialize};
-use tokio::sync::watch;
+use tokio::sync::Notify;
 
 use crate::{
     connectors::{
@@ -189,10 +189,10 @@ fn init() {
 async fn cancel() -> Result<()> {
     let workflow = Workflow::new(vec![]);
 
-    let (cancel_tx, cancel_rx) = watch::channel(());
-    cancel_tx.send(())?;
+    let cancel = Arc::new(Notify::new());
+    cancel.notify_one();
 
-    let mut logs_stream = workflow.execute(cancel_rx).context("workflow execute")?;
+    let mut logs_stream = workflow.execute(cancel).context("workflow execute")?;
     assert!(matches!(logs_stream.try_next().await, Ok(None)));
 
     Ok(())
@@ -262,9 +262,9 @@ async fn check_multi_connectors(
     let optimizations_workflow = Workflow::new(optimizer.optimize(steps.clone()).await);
     let no_optimizations_workflow = Workflow::new(steps);
 
-    let (_cancel_tx, cancel_rx) = watch::channel(());
+    let cancel = Arc::new(Notify::new());
     let mut logs_stream = no_optimizations_workflow
-        .execute(cancel_rx)
+        .execute(cancel.clone())
         .context("non optimized workflow execute")?;
 
     let mut logs = Vec::new();
@@ -278,9 +278,9 @@ async fn check_multi_connectors(
         "logs not equal to expected (left is expected, right is what we received)",
     );
 
-    let (_cancel_tx, cancel_rx) = watch::channel(());
+    let cancel = Arc::new(Notify::new());
     let mut logs_stream = optimizations_workflow
-        .execute(cancel_rx)
+        .execute(cancel.clone())
         .context("optimized workflow execute")?;
 
     let mut optimized_logs = Vec::with_capacity(logs.len());
