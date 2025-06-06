@@ -478,8 +478,8 @@ impl WorkflowStep {
                 logs_iter_to_tx(logs, tx, "sort").await;
             }
             WorkflowStep::TopN(sorts, limit) | WorkflowStep::MuxTopN(sorts, limit) => {
-                let logs = topn_stream(sorts, limit, rx_union_stream(rxs)).await?;
-                logs_iter_to_tx(logs, tx, "top-n").await;
+                let stream = topn_stream(sorts, limit, rx_union_stream(rxs)).await;
+                stream_to_tx(stream, tx, "top-n").await?;
             }
             WorkflowStep::MuxSummarize(config) if partial_stream.is_some() => {
                 let executor = create_summarize_executor(config);
