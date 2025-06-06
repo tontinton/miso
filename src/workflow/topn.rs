@@ -2,9 +2,7 @@ use std::{cmp::Ordering, collections::BinaryHeap};
 
 use async_stream::try_stream;
 use futures_util::StreamExt;
-
 use tokio::task_local;
-use tracing::info;
 
 use crate::log::{Log, LogStream, LogTryStream};
 
@@ -81,16 +79,6 @@ pub async fn topn_stream(
     limit: u32,
     mut input_stream: LogStream,
 ) -> (LogTryStream, SortConfig) {
-    info!(
-        "Collecting top {} sorted by {}",
-        limit,
-        sorts
-            .iter()
-            .map(|sort| sort.to_string())
-            .collect::<Vec<_>>()
-            .join(", ")
-    );
-
     let stream = Box::pin(try_stream! {
         let mut state = TopNState::new(limit as usize);
         while let Some(log) = input_stream.next().await {
