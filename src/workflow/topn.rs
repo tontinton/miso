@@ -1,11 +1,12 @@
 use std::{cmp::Ordering, collections::BinaryHeap};
 
+use async_stream::try_stream;
 use futures_util::StreamExt;
 
 use color_eyre::Result;
 use tracing::info;
 
-use crate::log::{Log, LogStream};
+use crate::log::{Log, LogStream, LogTryStream};
 
 use super::sort::{cmp_logs, Sort, SortConfig};
 
@@ -44,7 +45,7 @@ pub async fn topn_stream(
     sorts: Vec<Sort>,
     limit: u32,
     mut input_stream: LogStream,
-) -> Result<Vec<Log>> {
+) -> LogTryStream {
     info!(
         "Collecting top {} sorted by {}",
         limit,
@@ -55,26 +56,29 @@ pub async fn topn_stream(
             .join(", ")
     );
 
-    let config = SortConfig::new(&sorts);
+    Ok(Box::pin(try_stream! {
+        let config = SortConfig::new(&sorts);
+        let mut heap = BinaryHeap::new();
 
-    let mut heap = BinaryHeap::new();
+        while let Some(log) = input_stream.next().await {
+            let sortable = Sortable {
+                log,
+                config: &config,
+            };
 
-    while let Some(log) = input_stream.next().await {
-        let sortable = Sortable {
-            log,
-            config: &config,
-        };
-
-        if heap.len() < limit as usize {
-            heap.push(sortable);
-        } else {
-            let bottom_of_top = heap.peek().unwrap();
-            if sortable.cmp(bottom_of_top) == Ordering::Less {
-                heap.pop();
+            if heap.len() < limit as usize {
                 heap.push(sortable);
+            } else {
+                let bottom_of_top = heap.peek().unwrap();
+                if sortable.cmp(bottom_of_top) == Ordering::Less {
+                    heap.pop();
+                    heap.push(sortable);
+                }
             }
         }
-    }
 
-    Ok(heap.into_sorted_vec().into_iter().map(|x| x.log).collect())
+        for sortable in heap.into_sorted_vec() {
+            yield sortable.log;
+        }
+    }))
 }
