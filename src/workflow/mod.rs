@@ -9,7 +9,7 @@ use color_eyre::eyre::{Context, Result};
 use futures_util::{
     future::{join, join_all, try_join_all},
     pin_mut,
-    stream::{select_all, FuturesUnordered},
+    stream::{self, select_all, FuturesUnordered},
     StreamExt,
 };
 use hashbrown::{DefaultHashBuilder, HashSet};
@@ -751,7 +751,7 @@ impl Workflow {
 
     pub fn execute(self, cancel_rx: watch::Receiver<()>) -> Result<LogTryStream> {
         if self.steps.is_empty() {
-            return Ok(Box::pin(futures_util::stream::empty()));
+            return Ok(Box::pin(stream::empty()));
         }
 
         let (tasks, mut stream) = self.create_tasks(cancel_rx.clone())?;
