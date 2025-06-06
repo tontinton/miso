@@ -609,6 +609,37 @@ impl WorkflowStep {
 
         Ok(())
     }
+
+    #[inline]
+    fn is_mux(&self) -> bool {
+        matches!(
+            self,
+            WorkflowStep::MuxTopN(..)
+                | WorkflowStep::MuxSummarize(..)
+                | WorkflowStep::MuxLimit(..)
+                | WorkflowStep::MuxCount
+        )
+    }
+
+    #[inline]
+    fn can_partial_passthrough(&self) -> bool {
+        match self {
+            Self::Scan(..)
+            | Self::Project(..)
+            | Self::Join(..)
+            | Self::Summarize(..)
+            | Self::MuxSummarize(..)
+            | Self::Limit(..)
+            | Self::MuxLimit(..)
+            | Self::TopN(..)
+            | Self::MuxTopN(..)
+            | Self::Count
+            | Self::MuxCount
+            | Self::Union(..) => false,
+
+            Self::Filter(..) | Self::Extend(..) | Self::Sort(..) => true,
+        }
+    }
 }
 
 #[instrument(skip_all)]
@@ -664,15 +695,42 @@ impl Workflow {
         Self::new_with_partial_stream(steps, None)
     }
 
+    /// Get the last mux step that is actually able to passthrough.
+    fn get_partial_stream_step_idx(&self) -> Option<usize> {
+        self.partial_stream.as_ref()?;
+
+        let mut partial_stream_step_idx = None;
+
+        for (i, step) in self.steps.iter().enumerate() {
+            if !step.is_mux() {
+                continue;
+            }
+
+            let is_passthrough = self
+                .steps
+                .get(i + 1..)
+                .unwrap_or(&[])
+                .iter()
+                .all(WorkflowStep::can_partial_passthrough);
+
+            if is_passthrough {
+                partial_stream_step_idx = Some(i);
+            }
+        }
+
+        partial_stream_step_idx
+    }
+
     fn create_tasks(self, cancel_rx: watch::Receiver<()>) -> Result<(WorkflowTasks, LogStream)> {
         assert!(!self.steps.is_empty());
 
         let (mut tx, mut rx) = mpsc::channel(1);
         let mut mux_rxs: Vec<mpsc::Receiver<Log>> = Vec::new();
+        let partial_stream_step_idx = self.get_partial_stream_step_idx();
 
         let tasks = FuturesUnordered::new();
 
-        for step in self.steps {
+        for (i, step) in self.steps.into_iter().enumerate() {
             debug!("Spawning step: {:?}", step);
 
             let rxs = if matches!(step, WorkflowStep::Scan(..) | WorkflowStep::Union(..)) {
@@ -681,10 +739,16 @@ impl Workflow {
                 std::mem::take(&mut mux_rxs)
             };
 
+            let partial_stream = if partial_stream_step_idx == Some(i) {
+                self.partial_stream.clone()
+            } else {
+                None
+            };
+
             tasks.push(spawn(step.execute(
                 rxs,
                 tx,
-                self.partial_stream.clone(),
+                partial_stream,
                 cancel_rx.clone(),
             )));
 
