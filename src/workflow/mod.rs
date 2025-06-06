@@ -16,9 +16,10 @@ use hashbrown::{DefaultHashBuilder, HashSet};
 use join::{join_streams, Join, JoinType};
 use kinded::Kinded;
 use parking_lot::Mutex;
+use partial_stream::{add_partial_stream_id, build_partial_stream_id_done_log};
 use project::extend_stream;
 use serde::Deserialize;
-use serde_json::{json, Map, Value};
+use serde_json::Value;
 use summarize::{create_summarize_executor, Summarize};
 use tokio::{
     spawn,
@@ -48,6 +49,7 @@ pub mod filter;
 mod interpreter;
 pub mod join;
 pub mod limit;
+mod partial_stream;
 pub mod project;
 mod serde_json_utils;
 pub mod sort;
@@ -59,8 +61,6 @@ pub mod topn;
 mod tests;
 
 const MISO_METADATA_FIELD_NAME: &str = "_miso";
-const PARTIAL_STREAM_ID_FIELD_NAME: &str = "id";
-const PARTIAL_STREAM_DONE_FIELD_NAME: &str = "done";
 const COUNT_LOG_FIELD_NAME: &str = "count";
 const DYNAMIC_FILTER_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -277,28 +277,14 @@ async fn partial_logs_iter_to_tx<I>(logs: I, id: usize, tx: mpsc::Sender<Log>, t
 where
     I: IntoIterator<Item = Log>,
 {
-    for mut log in logs {
-        log.entry(MISO_METADATA_FIELD_NAME)
-            .or_insert_with(|| Value::Object(Map::new()))
-            .as_object_mut()
-            .unwrap()
-            .insert(PARTIAL_STREAM_ID_FIELD_NAME.to_string(), Value::from(id));
-
-        if let Err(e) = tx.send(log).await {
+    for log in logs {
+        if let Err(e) = tx.send(add_partial_stream_id(log, id)).await {
             debug!("Closing {} step: {:?}", tag, e);
             break;
         }
     }
 
-    let mut done_log = Map::with_capacity(1);
-    done_log.insert(
-        MISO_METADATA_FIELD_NAME.to_string(),
-        json!({
-            PARTIAL_STREAM_ID_FIELD_NAME: id,
-            PARTIAL_STREAM_DONE_FIELD_NAME: true,
-        }),
-    );
-
+    let done_log = build_partial_stream_id_done_log(id);
     if let Err(e) = tx.send(done_log).await {
         debug!("Closing {} step: {:?}", tag, e);
     }
