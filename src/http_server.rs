@@ -40,6 +40,7 @@ const DEFAULT_STATS_FETCH_INTERVAL: Duration = Duration::from_secs(60 * 60 * 3);
 const TOKIO_METRICS_UPDATE_INTERVAL: Duration = Duration::from_secs(1);
 const VIEWS_CONNECTOR_NAME: &str = "views";
 const INTERNAL_SERVER_ERROR: &str = "Internal server error";
+const ERROR_LOG_FIELD_NAME: &str = "_error";
 
 pub(crate) type ConnectorsMap = BTreeMap<String, Arc<ConnectorState>>;
 pub(crate) type ViewsMap = BTreeMap<String, Vec<QueryStep>>;
@@ -335,14 +336,15 @@ async fn query_stream(
                     yield Event::default().json_data(log);
                 },
                 Err(e) => {
-                    if let Some(e) = e.downcast_ref::<ConnectorError>() {
+                    let msg = if let Some(e) = e.downcast_ref::<ConnectorError>() {
                         error!("Workflow connector error: {e:?}");
-                        yield Event::default().json_data(e.to_string());
+                        e.to_string()
                     } else {
                         error!("Workflow internal error: {e:?}");
-                        yield Event::default().json_data(INTERNAL_SERVER_ERROR);
-                    }
+                        INTERNAL_SERVER_ERROR.to_string()
+                    };
 
+                    yield Event::default().json_data(json!({ERROR_LOG_FIELD_NAME: msg}));
                     break;
                 }
             }
