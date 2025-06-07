@@ -564,6 +564,10 @@ impl WorkflowStep {
 #[instrument(skip_all)]
 async fn execute_tasks(mut tasks: WorkflowTasks, cancel: Arc<Notify>) -> Result<()> {
     let start = Instant::now();
+    let _guard = scopeguard::guard((), |_| {
+        let duration = start.elapsed();
+        info!(elapsed_time = ?duration, "Workflow execution time");
+    });
 
     loop {
         tokio::select! {
@@ -592,9 +596,6 @@ async fn execute_tasks(mut tasks: WorkflowTasks, cancel: Arc<Notify>) -> Result<
             }
         }
     }
-
-    let duration = start.elapsed();
-    info!(elapsed_time = ?duration, "Workflow execution time");
 
     Ok(())
 }
