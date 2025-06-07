@@ -1,4 +1,5 @@
 use std::{
+    convert::identity,
     hash::BuildHasher,
     sync::Arc,
     time::{Duration, Instant},
@@ -16,9 +17,7 @@ use hashbrown::{DefaultHashBuilder, HashSet};
 use join::{join_streams, Join, JoinType};
 use kinded::Kinded;
 use parking_lot::Mutex;
-use partial_stream::{
-    add_partial_stream_id, build_partial_stream_id_done_log, run_with_partial_stream,
-};
+use partial_stream::execute_partial_stream;
 use project::extend_stream;
 use serde::Deserialize;
 use summarize::{create_summarize_executor, Summarize};
@@ -196,25 +195,8 @@ fn rx_stream(mut rx: mpsc::Receiver<Log>) -> LogStream {
     })
 }
 
-fn rx_stream_notify(mut rx: mpsc::Receiver<Log>, notify: Arc<Notify>) -> LogStream {
-    Box::pin(stream! {
-        while let Some(log) = rx.recv().await {
-            yield log
-        }
-        notify.notify_one();
-    })
-}
-
 fn rx_union_stream(rxs: Vec<mpsc::Receiver<Log>>) -> LogStream {
     let streams: Vec<LogStream> = rxs.into_iter().map(rx_stream).collect();
-    Box::pin(select_all(streams))
-}
-
-fn rx_union_stream_notify(rxs: Vec<mpsc::Receiver<Log>>, notify: Arc<Notify>) -> LogStream {
-    let streams: Vec<LogStream> = rxs
-        .into_iter()
-        .map(|rx| rx_stream_notify(rx, notify.clone()))
-        .collect();
     Box::pin(select_all(streams))
 }
 
@@ -259,7 +241,7 @@ async fn stream_to_tx(mut stream: LogTryStream, tx: mpsc::Sender<Log>, tag: &str
     Ok(())
 }
 
-async fn logs_iter_to_tx<I>(logs: I, tx: mpsc::Sender<Log>, tag: &str)
+pub async fn logs_iter_to_tx<I>(logs: I, tx: mpsc::Sender<Log>, tag: &str)
 where
     I: IntoIterator<Item = Log>,
 {
@@ -268,23 +250,6 @@ where
             debug!("Closing {} step: {:?}", tag, e);
             break;
         }
-    }
-}
-
-async fn partial_logs_iter_to_tx<I>(logs: I, id: usize, tx: mpsc::Sender<Log>, tag: &str)
-where
-    I: IntoIterator<Item = Log>,
-{
-    for log in logs {
-        if let Err(e) = tx.send(add_partial_stream_id(log, id)).await {
-            debug!("Closing {} step: {:?}", tag, e);
-            break;
-        }
-    }
-
-    let done_log = build_partial_stream_id_done_log(id);
-    if let Err(e) = tx.send(done_log).await {
-        debug!("Closing {} step: {:?}", tag, e);
     }
 }
 
@@ -468,24 +433,16 @@ impl WorkflowStep {
                     .await?;
             }
             WorkflowStep::MuxSummarize(config) if partial_stream.is_some() => {
-                let stream_done_notify = Arc::new(Notify::new());
-                let executor = create_summarize_executor(config);
-                let summarize_fut =
-                    executor.execute(rx_union_stream_notify(rxs, stream_done_notify.clone()));
-
-                let logs = run_with_partial_stream(
+                execute_partial_stream(
+                    create_summarize_executor(config),
                     partial_stream.unwrap(),
-                    stream_done_notify,
-                    summarize_fut,
-                    |id| {
-                        let logs = executor.get_partial();
-                        partial_logs_iter_to_tx(logs, id, tx.clone(), "partial-mux-summarize")
-                    },
+                    rxs,
+                    tx,
+                    identity,
+                    "mux summarize",
                 )
                 .await
                 .context("partial mux summarize stream")?;
-
-                logs_iter_to_tx(logs, tx, "summarize").await;
             }
             WorkflowStep::Summarize(config) | WorkflowStep::MuxSummarize(config) => {
                 let executor = create_summarize_executor(config);
@@ -550,24 +507,15 @@ impl WorkflowStep {
                 execute_tasks(tasks, cancel).await?;
             }
             WorkflowStep::MuxCount if partial_stream.is_some() => {
-                let stream_done_notify = Arc::new(Notify::new());
-                let executor = PartialMuxCountExecutor::default();
-                let mux_count_fut =
-                    executor.execute(rx_union_stream_notify(rxs, stream_done_notify.clone()));
-
-                let count = run_with_partial_stream(
+                execute_partial_stream(
+                    Box::new(PartialMuxCountExecutor::default()),
                     partial_stream.unwrap(),
-                    stream_done_notify,
-                    mux_count_fut,
-                    |id| {
-                        let count = executor.get_partial();
-                        let logs = [count_to_log(count); 1];
-                        partial_logs_iter_to_tx(logs, id, tx.clone(), "partial-mux-summarize")
-                    },
+                    rxs,
+                    tx,
+                    |count| vec![count_to_log(count); 1],
+                    "partial mux count",
                 )
-                .await;
-
-                count_to_tx(count, tx).await;
+                .await?;
             }
             WorkflowStep::MuxCount => {
                 let count = mux_count_stream(rx_union_stream(rxs)).await;

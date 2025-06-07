@@ -4,11 +4,15 @@ use std::{
 };
 
 use async_stream::stream;
+use axum::async_trait;
+use color_eyre::Result;
 use futures_core::Stream;
 use futures_util::StreamExt;
 use serde_json::Value;
 
 use crate::log::{Log, LogStream};
+
+use super::partial_stream::PartialStreamExecutor;
 
 const COUNT_LOG_FIELD_NAME: &str = "count";
 
@@ -54,16 +58,19 @@ pub struct PartialMuxCountExecutor {
     count: AtomicU64,
 }
 
-impl PartialMuxCountExecutor {
-    pub async fn execute(&self, input_stream: LogStream) -> u64 {
+#[async_trait]
+impl PartialStreamExecutor for PartialMuxCountExecutor {
+    type Output = u64;
+
+    async fn execute(&self, input_stream: LogStream) -> Result<Self::Output> {
         let mut count_stream = mux_input_to_count_stream(input_stream);
         while let Some(c) = count_stream.next().await {
             self.count.fetch_add(c, atomic::Ordering::Relaxed);
         }
-        self.get_partial()
+        Ok(self.get_partial())
     }
 
-    pub fn get_partial(&self) -> u64 {
+    fn get_partial(&self) -> Self::Output {
         self.count.load(atomic::Ordering::Relaxed)
     }
 }

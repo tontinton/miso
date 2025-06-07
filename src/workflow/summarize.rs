@@ -19,7 +19,10 @@ use tracing::info;
 
 use crate::log::{Log, LogStream};
 
-use super::{serde_json_utils::partial_cmp_values, sortable_value::SortableValue};
+use super::{
+    partial_stream::PartialStreamExecutor, serde_json_utils::partial_cmp_values,
+    sortable_value::SortableValue,
+};
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "snake_case")]
@@ -217,12 +220,6 @@ fn create_aggregate(aggregation: Aggregation) -> Arc<dyn Aggregate> {
     }
 }
 
-#[async_trait]
-pub trait SummarizeExecutor {
-    async fn execute(&self, input_stream: LogStream) -> Result<Vec<Log>>;
-    fn get_partial(&self) -> Vec<Log>;
-}
-
 /// Executes summarize without grouping, only aggregations.
 pub struct SummarizeAllExecutor {
     output_fields: Vec<String>,
@@ -241,8 +238,10 @@ impl SummarizeAllExecutor {
 }
 
 #[async_trait]
-impl SummarizeExecutor for SummarizeAllExecutor {
-    async fn execute(&self, mut input_stream: LogStream) -> Result<Vec<Log>> {
+impl PartialStreamExecutor for SummarizeAllExecutor {
+    type Output = Vec<Log>;
+
+    async fn execute(&self, mut input_stream: LogStream) -> Result<Self::Output> {
         while let Some(log) = input_stream.next().await {
             for aggregate in &self.aggregates {
                 aggregate.input(&log);
@@ -251,7 +250,7 @@ impl SummarizeExecutor for SummarizeAllExecutor {
         Ok(self.get_partial())
     }
 
-    fn get_partial(&self) -> Vec<Log> {
+    fn get_partial(&self) -> Self::Output {
         let mut log = Log::new();
         for (output_field, aggregate) in self
             .output_fields
@@ -296,8 +295,10 @@ impl SummarizeGroupByExecutor {
 }
 
 #[async_trait]
-impl SummarizeExecutor for SummarizeGroupByExecutor {
-    async fn execute(&self, mut input_stream: LogStream) -> Result<Vec<Log>> {
+impl PartialStreamExecutor for SummarizeGroupByExecutor {
+    type Output = Vec<Log>;
+
+    async fn execute(&self, mut input_stream: LogStream) -> Result<Self::Output> {
         let agg_fields: BTreeSet<String> = self
             .aggregations
             .iter()
@@ -383,7 +384,7 @@ impl SummarizeExecutor for SummarizeGroupByExecutor {
         Ok(logs)
     }
 
-    fn get_partial(&self) -> Vec<Log> {
+    fn get_partial(&self) -> Self::Output {
         let guard = self.group_aggregates.lock();
 
         let mut logs = Vec::with_capacity(guard.len());
@@ -410,7 +411,9 @@ impl SummarizeExecutor for SummarizeGroupByExecutor {
     }
 }
 
-pub fn create_summarize_executor(config: Summarize) -> Box<dyn SummarizeExecutor + Send + Sync> {
+pub fn create_summarize_executor(
+    config: Summarize,
+) -> Box<dyn PartialStreamExecutor<Output = Vec<Log>> + Send + Sync> {
     info!("{config:?}");
 
     let (output_fields, aggregations): (Vec<String>, Vec<Aggregation>) =
