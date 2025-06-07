@@ -9,8 +9,7 @@ pub struct ReorderStepsBeforeMux;
 
 impl Optimization for ReorderStepsBeforeMux {
     fn pattern(&self) -> Pattern {
-        // No mux summarize on purpose.
-        pattern!([MuxCount MuxLimit MuxTopN] [Filter Project Extend])
+        pattern!([MuxCount MuxLimit MuxTopN] [Filter Extend])
     }
 
     fn apply(&self, steps: &[WorkflowStep], _groups: &[Group]) -> Option<Vec<WorkflowStep>> {
