@@ -531,13 +531,10 @@ impl WorkflowStep {
     }
 
     #[inline]
-    fn is_mux(&self) -> bool {
+    fn supports_partial_stream(&self) -> bool {
         matches!(
             self,
-            WorkflowStep::MuxTopN(..)
-                | WorkflowStep::MuxSummarize(..)
-                | WorkflowStep::MuxLimit(..)
-                | WorkflowStep::MuxCount
+            WorkflowStep::MuxSummarize(..) | WorkflowStep::MuxCount
         )
     }
 
@@ -624,7 +621,7 @@ impl Workflow {
         let mut partial_stream_step_idx = None;
 
         for (i, step) in self.steps.iter().enumerate() {
-            if !step.is_mux() {
+            if !step.supports_partial_stream() {
                 continue;
             }
 
