@@ -104,6 +104,8 @@ pub enum QueryResponse {
 
 #[derive(Debug, Error)]
 pub enum ConnectorError {
+    #[error("HTTP failed: {0}")]
+    Http(#[source] reqwest::Error),
     #[error("Server responded with status code {0}: {1}")]
     ServerResp(u16, String),
 }

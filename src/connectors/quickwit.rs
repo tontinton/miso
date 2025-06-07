@@ -8,10 +8,10 @@ use std::{
 
 use async_stream::try_stream;
 use axum::async_trait;
-use color_eyre::eyre::{bail, Context, Result};
+use color_eyre::eyre::{bail, eyre, Context, Result};
 use futures_util::stream;
 use parking_lot::RwLock;
-use reqwest::{Client, Response};
+use reqwest::{Client, RequestBuilder, Response};
 use serde::{ser::SerializeMap, Deserialize, Serialize, Serializer};
 use serde_json::{json, to_string, Value};
 use tracing::{debug, error, info, instrument};
@@ -522,6 +522,13 @@ async fn response_to_text(response: Response) -> Result<String> {
     response.text().await.context("text from response")
 }
 
+async fn send_request(req: RequestBuilder) -> Result<String> {
+    match req.send().await {
+        Ok(response) => response_to_text(response).await,
+        Err(e) => Err(eyre!(ConnectorError::Http(e))),
+    }
+}
+
 #[instrument(skip(query), name = "GET and parse quickwit begin search results")]
 async fn begin_search(
     client: &Client,
@@ -544,8 +551,7 @@ async fn begin_search(
         req = req.json(&query);
     }
 
-    let response = req.send().await.context("http request")?;
-    let text = response_to_text(response).await?;
+    let text = send_request(req).await?;
     let data: SearchResponse = serde_json::from_str(&text).context("parse response")?;
     Ok((
         data.hits.hits.into_iter().map(|x| x.source).collect(),
@@ -562,17 +568,12 @@ async fn continue_search(
 ) -> Result<(Vec<Log>, String)> {
     let url = format!("{}/api/v1/_elastic/_search/scroll", base_url);
 
-    let response = client
-        .get(&url)
-        .json(&ContinueSearchRequest {
-            scroll_id,
-            scroll: format!("{}ms", scroll_timeout.as_millis()),
-        })
-        .send()
-        .await
-        .context("http request")?;
+    let req = client.get(&url).json(&ContinueSearchRequest {
+        scroll_id,
+        scroll: format!("{}ms", scroll_timeout.as_millis()),
+    });
 
-    let text = response_to_text(response).await?;
+    let text = send_request(req).await?;
     let data: SearchResponse = serde_json::from_str(&text)?;
     Ok((
         data.hits.hits.into_iter().map(|x| x.source).collect(),
@@ -589,8 +590,7 @@ async fn count(client: &Client, base_url: &str, index: &str, query: Option<Value
         req = req.json(&query);
     }
 
-    let response = req.send().await.context("http request")?;
-    let text = response_to_text(response).await?;
+    let text = send_request(req).await?;
     let data: CountResponse = serde_json::from_str(&text)?;
     Ok(data.count)
 }
@@ -612,16 +612,14 @@ async fn search_aggregation(
         req = req.json(&query);
     }
 
-    let response = req.send().await.context("http request")?;
-    let text = response_to_text(response).await?;
+    let text = send_request(req).await?;
     serde_json::from_str(&text).context("parse response")
 }
 
 #[instrument(name = "GET and parse quickwit indexes")]
 async fn get_indexes(client: &Client, base_url: &str) -> Result<QuickwitIndexes> {
     let url = format!("{}/api/v1/indexes", base_url);
-    let response = client.get(&url).send().await.context("http request")?;
-    let text = response_to_text(response).await?;
+    let text = send_request(client.get(&url)).await?;
     let data: Vec<IndexResponse> = serde_json::from_str(&text)?;
     Ok(data
         .into_iter()
