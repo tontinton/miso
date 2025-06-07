@@ -4,6 +4,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fmt,
     sync::Arc,
+    time::Duration,
 };
 
 use async_stream::try_stream;
@@ -16,7 +17,7 @@ use color_eyre::{
 use ctor::ctor;
 use futures_util::TryStreamExt;
 use serde::{Deserialize, Serialize};
-use tokio::sync::Notify;
+use tokio::{sync::Notify, time::sleep};
 
 use crate::{
     connectors::{
@@ -30,6 +31,8 @@ use crate::{
 };
 
 use super::filter::FilterAst;
+
+const QUERY_SLEEP_PRE_CANCEL_TIME: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct TestSplit {}
@@ -63,13 +66,20 @@ struct TestConnector {
 
     #[serde(skip_serializing, skip_deserializing)]
     apply_filter_tx: Option<std::sync::mpsc::Sender<FilterAst>>,
+
+    #[serde(skip_serializing, skip_deserializing)]
+    query_sleep_pre_cancel: bool,
 }
 
 impl TestConnector {
-    fn new(apply_filter_tx: Option<std::sync::mpsc::Sender<FilterAst>>) -> Self {
+    fn new(
+        apply_filter_tx: Option<std::sync::mpsc::Sender<FilterAst>>,
+        query_sleep_pre_cancel: bool,
+    ) -> Self {
         Self {
             collections: BTreeMap::new(),
             apply_filter_tx,
+            query_sleep_pre_cancel,
         }
     }
 
@@ -99,6 +109,10 @@ impl Connector for TestConnector {
         _handle: &dyn QueryHandle,
         _split: Option<&dyn Split>,
     ) -> Result<QueryResponse> {
+        if self.query_sleep_pre_cancel {
+            sleep(QUERY_SLEEP_PRE_CANCEL_TIME).await;
+        }
+
         let logs = self
             .collections
             .get(collection)
@@ -166,24 +180,12 @@ fn init() {
     tracing_subscriber::fmt::init();
 }
 
-#[tokio::test]
-async fn cancel() -> Result<()> {
-    let workflow = Workflow::new(vec![]);
-
-    let cancel = Arc::new(Notify::new());
-    cancel.notify_one();
-
-    let mut logs_stream = workflow.execute(cancel).context("workflow execute")?;
-    assert!(matches!(logs_stream.try_next().await, Ok(None)));
-
-    Ok(())
-}
-
 async fn check_multi_connectors(
     query: &str,
     input: BTreeMap<&str, BTreeMap<&str, &str>>,
     views_raw: BTreeMap<&str, &str>,
     expected: &str,
+    should_cancel: bool,
     apply_filter_tx: Option<std::sync::mpsc::Sender<FilterAst>>,
 ) -> Result<()> {
     let expected_logs = {
@@ -203,7 +205,7 @@ async fn check_multi_connectors(
                 serde_json::from_str(raw_logs).context("parse input logs from json")?;
             test_connectors
                 .entry(connector_name.to_string())
-                .or_insert_with(|| TestConnector::new(apply_filter_tx.clone()))
+                .or_insert_with(|| TestConnector::new(apply_filter_tx.clone(), should_cancel))
                 .insert(collection.to_string(), input_logs);
         }
     }
@@ -244,6 +246,9 @@ async fn check_multi_connectors(
     let no_optimizations_workflow = Workflow::new(steps);
 
     let cancel = Arc::new(Notify::new());
+    if should_cancel {
+        cancel.notify_one();
+    }
     let mut logs_stream = no_optimizations_workflow
         .execute(cancel.clone())
         .context("non optimized workflow execute")?;
@@ -260,6 +265,9 @@ async fn check_multi_connectors(
     );
 
     let cancel = Arc::new(Notify::new());
+    if should_cancel {
+        cancel.notify_one();
+    }
     let mut logs_stream = optimizations_workflow
         .execute(cancel.clone())
         .context("optimized workflow execute")?;
@@ -284,6 +292,7 @@ async fn check_multi_collection(
     input: BTreeMap<&str, &str>,
     views: Option<BTreeMap<&str, &str>>,
     expect: &str,
+    cancel: Option<bool>,
     apply_filter_tx: Option<std::sync::mpsc::Sender<FilterAst>>,
 ) -> Result<()> {
     check_multi_connectors(
@@ -291,6 +300,7 @@ async fn check_multi_collection(
         btreemap! {"test" => input},
         views.unwrap_or_default(),
         expect,
+        cancel.unwrap_or(false),
         apply_filter_tx,
     )
     .await
@@ -307,10 +317,25 @@ async fn check(query: &str, input: &str, expected: &str) -> Result<()> {
         .await
 }
 
+async fn check_cancel(query: &str, input: &str) -> Result<()> {
+    check_multi_collection()
+        .query(query)
+        .input(btreemap! {"c" => input})
+        .expect("[]")
+        .cancel(true)
+        .call()
+        .await
+}
+
 #[tokio::test]
 async fn scan() -> Result<()> {
     let logs = r#"[{"hello": "world"}]"#;
     check(r#"[{"scan": ["test", "c"]}]"#, logs, logs).await
+}
+
+#[tokio::test]
+async fn cancel() -> Result<()> {
+    check_cancel(r#"[{"scan": ["test", "c"]}]"#, r#"[{"hello": "world"}]"#).await
 }
 
 #[tokio::test]
