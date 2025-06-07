@@ -25,7 +25,7 @@ use uuid::Uuid;
 
 use crate::{
     args::Args,
-    connectors::{quickwit::QuickwitConnector, Connector, ConnectorState},
+    connectors::{quickwit::QuickwitConnector, Connector, ConnectorError, ConnectorState},
     humantime_utils::deserialize_duration,
     optimizations::Optimizer,
     run_at_interval::run_at_interval,
@@ -335,8 +335,14 @@ async fn query_stream(
                     yield Event::default().json_data(log);
                 },
                 Err(e) => {
-                    error!("Workflow error: {e:?}");
-                    yield Event::default().json_data(INTERNAL_SERVER_ERROR);
+                    if let Some(e) = e.downcast_ref::<ConnectorError>() {
+                        error!("Workflow connector error: {e:?}");
+                        yield Event::default().json_data(e.to_string());
+                    } else {
+                        error!("Workflow internal error: {e:?}");
+                        yield Event::default().json_data(INTERNAL_SERVER_ERROR);
+                    }
+
                     break;
                 }
             }

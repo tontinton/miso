@@ -13,6 +13,7 @@ use axum::async_trait;
 use color_eyre::eyre::Result;
 use parking_lot::Mutex;
 use stats::{ConnectorStats, IntervalStatsCollector};
+use thiserror::Error;
 use tokio::time::sleep;
 
 use crate::{
@@ -99,6 +100,12 @@ impl ConnectorState {
 pub enum QueryResponse {
     Logs(LogTryStream),
     Count(u64),
+}
+
+#[derive(Debug, Error)]
+pub enum ConnectorError {
+    #[error("Server responded with status code {0}: {1}")]
+    ServerResp(u16, String),
 }
 
 #[typetag::serde(tag = "type")]
