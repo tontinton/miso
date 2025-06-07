@@ -31,8 +31,8 @@ use crate::{
     run_at_interval::run_at_interval,
     shutdown_future::ShutdownFuture,
     workflow::{
-        filter::FilterAst, join::Join, project::ProjectField, sort::Sort, summarize::Summarize,
-        PartialStream, Scan, Workflow, WorkflowStep,
+        filter::FilterAst, join::Join, partial_stream::PartialStream, project::ProjectField,
+        sort::Sort, summarize::Summarize, Scan, Workflow, WorkflowStep,
     },
 };
 

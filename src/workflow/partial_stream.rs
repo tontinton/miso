@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use async_stream::stream;
 use axum::async_trait;
@@ -8,6 +8,7 @@ use futures_util::{
     pin_mut,
     stream::select_all,
 };
+use serde::Deserialize;
 use serde_json::{json, Map, Value};
 use tokio::{
     spawn,
@@ -17,14 +18,29 @@ use tokio::{
 use tracing::debug;
 
 use crate::{
+    humantime_utils::deserialize_duration,
     log::{Log, LogStream},
-    workflow::logs_iter_to_tx,
 };
 
-use super::{PartialStream, MISO_METADATA_FIELD_NAME};
+use super::{logs_iter_to_tx, MISO_METADATA_FIELD_NAME};
 
 const PARTIAL_STREAM_ID_FIELD_NAME: &str = "id";
 const PARTIAL_STREAM_DONE_FIELD_NAME: &str = "done";
+
+fn default_debounce() -> Duration {
+    Duration::from_secs(1)
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct PartialStream {
+    /// If a split is currently streaming partial results, and another finishes soon after (less
+    /// than the debounce), the partial results of the second iteration won't be sent.
+    #[serde(
+        default = "default_debounce",
+        deserialize_with = "deserialize_duration"
+    )]
+    debounce: Duration,
+}
 
 #[async_trait]
 pub trait PartialStreamExecutor {

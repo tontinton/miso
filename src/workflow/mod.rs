@@ -17,9 +17,7 @@ use hashbrown::{DefaultHashBuilder, HashSet};
 use join::{join_streams, Join, JoinType};
 use kinded::Kinded;
 use parking_lot::Mutex;
-use partial_stream::execute_partial_stream;
 use project::extend_stream;
-use serde::Deserialize;
 use summarize::{create_summarize_executor, Summarize};
 use tokio::{
     spawn,
@@ -35,10 +33,13 @@ use crate::{
         stats::{ConnectorStats, FieldStats},
         Connector, ConnectorState, QueryHandle, QueryResponse, Split,
     },
-    humantime_utils::deserialize_duration,
     log::{Log, LogStream, LogTryStream},
     workflow::{
-        filter::filter_stream, limit::limit_stream, project::project_stream, sort::sort_stream,
+        filter::filter_stream,
+        limit::limit_stream,
+        partial_stream::{execute_partial_stream, PartialStream},
+        project::project_stream,
+        sort::sort_stream,
     },
 };
 
@@ -50,7 +51,7 @@ pub mod filter;
 mod interpreter;
 pub mod join;
 pub mod limit;
-mod partial_stream;
+pub mod partial_stream;
 pub mod project;
 mod serde_json_utils;
 pub mod sort;
@@ -65,21 +66,6 @@ const MISO_METADATA_FIELD_NAME: &str = "_miso";
 const DYNAMIC_FILTER_TIMEOUT: Duration = Duration::from_secs(30);
 
 type WorkflowTasks = FuturesUnordered<JoinHandle<Result<()>>>;
-
-fn default_debounce() -> Duration {
-    Duration::from_secs(1)
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct PartialStream {
-    /// If a split is currently streaming partial results, and another finishes soon after (less
-    /// than the debounce), the partial results of the second iteration won't be sent.
-    #[serde(
-        default = "default_debounce",
-        deserialize_with = "deserialize_duration"
-    )]
-    debounce: Duration,
-}
 
 #[derive(Clone, Debug)]
 pub struct Scan {
