@@ -11,7 +11,7 @@ use axum::async_trait;
 use color_eyre::eyre::{bail, Context, Result};
 use futures_util::stream;
 use parking_lot::RwLock;
-use reqwest::Client;
+use reqwest::{Client, Response};
 use serde::{ser::SerializeMap, Deserialize, Serialize, Serializer};
 use serde_json::{json, to_string, Value};
 use tracing::{debug, error, info, instrument};
@@ -30,7 +30,7 @@ use crate::{
     },
 };
 
-use super::{Connector, QueryHandle, QueryResponse, Split};
+use super::{Connector, ConnectorError, QueryHandle, QueryResponse, Split};
 
 static AGGREGATION_RESULTS_NAME: &str = "summarize";
 
@@ -513,6 +513,15 @@ fn filter_ast_to_query(ast: &FilterAst) -> Option<Value> {
     })
 }
 
+async fn response_to_text(response: Response) -> Result<String> {
+    let status = response.status();
+    if !status.is_success() {
+        let text = response.text().await.unwrap_or_default();
+        bail!(ConnectorError::ServerResp(status.as_u16(), text));
+    }
+    response.text().await.context("text from response")
+}
+
 #[instrument(skip(query), name = "GET and parse quickwit begin search results")]
 async fn begin_search(
     client: &Client,
@@ -536,15 +545,7 @@ async fn begin_search(
     }
 
     let response = req.send().await.context("http request")?;
-    let status = response.status();
-    if !status.is_success() {
-        if let Ok(text) = response.text().await {
-            bail!("GET {} failed with status {}: {}", &url, status, text);
-        } else {
-            bail!("GET {} failed with status {}", &url, status);
-        }
-    }
-    let text = response.text().await.context("text from response")?;
+    let text = response_to_text(response).await?;
     let data: SearchResponse = serde_json::from_str(&text).context("parse response")?;
     Ok((
         data.hits.hits.into_iter().map(|x| x.source).collect(),
@@ -560,7 +561,7 @@ async fn continue_search(
     scroll_timeout: &Duration,
 ) -> Result<(Vec<Log>, String)> {
     let url = format!("{}/api/v1/_elastic/_search/scroll", base_url);
-    let client = Client::new();
+
     let response = client
         .get(&url)
         .json(&ContinueSearchRequest {
@@ -570,10 +571,8 @@ async fn continue_search(
         .send()
         .await
         .context("http request")?;
-    if !response.status().is_success() {
-        bail!("GET {} failed with status: {}", &url, response.status());
-    }
-    let text = response.text().await.context("text from response")?;
+
+    let text = response_to_text(response).await?;
     let data: SearchResponse = serde_json::from_str(&text)?;
     Ok((
         data.hits.hits.into_iter().map(|x| x.source).collect(),
@@ -591,15 +590,7 @@ async fn count(client: &Client, base_url: &str, index: &str, query: Option<Value
     }
 
     let response = req.send().await.context("http request")?;
-    let status = response.status();
-    if !status.is_success() {
-        if let Ok(text) = response.text().await {
-            bail!("GET {} failed with status {}: {}", &url, status, text);
-        } else {
-            bail!("GET {} failed with status {}", &url, status);
-        }
-    }
-    let text = response.text().await.context("text from response")?;
+    let text = response_to_text(response).await?;
     let data: CountResponse = serde_json::from_str(&text)?;
     Ok(data.count)
 }
@@ -622,15 +613,7 @@ async fn search_aggregation(
     }
 
     let response = req.send().await.context("http request")?;
-    let status = response.status();
-    if !status.is_success() {
-        if let Ok(text) = response.text().await {
-            bail!("GET {} failed with status {}: {}", &url, status, text);
-        } else {
-            bail!("GET {} failed with status {}", &url, status);
-        }
-    }
-    let text = response.text().await.context("get text from response")?;
+    let text = response_to_text(response).await?;
     serde_json::from_str(&text).context("parse response")
 }
 
@@ -638,10 +621,7 @@ async fn search_aggregation(
 async fn get_indexes(client: &Client, base_url: &str) -> Result<QuickwitIndexes> {
     let url = format!("{}/api/v1/indexes", base_url);
     let response = client.get(&url).send().await.context("http request")?;
-    if !response.status().is_success() {
-        bail!("GET {} failed with status: {}", &url, response.status());
-    }
-    let text = response.text().await.context("text from response")?;
+    let text = response_to_text(response).await?;
     let data: Vec<IndexResponse> = serde_json::from_str(&text)?;
     Ok(data
         .into_iter()
