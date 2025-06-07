@@ -15,7 +15,7 @@ use color_eyre::{
 };
 use ctor::ctor;
 use futures_util::TryStreamExt;
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Serialize};
 use tokio::sync::Notify;
 
 use crate::{
@@ -57,11 +57,11 @@ impl fmt::Display for TestHandle {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 struct TestHandle {}
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 struct TestConnector {
     collections: BTreeMap<String, Vec<Log>>,
 
-    #[serde(skip_serializing)]
+    #[serde(skip_serializing, skip_deserializing)]
     apply_filter_tx: Option<std::sync::mpsc::Sender<FilterAst>>,
 }
 
@@ -75,25 +75,6 @@ impl TestConnector {
 
     fn insert(&mut self, collection: String, logs: Vec<Log>) {
         self.collections.insert(collection, logs);
-    }
-}
-
-impl<'de> Deserialize<'de> for TestConnector {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        struct Helper {
-            collections: BTreeMap<String, Vec<Log>>,
-        }
-
-        let helper = Helper::deserialize(deserializer)?;
-
-        Ok(TestConnector {
-            collections: helper.collections,
-            apply_filter_tx: None,
-        })
     }
 }
 
