@@ -1,8 +1,12 @@
+use std::{future::Future, sync::Arc};
+
+use futures_util::{future::join_all, pin_mut};
 use serde_json::{json, Map, Value};
+use tokio::{spawn, sync::Notify, time::sleep};
 
 use crate::log::Log;
 
-use super::MISO_METADATA_FIELD_NAME;
+use super::{PartialStream, MISO_METADATA_FIELD_NAME};
 
 const PARTIAL_STREAM_ID_FIELD_NAME: &str = "id";
 const PARTIAL_STREAM_DONE_FIELD_NAME: &str = "done";
@@ -43,4 +47,45 @@ pub fn get_partial_id(log: &Log) -> Option<(usize, bool)> {
         .unwrap_or(false);
 
     Some((id, done))
+}
+
+pub async fn run_with_partial_stream<T, StreamFut, PartialFn, PartialStreamFut>(
+    partial_stream: PartialStream,
+    stream_done_notify: Arc<Notify>,
+    full_stream_fut: StreamFut,
+    mut create_partial_task: PartialFn,
+) -> T
+where
+    StreamFut: Future<Output = T>,
+    PartialFn: FnMut(usize) -> PartialStreamFut,
+    PartialStreamFut: Future<Output = ()> + Send + 'static,
+{
+    pin_mut!(full_stream_fut);
+
+    let debounce = partial_stream.debounce;
+
+    let mut partial_sender_tasks = Vec::new();
+    let mut partial_send_id = 0;
+
+    let result = loop {
+        tokio::select! {
+            result = &mut full_stream_fut => break result,
+            () = stream_done_notify.notified() => {},
+        }
+
+        let sleep_fut = sleep(debounce);
+
+        let task = create_partial_task(partial_send_id);
+        partial_sender_tasks.push(spawn(task));
+        partial_send_id += 1;
+
+        tokio::select! {
+            result = &mut full_stream_fut => break result,
+            () = sleep_fut => {}
+        }
+    };
+
+    join_all(partial_sender_tasks).await;
+
+    result
 }

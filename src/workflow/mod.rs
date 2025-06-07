@@ -6,9 +6,9 @@ use std::{
 
 use async_stream::{stream, try_stream};
 use color_eyre::eyre::{Context, Result};
+use count::{count_stream, count_to_log, mux_count_stream, PartialMuxCountExecutor};
 use futures_util::{
-    future::{join, join_all, try_join_all},
-    pin_mut,
+    future::try_join_all,
     stream::{self, select_all, FuturesUnordered},
     StreamExt,
 };
@@ -16,16 +16,17 @@ use hashbrown::{DefaultHashBuilder, HashSet};
 use join::{join_streams, Join, JoinType};
 use kinded::Kinded;
 use parking_lot::Mutex;
-use partial_stream::{add_partial_stream_id, build_partial_stream_id_done_log};
+use partial_stream::{
+    add_partial_stream_id, build_partial_stream_id_done_log, run_with_partial_stream,
+};
 use project::extend_stream;
 use serde::Deserialize;
-use serde_json::Value;
 use summarize::{create_summarize_executor, Summarize};
 use tokio::{
     spawn,
     sync::{mpsc, watch, Notify},
     task::JoinHandle,
-    time::{sleep, timeout},
+    time::timeout,
 };
 use topn::{topn_stream, SORT_CONFIG};
 use tracing::{debug, error, info, instrument};
@@ -44,6 +45,7 @@ use crate::{
 
 use self::{filter::FilterAst, project::ProjectField, sort::Sort};
 
+mod count;
 mod display;
 pub mod filter;
 mod interpreter;
@@ -61,7 +63,6 @@ pub mod topn;
 mod tests;
 
 const MISO_METADATA_FIELD_NAME: &str = "_miso";
-const COUNT_LOG_FIELD_NAME: &str = "count";
 const DYNAMIC_FILTER_TIMEOUT: Duration = Duration::from_secs(30);
 
 type WorkflowTasks = FuturesUnordered<JoinHandle<Result<()>>>;
@@ -244,11 +245,8 @@ fn stream_to_dynamic_filter_tx_stream(
 }
 
 async fn count_to_tx(count: u64, tx: mpsc::Sender<Log>) {
-    let mut count_log = Log::new();
-    count_log.insert(COUNT_LOG_FIELD_NAME.into(), Value::from(count));
-    if let Err(e) = tx.send(count_log).await {
-        debug!("Not sending count: {:?}", e);
-    }
+    let logs = [count_to_log(count); 1];
+    logs_iter_to_tx(logs, tx, "count").await;
 }
 
 async fn stream_to_tx(mut stream: LogTryStream, tx: mpsc::Sender<Log>, tag: &str) -> Result<()> {
@@ -470,46 +468,24 @@ impl WorkflowStep {
                     .await?;
             }
             WorkflowStep::MuxSummarize(config) if partial_stream.is_some() => {
-                let executor = create_summarize_executor(config);
                 let stream_done_notify = Arc::new(Notify::new());
-                let debounce = partial_stream.unwrap().debounce;
-
+                let executor = create_summarize_executor(config);
                 let summarize_fut =
                     executor.execute(rx_union_stream_notify(rxs, stream_done_notify.clone()));
-                pin_mut!(summarize_fut);
 
-                let mut partial_sender_tasks = Vec::new();
-                let mut partial_send_id = 0;
-
-                let logs = loop {
-                    tokio::select! {
-                        logs = &mut summarize_fut => break logs,
-                        () = stream_done_notify.notified() => {},
-                    }
-
-                    let sleep_fut = sleep(debounce);
-
-                    let logs = executor.get_partial();
-                    partial_sender_tasks.push(spawn(partial_logs_iter_to_tx(
-                        logs,
-                        partial_send_id,
-                        tx.clone(),
-                        "partial-summarize",
-                    )));
-                    partial_send_id += 1;
-
-                    tokio::select! {
-                        logs = &mut summarize_fut => break logs,
-                        () = sleep_fut => {}
-                    }
-                }
-                .context("debounce mux summarize stream")?;
-
-                join(
-                    join_all(partial_sender_tasks),
-                    logs_iter_to_tx(logs, tx, "summarize"),
+                let logs = run_with_partial_stream(
+                    partial_stream.unwrap(),
+                    stream_done_notify,
+                    summarize_fut,
+                    |id| {
+                        let logs = executor.get_partial();
+                        partial_logs_iter_to_tx(logs, id, tx.clone(), "partial-mux-summarize")
+                    },
                 )
-                .await;
+                .await
+                .context("partial mux summarize stream")?;
+
+                logs_iter_to_tx(logs, tx, "summarize").await;
             }
             WorkflowStep::Summarize(config) | WorkflowStep::MuxSummarize(config) => {
                 let executor = create_summarize_executor(config);
@@ -573,24 +549,32 @@ impl WorkflowStep {
 
                 execute_tasks(tasks, cancel).await?;
             }
-            WorkflowStep::Count => {
-                let mut stream = rx_union_stream(rxs);
-                let mut count = 0;
-                while stream.next().await.is_some() {
-                    count += 1;
-                }
+            WorkflowStep::MuxCount if partial_stream.is_some() => {
+                let stream_done_notify = Arc::new(Notify::new());
+                let executor = PartialMuxCountExecutor::default();
+                let mux_count_fut =
+                    executor.execute(rx_union_stream_notify(rxs, stream_done_notify.clone()));
+
+                let count = run_with_partial_stream(
+                    partial_stream.unwrap(),
+                    stream_done_notify,
+                    mux_count_fut,
+                    |id| {
+                        let count = executor.get_partial();
+                        let logs = [count_to_log(count); 1];
+                        partial_logs_iter_to_tx(logs, id, tx.clone(), "partial-mux-summarize")
+                    },
+                )
+                .await;
+
                 count_to_tx(count, tx).await;
             }
             WorkflowStep::MuxCount => {
-                let mut stream = rx_union_stream(rxs);
-                let mut count = 0;
-                while let Some(mut log) = stream.next().await {
-                    if let Some(value) = log.remove(COUNT_LOG_FIELD_NAME) {
-                        if let Some(c) = value.as_u64() {
-                            count += c;
-                        }
-                    }
-                }
+                let count = mux_count_stream(rx_union_stream(rxs)).await;
+                count_to_tx(count, tx).await;
+            }
+            WorkflowStep::Count => {
+                let count = count_stream(rx_union_stream(rxs)).await;
                 count_to_tx(count, tx).await;
             }
         }
