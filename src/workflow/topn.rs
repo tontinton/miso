@@ -1,14 +1,17 @@
 use std::{cmp::Ordering, collections::BinaryHeap};
 
 use async_stream::try_stream;
+use axum::async_trait;
+use color_eyre::Result;
 use futures_util::StreamExt;
 use hashbrown::HashMap;
+use parking_lot::Mutex;
 use tokio::task_local;
 
 use crate::log::{Log, LogStream, LogTryStream};
 
 use super::{
-    partial_stream::get_partial_id,
+    partial_stream::{get_partial_id, PartialStreamExecutor},
     sort::{cmp_logs, Sort, SortConfig},
 };
 
@@ -18,7 +21,7 @@ task_local! {
 
 /// A wrapper to be able to use Log in a BinaryHeap by reading the comparison configuration from a
 /// task local variable.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct SortableLog(Log);
 
 impl Ord for SortableLog {
@@ -44,6 +47,7 @@ impl PartialEq for SortableLog {
     }
 }
 
+#[derive(Clone, Default)]
 struct TopNState {
     limit: usize,
     heap: BinaryHeap<SortableLog>,
@@ -115,4 +119,36 @@ pub async fn topn_stream(
     });
 
     (stream, SortConfig::new(sorts))
+}
+
+pub struct PartialTopNExecutor {
+    // Assuming there cannot be a partial stream into a partial top-n stream, so only need to track
+    // the top-n state of one stream (no passthrough).
+    state: Mutex<TopNState>,
+}
+
+impl PartialTopNExecutor {
+    /// Same as topn_stream, the caller must scope the returned config via SORT_CONFIG.scope().
+    pub fn new(sorts: Vec<Sort>, limit: u32) -> (Self, SortConfig) {
+        let state = Mutex::new(TopNState::new(limit as usize));
+        (Self { state }, SortConfig::new(sorts))
+    }
+}
+
+#[async_trait]
+impl PartialStreamExecutor for PartialTopNExecutor {
+    type Output = Vec<Log>;
+
+    async fn execute(&self, mut input_stream: LogStream) -> Result<Self::Output> {
+        while let Some(log) = input_stream.next().await {
+            self.state.lock().push(log);
+        }
+        let state = std::mem::take(&mut *self.state.lock());
+        return Ok(state.into_sorted_iter().collect());
+    }
+
+    fn get_partial(&self) -> Self::Output {
+        let state = self.state.lock().clone();
+        state.into_sorted_iter().collect()
+    }
 }

@@ -27,7 +27,7 @@ use tokio::{
     task::JoinHandle,
     time::timeout,
 };
-use topn::{topn_stream, SORT_CONFIG};
+use topn::{topn_stream, PartialTopNExecutor, SORT_CONFIG};
 use tracing::{debug, error, info, instrument};
 
 use crate::{
@@ -426,6 +426,18 @@ impl WorkflowStep {
                 let logs = sort_stream(sorts, rx_union_stream(rxs)).await?;
                 logs_iter_to_tx(logs, tx, "sort").await;
             }
+            WorkflowStep::MuxTopN(sorts, limit) if partial_stream.is_some() => {
+                let (executor, config) = PartialTopNExecutor::new(sorts, limit);
+                let stream_fut = execute_partial_stream(
+                    Box::new(executor),
+                    partial_stream.unwrap(),
+                    rxs,
+                    tx,
+                    identity,
+                    "partial mux top-n",
+                );
+                SORT_CONFIG.scope(config, stream_fut).await?;
+            }
             WorkflowStep::TopN(sorts, limit) | WorkflowStep::MuxTopN(sorts, limit) => {
                 let (stream, config) = topn_stream(sorts, limit, rx_union_stream(rxs)).await;
                 SORT_CONFIG
@@ -548,15 +560,15 @@ impl WorkflowStep {
             | Self::MuxSummarize(..)
             | Self::Count
             | Self::MuxCount
-            | Self::Union(..) => false,
+            | Self::Union(..)
+            | Self::MuxTopN(..) => false,
 
             Self::Filter(..)
             | Self::Extend(..)
             | Self::Limit(..)
             | Self::MuxLimit(..)
             | Self::Sort(..)
-            | Self::TopN(..)
-            | Self::MuxTopN(..) => true,
+            | Self::TopN(..) => true,
         }
     }
 }
