@@ -1137,7 +1137,9 @@ impl Connector for QuickwitConnector {
             current_agg = current_agg.get_mut("aggs").unwrap().get_mut(&name).unwrap();
         }
 
-        current_agg["aggs"] = json!(inner_aggs);
+        if !inner_aggs.is_empty() {
+            current_agg["aggs"] = json!(inner_aggs);
+        }
 
         Some(Box::new(handle.with_summarize(
             aggs,
