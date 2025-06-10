@@ -1,8 +1,12 @@
 use color_eyre::eyre::{Context, Result};
+use mimalloc::MiMalloc;
 use tokio::{net::TcpListener, signal};
 use tracing::{debug, info};
 
 use miso::{args::parse_args, http_server::create_axum_app};
+
+#[global_allocator]
+static GLOBAL: MiMalloc = MiMalloc;
 
 async fn shutdown_signal() {
     let ctrl_c = async {

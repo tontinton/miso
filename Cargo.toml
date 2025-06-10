@@ -28,6 +28,7 @@ hashbrown = "0.15.3"
 humantime = "2.1.0"
 itertools = "0.13.0"
 kinded = "0.3.0"
+mimalloc = "0.1.46"
 parking_lot = "0.12.3"
 prometheus = "0.14.0"
 reqwest = { version = "0.12.9", features = ["json"] }
