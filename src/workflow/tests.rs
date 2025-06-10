@@ -17,6 +17,7 @@ use color_eyre::{
 use ctor::ctor;
 use futures_util::TryStreamExt;
 use serde::{Deserialize, Serialize};
+use test_case::test_case;
 use tokio::{sync::Notify, time::sleep};
 
 use crate::{
@@ -861,20 +862,22 @@ async fn summarize() -> Result<()> {
 }
 
 #[tokio::test]
-async fn join_inner() -> Result<()> {
+#[test_case(1)]
+#[test_case(10)]
+async fn join_inner(partitions: usize) -> Result<()> {
     let (tx, rx) = std::sync::mpsc::channel();
 
     check_multi_collection()
         .query(
-            r#"[
-                {"scan": ["test", "left"]},
-                {
+            &format!(r#"[
+                {{"scan": ["test", "left"]}},
+                {{
                     "join": [
-                        {"on": ["id", "id"]},
-                        [{"scan": ["test", "right"]}]
+                        {{"on": ["id", "id"], "partitions": {}}},
+                        [{{"scan": ["test", "right"]}}]
                     ]
-                }
-            ]"#
+                }}
+            ]"#, partitions)
         )
         .input(btreemap!{
             "left"  => r#"[{"id": 1, "value": "one"}, {"id": 1, "value": "dup"}, {"id": 2, "value": "two"}, {"id": 3, "value": "three"}]"#,
@@ -935,18 +938,20 @@ async fn join_inner() -> Result<()> {
 }
 
 #[tokio::test]
-async fn join_outer() -> Result<()> {
+#[test_case(1)]
+#[test_case(10)]
+async fn join_outer(partitions: usize) -> Result<()> {
     check_multi_collection()
         .query(
-            r#"[
-                {"scan": ["test", "left"]},
-                {
+            &format!(r#"[
+                {{"scan": ["test", "left"]}},
+                {{
                     "join": [
-                        {"on": ["id", "id"], "type": "outer"},
-                        [{"scan": ["test", "right"]}]
+                        {{"on": ["id", "id"], "type": "outer", "partitions": {}}},
+                        [{{"scan": ["test", "right"]}}]
                     ]
-                }
-            ]"#
+                }}
+            ]"#, partitions)
         )
         .input(btreemap!{
             "left"  => r#"[{"id": 1, "value": "one"}, {"id": 1, "value": "dup"}, {"id": 2, "value": "two"}, {"id": 3, "value": "three"}]"#,
@@ -967,18 +972,20 @@ async fn join_outer() -> Result<()> {
 }
 
 #[tokio::test]
-async fn join_left() -> Result<()> {
+#[test_case(1)]
+#[test_case(10)]
+async fn join_left(partitions: usize) -> Result<()> {
     check_multi_collection()
         .query(
-            r#"[
-                {"scan": ["test", "left"]},
-                {
+            &format!(r#"[
+                {{"scan": ["test", "left"]}},
+                {{
                     "join": [
-                        {"on": ["id", "id"], "type": "left"},
-                        [{"scan": ["test", "right"]}]
+                        {{"on": ["id", "id"], "type": "left", "partitions": {}}},
+                        [{{"scan": ["test", "right"]}}]
                     ]
-                }
-            ]"#
+                }}
+            ]"#, partitions)
         )
         .input(btreemap!{
             "left"  => r#"[{"id": 1, "value": "one"}, {"id": 2, "value": "two"}, {"id": 3, "value": "three"}]"#,
@@ -996,18 +1003,20 @@ async fn join_left() -> Result<()> {
 }
 
 #[tokio::test]
-async fn join_right() -> Result<()> {
+#[test_case(1)]
+#[test_case(10)]
+async fn join_right(partitions: usize) -> Result<()> {
     check_multi_collection()
         .query(
-            r#"[
-                {"scan": ["test", "left"]},
-                {
+            &format!(r#"[
+                {{"scan": ["test", "left"]}},
+                {{
                     "join": [
-                        {"on": ["id", "id"], "type": "right"},
-                        [{"scan": ["test", "right"]}]
+                        {{"on": ["id", "id"], "type": "right", "partitions": {}}},
+                        [{{"scan": ["test", "right"]}}]
                     ]
-                }
-            ]"#
+                }}
+            ]"#, partitions)
         )
         .input(btreemap!{
             "left"  => r#"[{"id": 1, "value": "one"}, {"id": 2, "value": "two"}, {"id": 3, "value": "three"}]"#,
