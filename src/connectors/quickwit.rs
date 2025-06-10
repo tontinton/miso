@@ -8,6 +8,7 @@ use std::{
 
 use async_stream::try_stream;
 use axum::async_trait;
+use bytes::BytesMut;
 use color_eyre::eyre::{bail, eyre, Context, Result};
 use futures_util::stream;
 use parking_lot::RwLock;
@@ -513,18 +514,19 @@ fn filter_ast_to_query(ast: &FilterAst) -> Option<Value> {
     })
 }
 
-async fn response_to_text(response: Response) -> Result<String> {
+async fn response_to_bytes(response: Response) -> Result<BytesMut> {
     let status = response.status();
     if !status.is_success() {
         let text = response.text().await.unwrap_or_default();
         bail!(ConnectorError::ServerResp(status.as_u16(), text));
     }
-    response.text().await.context("text from response")
+    let bytes = response.bytes().await.context("bytes from response")?;
+    Ok(bytes.into())
 }
 
-async fn send_request(req: RequestBuilder) -> Result<String> {
+async fn send_request(req: RequestBuilder) -> Result<BytesMut> {
     match req.send().await {
-        Ok(response) => response_to_text(response).await,
+        Ok(response) => response_to_bytes(response).await,
         Err(e) => Err(eyre!(ConnectorError::Http(e))),
     }
 }
@@ -551,8 +553,9 @@ async fn begin_search(
         req = req.json(&query);
     }
 
-    let text = send_request(req).await?;
-    let data: SearchResponse = serde_json::from_str(&text).context("parse response")?;
+    let mut bytes = send_request(req).await?;
+    let data: SearchResponse =
+        simd_json::serde::from_slice(bytes.as_mut()).context("parse response")?;
     Ok((
         data.hits.hits.into_iter().map(|x| x.source).collect(),
         data.scroll_id,
@@ -573,8 +576,9 @@ async fn continue_search(
         scroll: format!("{}ms", scroll_timeout.as_millis()),
     });
 
-    let text = send_request(req).await?;
-    let data: SearchResponse = serde_json::from_str(&text)?;
+    let mut bytes = send_request(req).await?;
+    let data: SearchResponse =
+        simd_json::serde::from_slice(bytes.as_mut()).context("parse response")?;
     Ok((
         data.hits.hits.into_iter().map(|x| x.source).collect(),
         data.scroll_id,
@@ -590,8 +594,9 @@ async fn count(client: &Client, base_url: &str, index: &str, query: Option<Value
         req = req.json(&query);
     }
 
-    let text = send_request(req).await?;
-    let data: CountResponse = serde_json::from_str(&text)?;
+    let mut bytes = send_request(req).await?;
+    let data: CountResponse =
+        simd_json::serde::from_slice(bytes.as_mut()).context("parse response")?;
     Ok(data.count)
 }
 
@@ -612,15 +617,16 @@ async fn search_aggregation(
         req = req.json(&query);
     }
 
-    let text = send_request(req).await?;
-    serde_json::from_str(&text).context("parse response")
+    let mut bytes = send_request(req).await?;
+    simd_json::serde::from_slice(bytes.as_mut()).context("parse response")
 }
 
 #[instrument(name = "GET and parse quickwit indexes")]
 async fn get_indexes(client: &Client, base_url: &str) -> Result<QuickwitIndexes> {
     let url = format!("{}/api/v1/indexes", base_url);
-    let text = send_request(client.get(&url)).await?;
-    let data: Vec<IndexResponse> = serde_json::from_str(&text)?;
+    let mut bytes = send_request(client.get(&url)).await?;
+    let data: Vec<IndexResponse> =
+        simd_json::serde::from_slice(bytes.as_mut()).context("parse response")?;
     Ok(data
         .into_iter()
         .map(|x| {
