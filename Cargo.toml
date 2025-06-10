@@ -7,8 +7,10 @@ edition = "2021"
 doctest = false
 
 [profile.release]
-strip = true
+strip = "none"
 lto = true
+codegen-units = 1
+panic = "abort"
 
 [profile.release-thin-lto]
 inherits = "release"
