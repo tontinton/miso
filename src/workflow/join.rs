@@ -33,7 +33,7 @@ impl fmt::Display for JoinType {
 }
 
 fn default_partitions() -> usize {
-    (num_cpus::get() / 4).max(1)
+    1
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
