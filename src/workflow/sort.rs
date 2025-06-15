@@ -1,7 +1,8 @@
-use std::{cmp::Ordering, fmt};
+use std::{cmp::Ordering, fmt, num::NonZero, thread::available_parallelism};
 
-use color_eyre::eyre::{bail, Result};
+use color_eyre::eyre::{bail, Context, Result};
 use futures_util::StreamExt;
+use rayon::{slice::ParallelSliceMut, ThreadPool, ThreadPoolBuilder};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tracing::info;
@@ -163,6 +164,16 @@ async fn collect_logs(by: &[String], mut input_stream: LogStream) -> Result<Vec<
     Ok(logs)
 }
 
+fn sort_thread_pool() -> Result<ThreadPool> {
+    let num_cores = available_parallelism().map(NonZero::get).unwrap_or(1);
+    let num_threads = (num_cores / 4).max(1);
+    ThreadPoolBuilder::new()
+        .thread_name(|i| format!("parallel-sort-{}", i))
+        .num_threads(num_threads)
+        .build()
+        .context("create sort thread pool")
+}
+
 pub async fn sort_stream(sorts: Vec<Sort>, input_stream: LogStream) -> Result<Vec<Log>> {
     info!(
         "Sorting by {}",
@@ -176,9 +187,17 @@ pub async fn sort_stream(sorts: Vec<Sort>, input_stream: LogStream) -> Result<Ve
     let config = SortConfig::new(sorts);
     let mut logs = collect_logs(&config.by, input_stream).await?;
 
-    logs.sort_unstable_by(|a, b| {
-        cmp_logs(a, b, &config).expect("types should have been validated")
-    });
+    let logs = tokio::task::spawn_blocking(move || {
+        let logs = sort_thread_pool()?.install(|| {
+            logs.par_sort_unstable_by(|a, b| {
+                cmp_logs(a, b, &config).expect("types should have been validated")
+            });
+            logs
+        });
+        Ok::<Vec<Log>, color_eyre::eyre::Error>(logs)
+    })
+    .await?
+    .context("sort thread panicked")?;
 
     Ok(logs)
 }
