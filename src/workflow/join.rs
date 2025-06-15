@@ -2,7 +2,7 @@ use std::fmt;
 
 use async_stream::try_stream;
 use futures_util::StreamExt;
-use hashbrown::HashMap;
+use hashbrown::{hash_map::RawEntryMut, HashMap};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -207,12 +207,26 @@ async fn collect_to_hash_maps(
         tokio::select! {
             Some(log) = left_stream.next() => {
                 if let Some(value) = log.get(left_key) {
-                    left.entry(value.clone()).or_default().push(log);
+                    match left.raw_entry_mut().from_key(value) {
+                        RawEntryMut::Occupied(mut occ) => {
+                            occ.get_mut().push(log);
+                        }
+                        RawEntryMut::Vacant(vac) => {
+                            vac.insert(value.clone(), vec![log]);
+                        }
+                    }
                 }
             },
             Some(log) = right_stream.next() => {
                 if let Some(value) = log.get(right_key) {
-                    right.entry(value.clone()).or_default().push(log);
+                    match right.raw_entry_mut().from_key(value) {
+                        RawEntryMut::Occupied(mut occ) => {
+                            occ.get_mut().push(log);
+                        }
+                        RawEntryMut::Vacant(vac) => {
+                            vac.insert(value.clone(), vec![log]);
+                        }
+                    }
                 }
             },
             else => break,
