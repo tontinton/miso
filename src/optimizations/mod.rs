@@ -1,6 +1,5 @@
 use std::collections::BTreeSet;
 
-use async_recursion::async_recursion;
 use convert_sort_limit_to_topn::ConvertSortLimitToTopN;
 use dynamic_filter::DynamicFilter;
 use merge_filters_into_and_filter::MergeFiltersIntoAndFilter;
@@ -19,7 +18,6 @@ use remove_redundant_sorts_before_count::RemoveRedundantSortsBeforeCount;
 use reorder_filter_before_sort::ReorderFilterBeforeSort;
 use reorder_steps_before_mux::ReorderStepsBeforeMux;
 use split_scan_to_union::SplitScanIntoUnion;
-use tokio::task::yield_now;
 
 use crate::workflow::{WorkflowStep, WorkflowStepKind};
 
@@ -225,8 +223,7 @@ fn run_optimization_pass(
 }
 
 impl Optimizer {
-    #[async_recursion]
-    pub async fn optimize(&self, mut steps: Vec<WorkflowStep>) -> Vec<WorkflowStep> {
+    pub fn optimize(&self, mut steps: Vec<WorkflowStep>) -> Vec<WorkflowStep> {
         if self.optimizations.is_empty() {
             return steps;
         }
@@ -242,10 +239,7 @@ impl Optimizer {
                 &mut steps,
                 &mut kinded_steps,
                 &mut already_ran,
-            ) {
-                // Let's be good neighbours and allow other tasks run for a bit.
-                yield_now().await;
-            }
+            ) {}
         }
 
         // Don't forget to optimize union & join steps too!
@@ -253,11 +247,11 @@ impl Optimizer {
         for step in steps {
             let optimized_inner_step = match step {
                 WorkflowStep::Union(mut workflow) => {
-                    workflow.steps = self.optimize(workflow.steps).await;
+                    workflow.steps = self.optimize(workflow.steps);
                     WorkflowStep::Union(workflow)
                 }
                 WorkflowStep::Join(config, mut workflow) => {
-                    workflow.steps = self.optimize(workflow.steps).await;
+                    workflow.steps = self.optimize(workflow.steps);
                     WorkflowStep::Join(config, workflow)
                 }
                 _ => step,

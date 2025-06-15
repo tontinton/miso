@@ -19,7 +19,10 @@ use futures_util::TryStreamExt;
 use prometheus::{Histogram, HistogramOpts, IntGauge, Registry, TextEncoder};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use tokio::sync::{Notify, RwLock};
+use tokio::{
+    sync::{Notify, RwLock},
+    task::spawn_blocking,
+};
 use tracing::{debug, error, info, span, Level};
 use uuid::Uuid;
 
@@ -310,7 +313,12 @@ async fn query_stream(
             req.query,
         )
         .await?;
-        Workflow::new_with_partial_stream(state.optimizer.optimize(steps).await, req.partial_stream)
+
+        let optimized_steps = spawn_blocking(move || state.optimizer.optimize(steps))
+            .await
+            .expect("optimize thread panicked");
+
+        Workflow::new_with_partial_stream(optimized_steps, req.partial_stream)
     };
 
     debug!(?workflow, "Executing workflow");
@@ -367,7 +375,11 @@ async fn explain(
         req.query,
     )
     .await?;
-    let optimized_steps = state.optimizer.optimize(steps).await;
+
+    let optimized_steps = spawn_blocking(move || state.optimizer.optimize(steps))
+        .await
+        .expect("optimize thread panicked");
+
     let optimized_workflow = Workflow::new(optimized_steps);
 
     Ok(format!("{optimized_workflow}").into_response())
