@@ -9,7 +9,6 @@ doctest = false
 [profile.release]
 strip = "none"
 lto = true
-codegen-units = 1
 panic = "abort"
 
 [profile.release-thin-lto]
