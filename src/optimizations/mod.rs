@@ -45,7 +45,6 @@ mod split_scan_to_union;
 #[cfg(test)]
 mod tests;
 
-#[macro_export]
 macro_rules! opt {
     ($optimization:expr) => {
         OptimizationStep {
@@ -55,7 +54,6 @@ macro_rules! opt {
     };
 }
 
-#[macro_export]
 macro_rules! opt_once {
     ($optimization:expr) => {
         OptimizationStep {
