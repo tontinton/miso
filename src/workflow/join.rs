@@ -89,24 +89,22 @@ fn merge_left_with_right(join_value: &Value, mut left: Log, right: Log) -> Log {
     left
 }
 
-fn merge_logs(join_value: &Value, left: Log, right: Log, flip: bool) -> Log {
-    if flip {
-        merge_left_with_right(join_value, left, right)
-    } else {
-        merge_left_with_right(join_value, right, left)
-    }
-}
-
 fn hash_inner_join(
     build: HashMap<Value, Vec<Log>>,
     probe: Vec<(Value, Log)>,
     flip: bool,
 ) -> LogTryStream {
+    let merge = if flip {
+        |join_value: &Value, left: Log, right: Log| merge_left_with_right(join_value, left, right)
+    } else {
+        |join_value: &Value, left: Log, right: Log| merge_left_with_right(join_value, right, left)
+    };
+
     Box::pin(try_stream! {
         for (probe_key, probe_log) in probe {
             if let Some(build_logs) = build.get(&probe_key) {
                 for build_log in build_logs {
-                    yield merge_logs(&probe_key, build_log.clone(), probe_log.clone(), flip);
+                    yield merge(&probe_key, build_log.clone(), probe_log.clone());
                 }
             }
         }
@@ -118,11 +116,17 @@ fn hash_outer_join(
     probe: Vec<(Value, Log)>,
     flip: bool,
 ) -> LogTryStream {
+    let merge = if flip {
+        |join_value: &Value, left: Log, right: Log| merge_left_with_right(join_value, left, right)
+    } else {
+        |join_value: &Value, left: Log, right: Log| merge_left_with_right(join_value, right, left)
+    };
+
     Box::pin(try_stream! {
         for (probe_key, probe_log) in probe {
             if let Some((build_logs, matched)) = build.get_mut(&probe_key) {
                 for build_log in build_logs {
-                    yield merge_logs(&probe_key, build_log.clone(), probe_log.clone(), flip);
+                    yield merge(&probe_key, build_log.clone(), probe_log.clone());
                 }
                 *matched = true;
             } else {
