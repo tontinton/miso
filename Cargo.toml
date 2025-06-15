@@ -23,6 +23,7 @@ axum = { version = "0.7.7", features = ["macros"] }
 bytes = "1.10.1"
 clap = { version = "4.5.20", features = ["derive"] }
 color-eyre = { version = "0.6.3", default-features = false }
+flume = "0.11.1"
 futures-core = "0.3.31"
 futures-util = "0.3.31"
 hashbrown = "0.15.3"
@@ -32,6 +33,7 @@ kinded = "0.3.0"
 mimalloc = "0.1.46"
 parking_lot = "0.12.3"
 prometheus = "0.14.0"
+rayon = "1.10.0"
 reqwest = { version = "0.12.9", features = ["json"] }
 scopeguard = "1.2.0"
 serde = { version = "1.0.210", features = ["derive"] }

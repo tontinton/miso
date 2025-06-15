@@ -1,17 +1,31 @@
 use std::fmt;
+use std::{num::NonZero, sync::OnceLock, thread::available_parallelism};
 
 use async_stream::try_stream;
 use futures_util::StreamExt;
 use hashbrown::{hash_map::RawEntryMut, HashMap};
+use rayon::{ThreadPool, ThreadPoolBuilder};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use tracing::debug;
 
 use crate::log::{Log, LogStream, LogTryStream};
 
+const DEFAULT_NUM_CORES: usize = 10;
+const PARALLELISM_MUL: usize = 5;
 const MERGED_LEFT_SUFFIX: &str = "_left";
 const MERGED_RIGHT_SUFFIX: &str = "_right";
 
-#[derive(Debug, Serialize, Deserialize, Default, Clone, PartialEq)]
+macro_rules! send_ret_on_err {
+    ($tx:expr, $log:expr) => {
+        if let Err(e) = $tx.send($log) {
+            debug!("Join tx closed: {e:?}");
+            return;
+        }
+    };
+}
+
+#[derive(Debug, Serialize, Deserialize, Default, Clone, Copy, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum JoinType {
     #[default]
@@ -90,78 +104,77 @@ fn merge_left_with_right(join_value: &Value, mut left: Log, right: Log) -> Log {
 }
 
 fn hash_inner_join(
+    tx: flume::Sender<Log>,
     build: HashMap<Value, Vec<Log>>,
     probe: Vec<(Value, Log)>,
     flip: bool,
-) -> LogTryStream {
+) {
     let merge = if flip {
         |join_value: &Value, left: Log, right: Log| merge_left_with_right(join_value, left, right)
     } else {
         |join_value: &Value, left: Log, right: Log| merge_left_with_right(join_value, right, left)
     };
 
-    Box::pin(try_stream! {
-        for (probe_key, probe_log) in probe {
-            if let Some(build_logs) = build.get(&probe_key) {
-                for build_log in build_logs {
-                    yield merge(&probe_key, build_log.clone(), probe_log.clone());
-                }
+    for (probe_key, probe_log) in probe {
+        if let Some(build_logs) = build.get(&probe_key) {
+            for build_log in build_logs {
+                let merged = merge(&probe_key, build_log.clone(), probe_log.clone());
+                send_ret_on_err!(tx, merged);
             }
         }
-    })
+    }
 }
 
 fn hash_outer_join(
+    tx: flume::Sender<Log>,
     mut build: HashMap<Value, (Vec<Log>, bool)>,
     probe: Vec<(Value, Log)>,
     flip: bool,
-) -> LogTryStream {
+) {
     let merge = if flip {
         |join_value: &Value, left: Log, right: Log| merge_left_with_right(join_value, left, right)
     } else {
         |join_value: &Value, left: Log, right: Log| merge_left_with_right(join_value, right, left)
     };
 
-    Box::pin(try_stream! {
-        for (probe_key, probe_log) in probe {
-            if let Some((build_logs, matched)) = build.get_mut(&probe_key) {
-                for build_log in build_logs {
-                    yield merge(&probe_key, build_log.clone(), probe_log.clone());
-                }
-                *matched = true;
-            } else {
-                yield probe_log;
+    for (probe_key, probe_log) in probe {
+        if let Some((build_logs, matched)) = build.get_mut(&probe_key) {
+            for build_log in build_logs {
+                let merged = merge(&probe_key, build_log.clone(), probe_log.clone());
+                send_ret_on_err!(tx, merged);
             }
+            *matched = true;
+        } else {
+            send_ret_on_err!(tx, probe_log);
         }
+    }
 
-        for (_, (build_logs, matched)) in build {
-            if !matched {
-                for build_log in build_logs {
-                    yield build_log;
-                }
+    for (_, (build_logs, matched)) in build {
+        if !matched {
+            for build_log in build_logs {
+                send_ret_on_err!(tx, build_log);
             }
         }
-    })
+    }
 }
 
 fn hash_left_join(
+    tx: flume::Sender<Log>,
     left: HashMap<Value, Vec<Log>>,
     mut right: HashMap<Value, Vec<Log>>,
-) -> LogTryStream {
-    Box::pin(try_stream! {
-        for (left_key, left_logs) in left {
-            for mut left_log in left_logs {
-                if let Some(right_logs) = right.remove(&left_key) {
-                    for right_log in right_logs {
-                        for (right_key, right_value) in right_log {
-                            left_log.entry(right_key).or_insert(right_value);
-                        }
+) {
+    for (left_key, left_logs) in left {
+        for mut left_log in left_logs {
+            if let Some(right_logs) = right.remove(&left_key) {
+                for right_log in right_logs {
+                    for (right_key, right_value) in right_log {
+                        left_log.entry(right_key).or_insert(right_value);
                     }
                 }
-                yield left_log;
             }
+            send_ret_on_err!(tx, left_log);
         }
-    })
+    }
 }
 
 async fn collect_to_build_and_probe(
@@ -240,41 +253,68 @@ async fn collect_to_hash_maps(
     (left, right)
 }
 
+fn join_thread_pool() -> &'static ThreadPool {
+    static THREAD_POOL: OnceLock<ThreadPool> = OnceLock::new();
+    THREAD_POOL.get_or_init(|| {
+        let num_cores = available_parallelism()
+            .map(NonZero::get)
+            .unwrap_or(DEFAULT_NUM_CORES);
+        let num_threads = (num_cores * PARALLELISM_MUL).max(1);
+        ThreadPoolBuilder::new()
+            .thread_name(|i| format!("join-{}", i))
+            .num_threads(num_threads)
+            .build()
+            .expect("failed to create join thread pool")
+    })
+}
+
 pub async fn join_streams(
     config: Join,
     left_stream: LogStream,
     right_stream: LogStream,
 ) -> LogTryStream {
-    match config.type_ {
+    // flume supports sending from sync and receiving into async.
+    let (tx, rx) = flume::bounded(1);
+
+    let type_ = config.type_;
+    match type_ {
         JoinType::Inner => {
             let (build, probe, flip) =
                 collect_to_build_and_probe(config, left_stream, right_stream).await;
 
-            let mut build_map: HashMap<Value, Vec<Log>> = HashMap::new();
-            for (key, log) in build {
-                build_map.entry(key).or_default().push(log);
-            }
-
-            hash_inner_join(build_map, probe, flip)
+            join_thread_pool().spawn(move || {
+                let mut build_map: HashMap<Value, Vec<Log>> = HashMap::new();
+                for (key, log) in build {
+                    build_map.entry(key).or_default().push(log);
+                }
+                hash_inner_join(tx, build_map, probe, flip);
+            });
         }
         JoinType::Outer => {
             let (build, probe, flip) =
                 collect_to_build_and_probe(config, left_stream, right_stream).await;
 
-            let mut build_map: HashMap<Value, (Vec<Log>, bool)> = HashMap::new();
-            for (key, log) in build {
-                build_map.entry(key).or_default().0.push(log);
+            join_thread_pool().spawn(move || {
+                let mut build_map: HashMap<Value, (Vec<Log>, bool)> = HashMap::new();
+                for (key, log) in build {
+                    build_map.entry(key).or_default().0.push(log);
+                }
+                hash_outer_join(tx, build_map, probe, flip);
+            });
+        }
+        JoinType::Left | JoinType::Right => {
+            let (mut left, mut right) =
+                collect_to_hash_maps(config, left_stream, right_stream).await;
+            if matches!(type_, JoinType::Right) {
+                std::mem::swap(&mut left, &mut right);
             }
-
-            hash_outer_join(build_map, probe, flip)
-        }
-        JoinType::Left => {
-            let (left, right) = collect_to_hash_maps(config, left_stream, right_stream).await;
-            hash_left_join(left, right)
-        }
-        JoinType::Right => {
-            let (left, right) = collect_to_hash_maps(config, left_stream, right_stream).await;
-            hash_left_join(right, left)
+            join_thread_pool().spawn(move || hash_left_join(tx, left, right));
         }
     }
+
+    Box::pin(try_stream! {
+        while let Ok(log) = rx.recv_async().await {
+            yield log;
+        }
+    })
 }
