@@ -18,7 +18,10 @@ use testcontainers::{
     runners::AsyncRunner,
     ContainerAsync, GenericImage, ImageExt,
 };
-use tokio::sync::{Notify, OnceCell};
+use tokio::{
+    sync::{Notify, OnceCell},
+    task::spawn_blocking,
+};
 use tokio_retry::{strategy::FixedInterval, Retry};
 use tokio_test::block_on;
 use tracing::info;
@@ -313,7 +316,9 @@ async fn predicate_pushdown_same_results(
     let default_optimizer = Optimizer::default();
     let no_pushdown_optimizer = Optimizer::no_predicate_pushdowns();
 
-    let predicate_pushdown_steps = default_optimizer.optimize(steps.clone()).await;
+    let steps_cloned = steps.clone();
+    let predicate_pushdown_steps =
+        spawn_blocking(move || default_optimizer.optimize(steps_cloned)).await?;
 
     assert_eq!(
         predicate_pushdown_steps, expected_after_optimizations_steps,
@@ -321,7 +326,10 @@ async fn predicate_pushdown_same_results(
     );
 
     let pushdown_workflow = Workflow::new(predicate_pushdown_steps);
-    let no_pushdown_workflow = Workflow::new(no_pushdown_optimizer.optimize(steps).await);
+
+    let no_predicate_pushdown_steps =
+        spawn_blocking(move || no_pushdown_optimizer.optimize(steps)).await?;
+    let no_pushdown_workflow = Workflow::new(no_predicate_pushdown_steps);
 
     let cancel1 = Arc::new(Notify::new());
     let cancel2 = Arc::new(Notify::new());

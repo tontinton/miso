@@ -18,7 +18,7 @@ use ctor::ctor;
 use futures_util::TryStreamExt;
 use serde::{Deserialize, Serialize};
 use test_case::test_case;
-use tokio::{sync::Notify, time::sleep};
+use tokio::{sync::Notify, task::spawn_blocking, time::sleep};
 
 use crate::{
     connectors::{
@@ -243,7 +243,10 @@ async fn check_multi_connectors(
 
     let optimizer = Optimizer::default();
 
-    let optimizations_workflow = Workflow::new(optimizer.optimize(steps.clone()).await);
+    let steps_cloned = steps.clone();
+    let optimized_steps = spawn_blocking(move || optimizer.optimize(steps_cloned)).await?;
+
+    let optimizations_workflow = Workflow::new(optimized_steps);
     let no_optimizations_workflow = Workflow::new(steps);
 
     let cancel = Arc::new(Notify::new());
