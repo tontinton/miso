@@ -14,7 +14,7 @@ pub struct Metrics {
 impl Default for Metrics {
     fn default() -> Self {
         let query_latency = Histogram::with_opts(HistogramOpts::new(
-            "query_duration_seconds",
+            "query_latency",
             "Duration of /query route",
         ))
         .expect("create query_latency");
