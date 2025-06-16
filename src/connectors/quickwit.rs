@@ -21,6 +21,7 @@ use crate::{
     downcast_unwrap,
     humantime_utils::{deserialize_duration, serialize_duration},
     log::{Log, LogTryStream},
+    metrics::METRICS,
     run_at_interval::run_at_interval,
     shutdown_future::ShutdownFuture,
     workflow::{
@@ -521,6 +522,7 @@ async fn response_to_bytes(response: Response) -> Result<BytesMut> {
         bail!(ConnectorError::ServerResp(status.as_u16(), text));
     }
     let bytes = response.bytes().await.context("bytes from response")?;
+    METRICS.downloaded_bytes.inc_by(bytes.len() as u64);
     Ok(bytes.into())
 }
 
