@@ -1,10 +1,10 @@
-use async_stream::try_stream;
+use async_stream::stream;
 use color_eyre::Result;
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use tracing::warn;
 
-use crate::log::{Log, LogStream, LogTryStream};
+use crate::log::{Log, LogStream};
 
 use super::interpreter::{ident, Val};
 
@@ -110,8 +110,8 @@ impl FilterInterpreter {
     }
 }
 
-pub fn filter_stream(ast: FilterAst, mut input_stream: LogStream) -> Result<LogTryStream> {
-    Ok(Box::pin(try_stream! {
+pub fn filter_stream(ast: FilterAst, mut input_stream: LogStream) -> LogStream {
+    Box::pin(stream! {
         while let Some(log) = input_stream.next().await {
             let interpreter = FilterInterpreter::new(log);
 
@@ -127,5 +127,5 @@ pub fn filter_stream(ast: FilterAst, mut input_stream: LogStream) -> Result<LogT
                 yield interpreter.log;
             }
         }
-    }))
+    })
 }

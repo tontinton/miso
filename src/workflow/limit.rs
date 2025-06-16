@@ -1,12 +1,12 @@
-use async_stream::try_stream;
+use async_stream::stream;
 use futures_util::{stream, StreamExt};
 use hashbrown::HashMap;
 
-use crate::log::{LogStream, LogTryStream};
+use crate::log::LogStream;
 
 use super::partial_stream::get_partial_id;
 
-pub fn limit_stream(limit: u32, mut input_stream: LogStream) -> LogTryStream {
+pub fn limit_stream(limit: u32, mut input_stream: LogStream) -> LogStream {
     if limit == 0 {
         return Box::pin(stream::empty());
     }
@@ -14,7 +14,7 @@ pub fn limit_stream(limit: u32, mut input_stream: LogStream) -> LogTryStream {
     let mut streamed = 0;
     let mut partial_limits: HashMap<usize, Option<u32>> = HashMap::new();
 
-    Box::pin(try_stream! {
+    Box::pin(stream! {
         while let Some(log) = input_stream.next().await {
             let partial_result = get_partial_id(&log);
 

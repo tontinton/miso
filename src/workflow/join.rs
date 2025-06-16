@@ -1,7 +1,6 @@
 use std::fmt;
 use std::{num::NonZero, sync::OnceLock, thread::available_parallelism};
 
-use async_stream::try_stream;
 use futures_util::StreamExt;
 use hashbrown::{hash_map::RawEntryMut, HashMap};
 use rayon::{ThreadPool, ThreadPoolBuilder};
@@ -9,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tracing::debug;
 
-use crate::log::{Log, LogStream, LogTryStream};
+use crate::log::{Log, LogStream};
 
 const DEFAULT_NUM_CORES: usize = 10;
 const PARALLELISM_MUL: usize = 5;
@@ -272,7 +271,7 @@ pub async fn join_streams(
     config: Join,
     left_stream: LogStream,
     right_stream: LogStream,
-) -> LogTryStream {
+) -> LogStream {
     // flume supports sending from sync and receiving into async.
     let (tx, rx) = flume::bounded(1);
 
@@ -312,9 +311,5 @@ pub async fn join_streams(
         }
     }
 
-    Box::pin(try_stream! {
-        while let Ok(log) = rx.recv_async().await {
-            yield log;
-        }
-    })
+    Box::pin(rx.into_stream())
 }

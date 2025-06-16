@@ -1,12 +1,12 @@
 use std::borrow::Cow;
 
-use async_stream::try_stream;
+use async_stream::stream;
 use color_eyre::eyre::Result;
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use tracing::warn;
 
-use crate::log::{Log, LogStream, LogTryStream};
+use crate::log::{Log, LogStream};
 
 use super::interpreter::{ident, CastType, Val};
 
@@ -61,8 +61,8 @@ async fn project_stream_ex(
     project_fields: Vec<ProjectField>,
     mut input_stream: LogStream,
     extend: bool,
-) -> Result<LogTryStream> {
-    Ok(Box::pin(try_stream! {
+) -> LogStream {
+    Box::pin(stream! {
         while let Some(mut log) = input_stream.next().await {
             let mut output = Log::new();
 
@@ -94,19 +94,19 @@ async fn project_stream_ex(
                 yield output;
             }
         }
-    }))
+    })
 }
 
 pub async fn project_stream(
     project_fields: Vec<ProjectField>,
     input_stream: LogStream,
-) -> Result<LogTryStream> {
+) -> LogStream {
     project_stream_ex(project_fields, input_stream, false).await
 }
 
 pub async fn extend_stream(
     project_fields: Vec<ProjectField>,
     input_stream: LogStream,
-) -> Result<LogTryStream> {
+) -> LogStream {
     project_stream_ex(project_fields, input_stream, true).await
 }

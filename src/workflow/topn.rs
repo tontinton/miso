@@ -1,6 +1,6 @@
 use std::{cmp::Ordering, collections::BinaryHeap};
 
-use async_stream::try_stream;
+use async_stream::stream;
 use axum::async_trait;
 use color_eyre::Result;
 use futures_util::StreamExt;
@@ -8,7 +8,7 @@ use hashbrown::HashMap;
 use parking_lot::Mutex;
 use tokio::task_local;
 
-use crate::log::{Log, LogStream, LogTryStream};
+use crate::log::{Log, LogStream};
 
 use super::{
     partial_stream::{get_partial_id, PartialStreamExecutor},
@@ -86,8 +86,8 @@ pub async fn topn_stream(
     sorts: Vec<Sort>,
     limit: u32,
     mut input_stream: LogStream,
-) -> (LogTryStream, SortConfig) {
-    let stream = Box::pin(try_stream! {
+) -> (LogStream, SortConfig) {
+    let stream = Box::pin(stream! {
         let mut state = TopNState::new(limit as usize);
         let mut partial_states: HashMap<usize, TopNState> = HashMap::new();
 

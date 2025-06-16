@@ -217,7 +217,21 @@ async fn count_to_tx(count: u64, tx: mpsc::Sender<Log>) {
     logs_iter_to_tx(logs, tx, "count").await;
 }
 
-async fn stream_to_tx(mut stream: LogTryStream, tx: mpsc::Sender<Log>, tag: &str) -> Result<()> {
+async fn stream_to_tx(mut stream: LogStream, tx: mpsc::Sender<Log>, tag: &str) -> Result<()> {
+    while let Some(log) = stream.next().await {
+        if let Err(e) = tx.send(log).await {
+            debug!("Closing {} step: {:?}", tag, e);
+            break;
+        }
+    }
+    Ok(())
+}
+
+async fn try_stream_to_tx(
+    mut stream: LogTryStream,
+    tx: mpsc::Sender<Log>,
+    tag: &str,
+) -> Result<()> {
     while let Some(log) = stream.next().await {
         if let Err(e) = tx.send(log.context(format!("tx {tag}"))?).await {
             debug!("Closing {} step: {:?}", tag, e);
@@ -385,7 +399,7 @@ impl WorkflowStep {
                     .await?;
                 match response {
                     QueryResponse::Logs(stream) => {
-                        stream_to_tx(stream, tx, "scan").await?;
+                        try_stream_to_tx(stream, tx, "scan").await?;
                     }
                     QueryResponse::Count(count) => {
                         count_to_tx(count, tx).await;
@@ -393,15 +407,15 @@ impl WorkflowStep {
                 }
             }
             WorkflowStep::Filter(ast) => {
-                let stream = filter_stream(ast, rx_union_stream(rxs))?;
+                let stream = filter_stream(ast, rx_union_stream(rxs));
                 stream_to_tx(stream, tx, "filter").await?;
             }
             WorkflowStep::Project(fields) => {
-                let stream = project_stream(fields, rx_union_stream(rxs)).await?;
+                let stream = project_stream(fields, rx_union_stream(rxs)).await;
                 stream_to_tx(stream, tx, "project").await?;
             }
             WorkflowStep::Extend(fields) => {
-                let stream = extend_stream(fields, rx_union_stream(rxs)).await?;
+                let stream = extend_stream(fields, rx_union_stream(rxs)).await;
                 stream_to_tx(stream, tx, "extend").await?;
             }
             WorkflowStep::Limit(limit) | WorkflowStep::MuxLimit(limit) => {
