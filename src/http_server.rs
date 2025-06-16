@@ -284,6 +284,10 @@ impl IntoResponse for HttpError {
     }
 }
 
+async fn health_check() -> impl IntoResponse {
+    "OK"
+}
+
 /// Starts running a new query.
 async fn query_stream(
     State(state): State<Arc<App>>,
@@ -558,6 +562,7 @@ pub fn create_axum_app(args: &Args) -> Result<Router> {
     let app = App::new(connectors, optimizer).context("create axum app state")?;
 
     Ok(Router::new()
+        .route("/health", get(health_check))
         .route("/metrics", get(metrics))
         .route("/query", post(query_stream))
         .route("/explain", post(explain))
