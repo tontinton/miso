@@ -1,4 +1,5 @@
 use std::fmt;
+use std::time::Instant;
 use std::{num::NonZero, sync::OnceLock, thread::available_parallelism};
 
 use futures_util::StreamExt;
@@ -9,6 +10,7 @@ use serde_json::Value;
 use tracing::debug;
 
 use crate::log::{Log, LogStream};
+use crate::metrics::METRICS;
 
 const DEFAULT_NUM_CORES: usize = 10;
 const PARALLELISM_MUL: usize = 5;
@@ -267,6 +269,19 @@ fn join_thread_pool() -> &'static ThreadPool {
     })
 }
 
+fn spawn<F>(task: F)
+where
+    F: FnOnce() + Send + 'static,
+{
+    let start = Instant::now();
+    join_thread_pool().spawn(move || {
+        METRICS
+            .join_thread_spawn_latency
+            .observe(start.elapsed().as_secs_f64());
+        task();
+    });
+}
+
 pub async fn join_streams(
     config: Join,
     left_stream: LogStream,
@@ -281,7 +296,7 @@ pub async fn join_streams(
             let (build, probe, flip) =
                 collect_to_build_and_probe(config, left_stream, right_stream).await;
 
-            join_thread_pool().spawn(move || {
+            spawn(move || {
                 let mut build_map: HashMap<Value, Vec<Log>> = HashMap::new();
                 for (key, log) in build {
                     build_map.entry(key).or_default().push(log);
@@ -293,7 +308,7 @@ pub async fn join_streams(
             let (build, probe, flip) =
                 collect_to_build_and_probe(config, left_stream, right_stream).await;
 
-            join_thread_pool().spawn(move || {
+            spawn(move || {
                 let mut build_map: HashMap<Value, (Vec<Log>, bool)> = HashMap::new();
                 for (key, log) in build {
                     build_map.entry(key).or_default().0.push(log);
@@ -307,7 +322,7 @@ pub async fn join_streams(
             if matches!(type_, JoinType::Right) {
                 std::mem::swap(&mut left, &mut right);
             }
-            join_thread_pool().spawn(move || hash_left_join(tx, left, right));
+            spawn(move || hash_left_join(tx, left, right));
         }
     }
 
