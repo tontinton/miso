@@ -16,7 +16,7 @@ use axum::{
 use color_eyre::{eyre::Context, Result};
 use futures_core::Stream;
 use futures_util::TryStreamExt;
-use prometheus::{Histogram, HistogramOpts, IntGauge, Registry, TextEncoder};
+use prometheus::TextEncoder;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tokio::{
@@ -30,6 +30,7 @@ use crate::{
     args::Args,
     connectors::{quickwit::QuickwitConnector, Connector, ConnectorError, ConnectorState},
     humantime_utils::deserialize_duration,
+    metrics::METRICS,
     optimizations::Optimizer,
     run_at_interval::run_at_interval,
     shutdown_future::ShutdownFuture,
@@ -52,68 +53,35 @@ struct App {
     connectors: RwLock<ConnectorsMap>,
     optimizer: Arc<Optimizer>,
     views: RwLock<ViewsMap>,
-
-    /// Metrics.
-    registry: Registry,
-    query_latency: Histogram,
-    running_queries: IntGauge,
-
     _tokio_metrics_task: ShutdownFuture,
 }
 
 impl App {
     fn new(connectors: ConnectorsMap, optimizer: Optimizer) -> Result<Self> {
-        let query_latency = Histogram::with_opts(HistogramOpts::new(
-            "query_duration_seconds",
-            "Duration of /query route",
-        ))
-        .context("create query_latency")?;
-        let running_queries = IntGauge::new("running_queries", "Number of live running queries")
-            .context("create running_queries")?;
-        let tokio_worker_threads = IntGauge::new(
-            "tokio_worker_threads",
-            "Number of worker threads used by the tokio runtime",
-        )
-        .context("create tokio_worker_threads")?;
-        let tokio_alive_tasks = IntGauge::new(
-            "tokio_alive_tasks",
-            "Number of alive tasks in the tokio runtime",
-        )
-        .context("create tokio_alive_tasks")?;
-
-        let registry = Registry::new();
-        registry.register(Box::new(query_latency.clone()))?;
-        registry.register(Box::new(running_queries.clone()))?;
-        registry.register(Box::new(tokio_worker_threads.clone()))?;
-        registry.register(Box::new(tokio_alive_tasks.clone()))?;
-
-        let tokio_metrics_task = ShutdownFuture::new(
-            collect_tokio_metrics(tokio_worker_threads, tokio_alive_tasks),
-            "Tokio metrics collector",
-        );
+        let tokio_metrics_task =
+            ShutdownFuture::new(collect_tokio_metrics(), "Tokio metrics collector");
 
         Ok(Self {
             connectors: RwLock::new(connectors),
             optimizer: Arc::new(optimizer),
             views: RwLock::new(BTreeMap::new()),
-
-            registry,
-            query_latency,
-            running_queries,
-
             _tokio_metrics_task: tokio_metrics_task,
         })
     }
 }
 
-async fn collect_tokio_metrics(tokio_worker_threads: IntGauge, tokio_alive_tasks: IntGauge) {
+async fn collect_tokio_metrics() {
     let handle = tokio::runtime::Handle::current();
     let metrics = handle.metrics();
 
     run_at_interval(
         async || {
-            tokio_worker_threads.set(metrics.num_workers() as i64);
-            tokio_alive_tasks.set(metrics.num_alive_tasks() as i64);
+            METRICS
+                .tokio_worker_threads
+                .set(metrics.num_workers() as i64);
+            METRICS
+                .tokio_alive_tasks
+                .set(metrics.num_alive_tasks() as i64);
             true
         },
         TOKIO_METRICS_UPDATE_INTERVAL,
@@ -293,15 +261,12 @@ async fn query_stream(
     State(state): State<Arc<App>>,
     Json(req): Json<QueryRequest>,
 ) -> Result<Sse<impl Stream<Item = Result<Event, axum::Error>>>, HttpError> {
-    let metrics_state = state.clone();
     let start = Instant::now();
-    metrics_state.running_queries.inc();
-    let _record_metrics = scopeguard::guard(metrics_state, |metrics_state| {
+    METRICS.running_queries.inc();
+    let _record_metrics = scopeguard::guard((), |_| {
         debug!("Recording query metrics");
-        metrics_state.running_queries.dec();
-        metrics_state
-            .query_latency
-            .observe(start.elapsed().as_secs_f64());
+        METRICS.running_queries.dec();
+        METRICS.query_latency.observe(start.elapsed().as_secs_f64());
     });
 
     let query_id = req.query_id.unwrap_or_else(Uuid::now_v7);
@@ -523,9 +488,9 @@ async fn delete_view(
     Ok(())
 }
 
-async fn metrics(State(state): State<Arc<App>>) -> Result<Response, HttpError> {
-    let metric_families = state.registry.gather();
-    let mut buffer = String::new();
+async fn metrics() -> Result<Response, HttpError> {
+    let metric_families = prometheus::gather();
+    let mut buffer = String::with_capacity(1024);
     let encoder = TextEncoder::new();
     encoder
         .encode_utf8(&metric_families, &mut buffer)
