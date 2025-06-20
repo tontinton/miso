@@ -104,7 +104,7 @@ impl Connector for TestConnector {
         vec![Box::new(TestSplit {}) as Box<dyn Split>]
     }
 
-    async fn query(
+    fn query(
         &self,
         collection: &str,
         _handle: &dyn QueryHandle,

@@ -16,10 +16,8 @@ use stats::{ConnectorStats, IntervalStatsCollector};
 use thiserror::Error;
 use tokio::time::sleep;
 
-use crate::{
-    log::LogTryStream,
-    workflow::{filter::FilterAst, sort::Sort, summarize::Summarize, Workflow},
-};
+use crate::log::LogTryIter;
+use crate::workflow::{filter::FilterAst, sort::Sort, summarize::Summarize, Workflow};
 
 const CLOSE_WHEN_LAST_OWNER_INTERVAL: Duration = Duration::from_millis(100);
 
@@ -98,7 +96,7 @@ impl ConnectorState {
 }
 
 pub enum QueryResponse {
-    Logs(LogTryStream),
+    Logs(LogTryIter),
     Count(u64),
 }
 
@@ -133,7 +131,7 @@ pub trait Connector: Debug + Send + Sync {
         vec![]
     }
 
-    async fn query(
+    fn query(
         &self,
         collection: &str,
         handle: &dyn QueryHandle,

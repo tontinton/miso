@@ -1,18 +1,16 @@
 use std::{
     any::Any,
     collections::{BTreeMap, HashMap},
-    fmt,
+    fmt, iter,
     sync::{Arc, Weak},
-    time::{Duration, Instant},
+    time::Duration,
 };
 
-use async_stream::try_stream;
 use axum::async_trait;
 use bytes::BytesMut;
 use color_eyre::eyre::{bail, eyre, Context, Result};
-use futures_util::stream;
 use parking_lot::RwLock;
-use reqwest::{Client, RequestBuilder, Response};
+use reqwest::blocking::{Client, RequestBuilder, Response};
 use serde::{ser::SerializeMap, Deserialize, Serialize, Serializer};
 use serde_json::{json, to_string, Value};
 use tracing::{debug, error, info, instrument};
@@ -20,7 +18,7 @@ use tracing::{debug, error, info, instrument};
 use crate::{
     downcast_unwrap,
     humantime_utils::{deserialize_duration, serialize_duration},
-    log::{Log, LogTryStream},
+    log::{Log, LogTryIter},
     metrics::METRICS,
     run_at_interval::run_at_interval,
     shutdown_future::ShutdownFuture,
@@ -39,6 +37,16 @@ static AGGREGATION_RESULTS_NAME: &str = "summarize";
 /// Quickwit doesn't yet support pagination over aggregation queries.
 /// This will be the max amount of groups we pull from it (taken from quickwit's code).
 const MAX_NUM_GROUPS: usize = 65000;
+
+macro_rules! maybe_limit {
+    ($iter:expr, $limit:expr) => {
+        if let Some(limit) = $limit {
+            Box::new($iter.into_iter().take(limit as usize))
+        } else {
+            Box::new($iter.into_iter())
+        }
+    };
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct QuickwitSplit {}
@@ -515,7 +523,18 @@ fn filter_ast_to_query(ast: &FilterAst) -> Option<Value> {
     })
 }
 
-async fn response_to_bytes(response: Response) -> Result<BytesMut> {
+fn response_to_bytes(response: Response) -> Result<BytesMut> {
+    let status = response.status();
+    if !status.is_success() {
+        let text = response.text().unwrap_or_default();
+        bail!(ConnectorError::ServerResp(status.as_u16(), text));
+    }
+    let bytes = response.bytes().context("bytes from response")?;
+    METRICS.downloaded_bytes.inc_by(bytes.len() as u64);
+    Ok(bytes.into())
+}
+
+async fn async_response_to_bytes(response: reqwest::Response) -> Result<BytesMut> {
     let status = response.status();
     if !status.is_success() {
         let text = response.text().await.unwrap_or_default();
@@ -526,15 +545,22 @@ async fn response_to_bytes(response: Response) -> Result<BytesMut> {
     Ok(bytes.into())
 }
 
-async fn send_request(req: RequestBuilder) -> Result<BytesMut> {
+fn send_request(req: RequestBuilder) -> Result<BytesMut> {
+    match req.send() {
+        Ok(response) => response_to_bytes(response),
+        Err(e) => Err(eyre!(ConnectorError::Http(e))),
+    }
+}
+
+async fn async_send_request(req: reqwest::RequestBuilder) -> Result<BytesMut> {
     match req.send().await {
-        Ok(response) => response_to_bytes(response).await,
+        Ok(response) => async_response_to_bytes(response).await,
         Err(e) => Err(eyre!(ConnectorError::Http(e))),
     }
 }
 
 #[instrument(skip(query), name = "GET and parse quickwit begin search results")]
-async fn begin_search(
+fn begin_search(
     client: &Client,
     base_url: &str,
     index: &str,
@@ -555,7 +581,7 @@ async fn begin_search(
         req = req.json(&query);
     }
 
-    let mut bytes = send_request(req).await?;
+    let mut bytes = send_request(req)?;
     let data: SearchResponse =
         simd_json::serde::from_slice(bytes.as_mut()).context("parse response")?;
     Ok((
@@ -565,7 +591,7 @@ async fn begin_search(
 }
 
 #[instrument(name = "GET and parse quickwit continue search results")]
-async fn continue_search(
+fn continue_search(
     client: &Client,
     base_url: &str,
     scroll_id: String,
@@ -578,7 +604,7 @@ async fn continue_search(
         scroll: format!("{}ms", scroll_timeout.as_millis()),
     });
 
-    let mut bytes = send_request(req).await?;
+    let mut bytes = send_request(req)?;
     let data: SearchResponse =
         simd_json::serde::from_slice(bytes.as_mut()).context("parse response")?;
     Ok((
@@ -588,7 +614,7 @@ async fn continue_search(
 }
 
 #[instrument(skip(query), name = "GET and parse quickwit count result")]
-async fn count(client: &Client, base_url: &str, index: &str, query: Option<Value>) -> Result<u64> {
+fn count(client: &Client, base_url: &str, index: &str, query: Option<Value>) -> Result<u64> {
     let url = format!("{}/api/v1/_elastic/{}/_count", base_url, index);
 
     let mut req = client.get(&url);
@@ -596,7 +622,7 @@ async fn count(client: &Client, base_url: &str, index: &str, query: Option<Value
         req = req.json(&query);
     }
 
-    let mut bytes = send_request(req).await?;
+    let mut bytes = send_request(req)?;
     let data: CountResponse =
         simd_json::serde::from_slice(bytes.as_mut()).context("parse response")?;
     Ok(data.count)
@@ -606,27 +632,27 @@ async fn count(client: &Client, base_url: &str, index: &str, query: Option<Value
     skip(query),
     name = "GET and parse quickwit search aggregation results"
 )]
-async fn search_aggregation(
+fn search_aggregation(
     client: &Client,
     base_url: &str,
     index: &str,
-    query: Option<Value>,
+    query: Option<&Value>,
 ) -> Result<SearchAggregationResponse> {
     let url = format!("{}/api/v1/_elastic/{}/_search", base_url, index,);
 
     let mut req = client.get(&url);
     if let Some(query) = query {
-        req = req.json(&query);
+        req = req.json(query);
     }
 
-    let mut bytes = send_request(req).await?;
+    let mut bytes = send_request(req)?;
     simd_json::serde::from_slice(bytes.as_mut()).context("parse response")
 }
 
 #[instrument(name = "GET and parse quickwit indexes")]
-async fn get_indexes(client: &Client, base_url: &str) -> Result<QuickwitIndexes> {
+async fn get_indexes(client: &reqwest::Client, base_url: &str) -> Result<QuickwitIndexes> {
     let url = format!("{}/api/v1/indexes", base_url);
-    let mut bytes = send_request(client.get(&url)).await?;
+    let mut bytes = async_send_request(client.get(&url)).await?;
     let data: Vec<IndexResponse> =
         simd_json::serde::from_slice(bytes.as_mut()).context("parse response")?;
     Ok(data
@@ -646,7 +672,7 @@ async fn refresh_indexes_at_interval(
     config: QuickwitConfig,
     weak_indexes: Weak<RwLock<QuickwitIndexes>>,
 ) {
-    let client = Client::new();
+    let client = reqwest::Client::new();
 
     run_at_interval(
         async || {
@@ -672,6 +698,81 @@ async fn refresh_indexes_at_interval(
     .await;
 }
 
+struct QuerySearchIter {
+    client: Client,
+    url: String,
+    index: String,
+    query: Option<Value>,
+    scroll_timeout: Duration,
+    scroll_size: u16,
+    logs: LogTryIter,
+    scroll_id: Option<String>,
+}
+
+impl QuerySearchIter {
+    fn new(
+        client: Client,
+        url: String,
+        index: String,
+        query: Option<Value>,
+        scroll_timeout: Duration,
+        scroll_size: u16,
+    ) -> Self {
+        Self {
+            client,
+            url,
+            index,
+            query,
+            scroll_timeout,
+            scroll_size,
+            logs: Box::new(iter::empty()),
+            scroll_id: None,
+        }
+    }
+
+    fn begin_search(&mut self) -> Result<(Vec<Log>, String)> {
+        begin_search(
+            &self.client,
+            &self.url,
+            &self.index,
+            self.query.take(),
+            &self.scroll_timeout,
+            self.scroll_size,
+        )
+    }
+
+    fn continue_search(&self, scroll_id: String) -> Result<(Vec<Log>, String)> {
+        continue_search(&self.client, &self.url, scroll_id, &self.scroll_timeout)
+    }
+
+    fn set_next_batch(&mut self, logs: Vec<Log>, scroll_id: String) -> Option<Result<Log>> {
+        self.scroll_id = Some(scroll_id);
+        self.logs = Box::new(logs.into_iter().map(Ok));
+        self.logs.next()
+    }
+}
+
+impl Iterator for QuerySearchIter {
+    type Item = Result<Log>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if let Some(log) = self.logs.next() {
+            return Some(log);
+        }
+
+        let result = match &self.scroll_id {
+            None => self.begin_search(),
+            Some(scroll_id) => self.continue_search(scroll_id.clone()),
+        };
+
+        match result {
+            Ok((logs, _)) if logs.is_empty() => None,
+            Ok((logs, scroll_id)) => self.set_next_batch(logs, scroll_id),
+            Err(e) => Some(Err(e)),
+        }
+    }
+}
+
 impl QuickwitConnector {
     pub fn new(config: QuickwitConfig) -> QuickwitConnector {
         let indexes = Arc::new(RwLock::new(BTreeMap::new()));
@@ -686,58 +787,6 @@ impl QuickwitConnector {
             interval_task,
             client: Client::new(),
         }
-    }
-
-    async fn query_search(
-        client: Client,
-        url: String,
-        index: String,
-        query: Option<Value>,
-        scroll_timeout: Duration,
-        scroll_size: u16,
-        limit: Option<u32>,
-    ) -> Result<LogTryStream> {
-        let start = Instant::now();
-
-        let (mut logs, mut scroll_id) =
-            begin_search(&client, &url, &index, query, &scroll_timeout, scroll_size).await?;
-
-        let duration = start.elapsed();
-        debug!(elapsed_time = ?duration, "Begin search time");
-
-        if logs.is_empty() {
-            return Ok(Box::pin(stream::empty()));
-        }
-
-        Ok(Box::pin(try_stream! {
-            let mut streamed = 0;
-
-            for log in logs {
-                yield log;
-                streamed += 1;
-                if let Some(limit) = limit {
-                    if streamed >= limit {
-                        return;
-                    }
-                }
-            }
-
-            loop {
-                (logs, scroll_id) = continue_search(&client, &url, scroll_id, &scroll_timeout).await?;
-                if logs.is_empty() {
-                    return;
-                }
-                for log in logs {
-                    yield log;
-                    streamed += 1;
-                    if let Some(limit) = limit {
-                        if streamed >= limit {
-                            return;
-                        }
-                    }
-                }
-            }
-        }))
     }
 
     fn parse_last_bucket(
@@ -816,17 +865,15 @@ impl QuickwitConnector {
         Ok(())
     }
 
-    async fn query_aggregation(
-        client: Client,
-        url: String,
-        index: String,
-        query: Option<Value>,
-        limit: Option<u32>,
-        group_by: Vec<String>,
-        count_fields: Vec<String>,
-    ) -> Result<LogTryStream> {
-        let mut response = search_aggregation(&client, &url, &index, query)
-            .await
+    fn query_aggregation(
+        client: &Client,
+        url: &str,
+        index: &str,
+        query: Option<&Value>,
+        group_by: &[String],
+        count_fields: &[String],
+    ) -> Result<Vec<Log>> {
+        let mut response = search_aggregation(client, url, index, query)
             .context("run quickwit aggregation query")?;
 
         let mut logs = Vec::new();
@@ -854,23 +901,7 @@ impl QuickwitConnector {
             .context("parse quickwit aggregation response (no group by)")?;
         }
 
-        Ok(Box::pin(try_stream! {
-            if logs.is_empty() {
-                return;
-            }
-
-            let mut streamed = 0;
-
-            for log in logs {
-                yield log;
-                streamed += 1;
-                if let Some(limit) = limit {
-                    if streamed >= limit {
-                        return;
-                    }
-                }
-            }
-        }))
+        Ok(logs)
     }
 }
 
@@ -889,7 +920,7 @@ impl Connector for QuickwitConnector {
         Box::new(QuickwitHandle::default())
     }
 
-    async fn query(
+    fn query(
         &self,
         collection: &str,
         handle: &dyn QueryHandle,
@@ -963,7 +994,7 @@ impl Connector for QuickwitConnector {
         );
 
         if handle.count {
-            let mut result = count(&self.client, &url, &collections, query).await?;
+            let mut result = count(&self.client, &url, &collections, query)?;
             if let Some(limit) = limit {
                 result = (limit as u64).min(result);
             }
@@ -972,37 +1003,33 @@ impl Connector for QuickwitConnector {
 
         if let Some(limit) = limit {
             if limit == 0 {
-                return Ok(QueryResponse::Logs(Box::pin(stream::empty())));
+                return Ok(QueryResponse::Logs(Box::new(iter::empty())));
             }
         }
 
         if is_aggregation_query {
-            return Ok(QueryResponse::Logs(
-                Self::query_aggregation(
-                    self.client.clone(),
-                    url,
-                    collections,
-                    query,
-                    limit,
-                    handle.group_by.clone(),
-                    handle.count_fields.clone(),
-                )
-                .await?,
-            ));
+            let logs = Self::query_aggregation(
+                &self.client,
+                &url,
+                &collections,
+                query.as_ref(),
+                &handle.group_by,
+                &handle.count_fields,
+            )?
+            .into_iter()
+            .map(Ok);
+            return Ok(QueryResponse::Logs(maybe_limit!(logs, limit)));
         }
 
-        Ok(QueryResponse::Logs(
-            Self::query_search(
-                self.client.clone(),
-                url,
-                collections,
-                query,
-                scroll_timeout,
-                scroll_size,
-                limit,
-            )
-            .await?,
-        ))
+        let logs = QuerySearchIter::new(
+            self.client.clone(),
+            url,
+            collections,
+            query,
+            scroll_timeout,
+            scroll_size,
+        );
+        Ok(QueryResponse::Logs(maybe_limit!(logs, limit)))
     }
 
     fn apply_filter(

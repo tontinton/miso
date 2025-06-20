@@ -6,3 +6,6 @@ use futures_core::Stream;
 pub type Log = serde_json::Map<String, serde_json::Value>;
 pub type LogStream = Pin<Box<dyn Stream<Item = Log> + Send>>;
 pub type LogTryStream = Pin<Box<dyn Stream<Item = Result<Log>> + Send>>;
+
+pub type LogIter = Box<dyn Iterator<Item = Log>>;
+pub type LogTryIter = Box<dyn Iterator<Item = Result<Log>>>;
