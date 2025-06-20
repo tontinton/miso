@@ -609,8 +609,6 @@ impl Workflow {
         let tasks = FuturesUnordered::new();
 
         for (i, step) in self.steps.into_iter().enumerate() {
-            debug!("Spawning step: {:?}", step);
-
             let rxs = if matches!(step, WorkflowStep::Scan(..) | WorkflowStep::Union(..)) {
                 Vec::new()
             } else {
