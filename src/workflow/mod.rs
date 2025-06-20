@@ -14,32 +14,28 @@ use futures_util::{
     StreamExt,
 };
 use hashbrown::{DefaultHashBuilder, HashSet};
-use join::{join_streams, Join, JoinType};
 use kinded::Kinded;
-use parking_lot::Mutex;
-use project::extend_stream;
-use summarize::{create_summarize_executor, Summarize};
 use tokio::{
     spawn,
     sync::{mpsc, watch, Notify},
     task::JoinHandle,
     time::timeout,
 };
-use topn::{topn_stream, PartialTopNExecutor, SORT_CONFIG};
 use tracing::{debug, error, info, instrument};
 
 use crate::{
-    connectors::{
-        stats::{ConnectorStats, FieldStats},
-        Connector, ConnectorState, QueryHandle, QueryResponse, Split,
-    },
+    connectors::{Connector, QueryHandle, QueryResponse},
     log::{Log, LogStream, LogTryStream},
     workflow::{
         filter::filter_stream,
+        join::{join_streams, Join, JoinType},
         limit::limit_stream,
         partial_stream::{execute_partial_stream, PartialStream},
-        project::project_stream,
+        project::{extend_stream, project_stream},
+        scan::Scan,
         sort::sort_stream,
+        summarize::{create_summarize_executor, Summarize},
+        topn::{topn_stream, PartialTopNExecutor, SORT_CONFIG},
     },
 };
 
@@ -53,6 +49,7 @@ pub mod join;
 pub mod limit;
 pub mod partial_stream;
 pub mod project;
+pub mod scan;
 mod serde_json_utils;
 pub mod sort;
 pub mod sortable_value;
@@ -66,57 +63,6 @@ const MISO_METADATA_FIELD_NAME: &str = "_miso";
 const DYNAMIC_FILTER_TIMEOUT: Duration = Duration::from_secs(30);
 
 type WorkflowTasks = FuturesUnordered<JoinHandle<Result<()>>>;
-
-#[derive(Clone, Debug)]
-pub struct Scan {
-    pub connector_name: String,
-    pub collection: String,
-
-    pub connector: Arc<dyn Connector>,
-    pub handle: Arc<dyn QueryHandle>,
-    pub split: Option<Arc<dyn Split>>,
-    pub stats: Arc<Mutex<ConnectorStats>>,
-
-    pub dynamic_filter_tx: Option<watch::Sender<Option<FilterAst>>>,
-    pub dynamic_filter_rx: Option<watch::Receiver<Option<FilterAst>>>,
-}
-
-impl PartialEq for Scan {
-    fn eq(&self, other: &Self) -> bool {
-        // Only checking the name for now.
-        self.connector_name == other.connector_name && self.collection == other.collection
-    }
-}
-
-impl Scan {
-    pub async fn from_connector_state(
-        connector_state: Arc<ConnectorState>,
-        connector_name: String,
-        collection: String,
-    ) -> Self {
-        let connector = connector_state.connector.clone();
-        let handle = connector.get_handle().into();
-        let stats = connector_state.stats.clone();
-        Self {
-            connector_name,
-            collection,
-            connector,
-            handle,
-            split: None,
-            stats,
-            dynamic_filter_tx: None,
-            dynamic_filter_rx: None,
-        }
-    }
-
-    pub fn get_field_stats(&self, field: &str) -> Option<FieldStats> {
-        self.stats
-            .lock()
-            .get(&self.collection)
-            .and_then(|x| x.get(field))
-            .cloned()
-    }
-}
 
 #[derive(Kinded, Clone, Debug, PartialEq)]
 pub enum WorkflowStep {
