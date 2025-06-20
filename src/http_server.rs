@@ -36,7 +36,7 @@ use crate::{
     shutdown_future::ShutdownFuture,
     workflow::{
         filter::FilterAst, join::Join, partial_stream::PartialStream, project::ProjectField,
-        sort::Sort, summarize::Summarize, Scan, Workflow, WorkflowStep,
+        scan::Scan, sort::Sort, summarize::Summarize, Workflow, WorkflowStep,
     },
 };
 

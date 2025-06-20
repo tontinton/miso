@@ -2,7 +2,7 @@ use tokio::sync::watch;
 
 use crate::{
     pattern,
-    workflow::{Scan, WorkflowStep},
+    workflow::{scan::Scan, WorkflowStep},
 };
 
 use super::{Group, Optimization, Pattern};
