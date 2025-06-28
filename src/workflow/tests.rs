@@ -7,7 +7,6 @@ use std::{
     time::Duration,
 };
 
-use async_stream::try_stream;
 use axum::async_trait;
 use collection_macros::btreemap;
 use color_eyre::{
@@ -15,10 +14,12 @@ use color_eyre::{
     Result,
 };
 use ctor::ctor;
-use futures_util::TryStreamExt;
+use futures_util::{stream, StreamExt, TryStreamExt};
 use serde::{Deserialize, Serialize};
 use test_case::test_case;
-use tokio::{sync::Notify, task::spawn_blocking, time::sleep};
+use tokio::{task::spawn_blocking, time::sleep};
+use tokio_util::sync::CancellationToken;
+use tracing::info;
 
 use crate::{
     connectors::{
@@ -119,11 +120,7 @@ impl Connector for TestConnector {
             .get(collection)
             .context("collection to exist")?
             .clone();
-        Ok(QueryResponse::Logs(Box::pin(try_stream! {
-            for log in logs {
-                yield log;
-            }
-        })))
+        Ok(QueryResponse::Logs(Box::pin(stream::iter(logs).map(Ok))))
     }
 
     fn apply_filter(
@@ -246,15 +243,17 @@ async fn check_multi_connectors(
     let steps_cloned = steps.clone();
     let optimized_steps = spawn_blocking(move || optimizer.optimize(steps_cloned)).await?;
 
-    let optimizations_workflow = Workflow::new(optimized_steps);
     let no_optimizations_workflow = Workflow::new(steps);
+    info!("No optimizations:\n{no_optimizations_workflow}");
+    let optimizations_workflow = Workflow::new(optimized_steps);
+    info!("Optimized:\n{optimizations_workflow}");
 
-    let cancel = Arc::new(Notify::new());
+    let cancel = CancellationToken::new();
     if should_cancel {
-        cancel.notify_one();
+        cancel.cancel();
     }
     let mut logs_stream = no_optimizations_workflow
-        .execute(cancel.clone())
+        .execute(cancel)
         .context("non optimized workflow execute")?;
 
     let mut logs = Vec::new();
@@ -265,15 +264,15 @@ async fn check_multi_connectors(
 
     assert_eq!(
         expected_logs, logs,
-        "logs not equal to expected (left is expected, right is what we received)",
+        "non optimized workflow streamed logs not equal to expected (left is expected, right is what we received)",
     );
 
-    let cancel = Arc::new(Notify::new());
+    let cancel = CancellationToken::new();
     if should_cancel {
-        cancel.notify_one();
+        cancel.cancel();
     }
     let mut logs_stream = optimizations_workflow
-        .execute(cancel.clone())
+        .execute(cancel)
         .context("optimized workflow execute")?;
 
     let mut optimized_logs = Vec::with_capacity(logs.len());
@@ -876,11 +875,11 @@ async fn join_inner(partitions: usize) -> Result<()> {
                 {{"scan": ["test", "left"]}},
                 {{
                     "join": [
-                        {{"on": ["id", "id"], "partitions": {}}},
+                        {{"on": ["id", "id"], "partitions": {partitions}}},
                         [{{"scan": ["test", "right"]}}]
                     ]
                 }}
-            ]"#, partitions)
+            ]"#)
         )
         .input(btreemap!{
             "left"  => r#"[{"id": 1, "value": "one"}, {"id": 1, "value": "dup"}, {"id": 2, "value": "two"}, {"id": 3, "value": "three"}]"#,
@@ -916,8 +915,7 @@ async fn join_inner(partitions: usize) -> Result<()> {
                         partial_cmp_values(val_a, val_b).unwrap_or(Ordering::Equal)
                     }
                     _ => panic!(
-                        "Unexpected FilterAst variants in Vec during comparison: {:?} vs {:?}",
-                        a, b
+                        "Unexpected FilterAst variants in Vec during comparison: {a:?} vs {b:?}"
                     ),
                 }
             };
@@ -928,7 +926,7 @@ async fn join_inner(partitions: usize) -> Result<()> {
             assert_eq!(actual_vec, expected_vec);
         }
         _ => {
-            panic!("Expected FilterAst::In variant, but got: {:?}", ast);
+            panic!("Expected FilterAst::In variant, but got: {ast:?}");
         }
     }
 
@@ -950,11 +948,11 @@ async fn join_outer(partitions: usize) -> Result<()> {
                 {{"scan": ["test", "left"]}},
                 {{
                     "join": [
-                        {{"on": ["id", "id"], "type": "outer", "partitions": {}}},
+                        {{"on": ["id", "id"], "type": "outer", "partitions": {partitions}}},
                         [{{"scan": ["test", "right"]}}]
                     ]
                 }}
-            ]"#, partitions)
+            ]"#)
         )
         .input(btreemap!{
             "left"  => r#"[{"id": 1, "value": "one"}, {"id": 1, "value": "dup"}, {"id": 2, "value": "two"}, {"id": 3, "value": "three"}]"#,
@@ -984,11 +982,11 @@ async fn join_left(partitions: usize) -> Result<()> {
                 {{"scan": ["test", "left"]}},
                 {{
                     "join": [
-                        {{"on": ["id", "id"], "type": "left", "partitions": {}}},
+                        {{"on": ["id", "id"], "type": "left", "partitions": {partitions}}},
                         [{{"scan": ["test", "right"]}}]
                     ]
                 }}
-            ]"#, partitions)
+            ]"#)
         )
         .input(btreemap!{
             "left"  => r#"[{"id": 1, "value": "one"}, {"id": 2, "value": "two"}, {"id": 3, "value": "three"}]"#,
@@ -1015,11 +1013,11 @@ async fn join_right(partitions: usize) -> Result<()> {
                 {{"scan": ["test", "left"]}},
                 {{
                     "join": [
-                        {{"on": ["id", "id"], "type": "right", "partitions": {}}},
+                        {{"on": ["id", "id"], "type": "right", "partitions": {partitions}}},
                         [{{"scan": ["test", "right"]}}]
                     ]
                 }}
-            ]"#, partitions)
+            ]"#)
         )
         .input(btreemap!{
             "left"  => r#"[{"id": 1, "value": "one"}, {"id": 2, "value": "two"}, {"id": 3, "value": "three"}]"#,

@@ -18,12 +18,10 @@ use testcontainers::{
     runners::AsyncRunner,
     ContainerAsync, GenericImage, ImageExt,
 };
-use tokio::{
-    sync::{Notify, OnceCell},
-    task::spawn_blocking,
-};
+use tokio::{sync::OnceCell, task::spawn_blocking};
 use tokio_retry::{strategy::FixedInterval, Retry};
 use tokio_test::block_on;
+use tokio_util::sync::CancellationToken;
 use tracing::info;
 
 use crate::{
@@ -245,7 +243,7 @@ async fn create_index(
     index_name: &str,
     doc_mapping: DocMapping,
 ) -> Result<()> {
-    let url = format!("{}/api/v1/indexes", base_url);
+    let url = format!("{base_url}/api/v1/indexes");
     let response = client
         .post(&url)
         .json(&CreateIndex {
@@ -269,7 +267,7 @@ async fn write_to_index(
     index_name: &str,
     data: &'static str,
 ) -> Result<()> {
-    let url = format!("{}/api/v1/{}/ingest", base_url, index_name);
+    let url = format!("{base_url}/api/v1/{index_name}/ingest");
     let response = client
         .post(&url)
         .query(&[("commit", "force")])
@@ -331,14 +329,14 @@ async fn predicate_pushdown_same_results(
         spawn_blocking(move || no_pushdown_optimizer.optimize(steps)).await?;
     let no_pushdown_workflow = Workflow::new(no_predicate_pushdown_steps);
 
-    let cancel1 = Arc::new(Notify::new());
-    let cancel2 = Arc::new(Notify::new());
+    let cancel1 = CancellationToken::new();
+    let cancel2 = CancellationToken::new();
 
     let mut pushdown_stream = pushdown_workflow
-        .execute(cancel1.clone())
+        .execute(cancel1)
         .context("execute predicate pushdown workflow")?;
     let mut no_pushdown_stream = no_pushdown_workflow
-        .execute(cancel2.clone())
+        .execute(cancel2)
         .context("execute no predicate pushdown workflow")?;
 
     let mut pushdown_results = Vec::with_capacity(count);

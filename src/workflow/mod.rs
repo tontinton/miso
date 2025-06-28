@@ -1,41 +1,32 @@
-use std::{
-    convert::identity,
-    hash::BuildHasher,
-    sync::Arc,
-    time::{Duration, Instant},
-};
+use std::{iter, time::Instant};
 
-use async_stream::{stream, try_stream};
-use color_eyre::eyre::{Context, Result};
-use count::{count_stream, count_to_log, mux_count_stream, PartialMuxCountExecutor};
+use async_stream::try_stream;
+use color_eyre::eyre::{eyre, Context, Result};
+use flume::{Receiver, Sender};
 use futures_util::{
-    future::try_join_all,
     stream::{self, select_all, FuturesUnordered},
-    StreamExt,
+    FutureExt, StreamExt,
 };
-use hashbrown::{DefaultHashBuilder, HashSet};
 use kinded::Kinded;
-use tokio::{
-    spawn,
-    sync::{mpsc, watch, Notify},
-    task::JoinHandle,
-    time::timeout,
-};
-use tracing::{debug, error, info, instrument};
+use tokio_util::sync::CancellationToken;
+use tracing::{debug, info, instrument};
 
 use crate::{
-    connectors::{Connector, QueryHandle, QueryResponse},
-    log::{Log, LogStream, LogTryStream},
+    cancel_iter::CancelIter,
+    log::{Log, LogItem, LogIter, LogStream, LogTryStream},
+    send_once::SendOnce,
+    spawn_thread::{spawn, ThreadRx},
     workflow::{
-        filter::filter_stream,
-        join::{join_streams, Join, JoinType},
-        limit::limit_stream,
-        partial_stream::{execute_partial_stream, PartialStream},
-        project::{extend_stream, project_stream},
-        scan::Scan,
-        sort::sort_stream,
-        summarize::{create_summarize_executor, Summarize},
-        topn::{topn_stream, PartialTopNExecutor, SORT_CONFIG},
+        count::{CountIter, MuxCountIter},
+        filter::FilterIter,
+        join::{join_rx, DynamicFilterTx, Join, JoinType},
+        limit::LimitIter,
+        partial_stream::{PartialStream, PartialStreamIter, UnionIter},
+        project::ProjectIter,
+        scan::{scan_rx, Scan},
+        sort::sort_rx,
+        summarize::{create_summarize_iter, Summarize},
+        topn::{PartialTopNIter, TopNIter},
     },
 };
 
@@ -60,9 +51,10 @@ pub mod topn;
 mod tests;
 
 const MISO_METADATA_FIELD_NAME: &str = "_miso";
-const DYNAMIC_FILTER_TIMEOUT: Duration = Duration::from_secs(30);
 
-type WorkflowTasks = FuturesUnordered<JoinHandle<Result<()>>>;
+pub type AsyncTask = tokio::task::JoinHandle<Result<()>>;
+type PipelineRunResult = Result<(LogIter, Vec<ThreadRx>, Vec<AsyncTask>)>;
+type WorkflowRunResult = Result<(Vec<Receiver<Log>>, Vec<ThreadRx>, Vec<AsyncTask>)>;
 
 #[derive(Kinded, Clone, Debug, PartialEq)]
 pub enum WorkflowStep {
@@ -119,373 +111,163 @@ impl PartialEq for Workflow {
     }
 }
 
-fn rx_stream(mut rx: mpsc::Receiver<Log>) -> LogStream {
-    Box::pin(stream! {
-        while let Some(log) = rx.recv().await {
-            yield log
-        }
-    })
+pub enum WorkflowRx {
+    /// First step - A step that generates input logs.
+    None,
+
+    /// Continue doing something with the input logs in the same pipeline.
+    Pipeline(LogIter),
+
+    /// Aggregate multiple pipelines.
+    MuxPipelines(Vec<Receiver<Log>>),
 }
 
-fn rx_union_stream(rxs: Vec<mpsc::Receiver<Log>>) -> LogStream {
-    let streams: Vec<LogStream> = rxs.into_iter().map(rx_stream).collect();
-    Box::pin(select_all(streams))
+pub struct LogItemReceiverIter {
+    rx: Receiver<LogItem>,
 }
 
-fn stream_to_dynamic_filter_tx_stream(
-    mut stream: LogStream,
-    dynamic_filter_tx: watch::Sender<Option<FilterAst>>,
-    field: impl Into<String>,
-) -> LogStream {
-    let field = field.into();
-    let mut values = HashSet::new();
+impl Iterator for LogItemReceiverIter {
+    type Item = LogItem;
 
-    Box::pin(stream! {
-        while let Some(log) = stream.next().await {
-            if let Some(value) = log.get(&field) {
-                values.insert(value.clone());
-            }
-            yield log;
-        }
-
-        let ast = FilterAst::In(
-            Box::new(FilterAst::Id(field)),
-            values.into_iter().map(FilterAst::Lit).collect(),
-        );
-        if let Err(e) = dynamic_filter_tx.send(Some(ast)) {
-            error!("Failed sending dynamic filter: {e:?}");
-        }
-    })
-}
-
-async fn count_to_tx(count: u64, tx: mpsc::Sender<Log>) {
-    let logs = [count_to_log(count); 1];
-    logs_iter_to_tx(logs, tx, "count").await;
-}
-
-async fn stream_to_tx(mut stream: LogStream, tx: mpsc::Sender<Log>, tag: &str) -> Result<()> {
-    while let Some(log) = stream.next().await {
-        if let Err(e) = tx.send(log).await {
-            debug!("Closing {} step: {:?}", tag, e);
-            break;
-        }
-    }
-    Ok(())
-}
-
-async fn try_stream_to_tx(
-    mut stream: LogTryStream,
-    tx: mpsc::Sender<Log>,
-    tag: &str,
-) -> Result<()> {
-    while let Some(log) = stream.next().await {
-        if let Err(e) = tx.send(log.context(format!("tx {tag}"))?).await {
-            debug!("Closing {} step: {:?}", tag, e);
-            break;
-        }
-    }
-    Ok(())
-}
-
-pub async fn logs_iter_to_tx<I>(logs: I, tx: mpsc::Sender<Log>, tag: &str)
-where
-    I: IntoIterator<Item = Log>,
-{
-    for log in logs {
-        if let Err(e) = tx.send(log).await {
-            debug!("Closing {} step: {:?}", tag, e);
-            break;
-        }
+    fn next(&mut self) -> Option<Self::Item> {
+        self.rx.recv().ok()
     }
 }
 
-async fn pipe(mut rx: LogStream, tx: mpsc::Sender<Log>) {
-    while let Some(log) = rx.next().await {
-        if tx.send(log).await.is_err() {
-            break;
-        }
+pub struct LogReceiverIter {
+    rx: Receiver<Log>,
+}
+
+impl Iterator for LogReceiverIter {
+    type Item = LogItem;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.rx.recv().ok().map(LogItem::Log)
     }
 }
 
-async fn pipe_task(rx: LogStream, tx: mpsc::Sender<Log>) -> Result<()> {
-    pipe(rx, tx).await;
-    Ok(())
+fn rxs_to_iter(mut rxs: Vec<Receiver<Log>>) -> LogIter {
+    if rxs.len() == 1 {
+        Box::new(LogReceiverIter {
+            rx: rxs.pop().unwrap(),
+        })
+    } else {
+        Box::new(UnionIter::new(rxs))
+    }
 }
 
-async fn apply_dynamic_filter(
-    connector: &dyn Connector,
-    handle: &dyn QueryHandle,
-    mut dynamic_filter_rx: watch::Receiver<Option<FilterAst>>,
-) -> Option<Arc<dyn QueryHandle>> {
-    info!("Waiting for dynamic filter");
-
-    match timeout(DYNAMIC_FILTER_TIMEOUT, dynamic_filter_rx.changed()).await {
-        Ok(Ok(())) => {
-            info!("Got dynamic filter");
-            if let Some(ast) = dynamic_filter_rx.borrow().as_ref() {
-                if let Some(dynamic_filtered_handle) = connector.apply_filter(ast, handle) {
-                    info!("Applied dynamic filter");
-                    return Some(dynamic_filtered_handle.into());
-                }
-            }
-        }
-        Ok(Err(e)) => {
-            error!("Error waiting on dynamic filter: {e:?}");
-        }
-        Err(e) => {
-            debug!("Timeout waiting on dynamic filter: {e:?}");
+impl WorkflowRx {
+    fn into_iter(self) -> LogIter {
+        match self {
+            WorkflowRx::None => panic!("first step doesn't have any input logs"),
+            WorkflowRx::Pipeline(logs) => logs,
+            WorkflowRx::MuxPipelines(rxs) => rxs_to_iter(rxs),
         }
     }
-    None
-}
-
-pub async fn join_streams_partitioned(
-    config: Join,
-    mut left_stream: LogStream,
-    mut right_stream: LogStream,
-    partitions: usize,
-    output_tx: mpsc::Sender<Log>,
-) -> Result<()> {
-    let mut tasks = Vec::with_capacity(partitions);
-    let mut left_txs = Vec::with_capacity(partitions);
-    let mut right_txs = Vec::with_capacity(partitions);
-
-    for i in 0..partitions {
-        let (left_tx, left_rx) = mpsc::channel(1);
-        let (right_tx, right_rx) = mpsc::channel(1);
-
-        let config = config.clone();
-        let output_tx = output_tx.clone();
-
-        let task = spawn(async move {
-            let stream = join_streams(config, rx_stream(left_rx), rx_stream(right_rx)).await;
-            stream_to_tx(stream, output_tx, &format!("join({i})")).await?;
-            Ok::<(), color_eyre::eyre::Error>(())
-        });
-
-        tasks.push(task);
-        left_txs.push(left_tx);
-        right_txs.push(right_tx);
-    }
-
-    let (left_key, right_key) = &config.on;
-    let build_hasher = DefaultHashBuilder::default();
-
-    loop {
-        tokio::select! {
-            Some(log) = left_stream.next() => {
-                if let Some(value) = log.get(left_key) {
-                    let i = (build_hasher.hash_one(value) % partitions as u64) as usize;
-                    if let Err(e) = left_txs[i].send(log).await {
-                        debug!("Closing partition join step ({i}): {e:?}");
-                        break;
-                    }
-                }
-            },
-            Some(log) = right_stream.next() => {
-                if let Some(value) = log.get(right_key) {
-                    let i = (build_hasher.hash_one(value) % partitions as u64) as usize;
-                    if let Err(e) = right_txs[i].send(log).await {
-                        debug!("Closing partition join step ({i}): {e:?}");
-                        break;
-                    }
-                }
-            },
-            else => break,
-        }
-    }
-
-    drop(left_txs);
-    drop(right_txs);
-
-    let join_results = try_join_all(tasks).await?;
-    for join_result in join_results {
-        join_result?;
-    }
-
-    Ok(())
 }
 
 impl WorkflowStep {
     #[instrument(skip_all, fields(step = %self))]
-    async fn execute(
+    fn execute(
         self: WorkflowStep,
-        rxs: Vec<mpsc::Receiver<Log>>,
-        tx: mpsc::Sender<Log>,
+        rx: WorkflowRx,
         partial_stream: Option<PartialStream>,
-        cancel: Arc<Notify>,
-    ) -> Result<()> {
-        let start = Instant::now();
-        let _guard = scopeguard::guard((), |_| {
-            let duration = start.elapsed();
-            info!(elapsed_time = ?duration, "Workflow step execution time");
-        });
+        cancel: CancellationToken,
+    ) -> PipelineRunResult {
+        let mut threads = Vec::new();
+        let mut async_tasks = Vec::new();
 
-        match self {
-            WorkflowStep::Scan(Scan {
-                collection,
-                connector,
-                mut handle,
-                split,
-                dynamic_filter_rx,
-                ..
-            }) => {
-                assert!(rxs.is_empty());
-
-                if let Some(filter_rx) = dynamic_filter_rx {
-                    if let Some(dynamic_filtered_handle) =
-                        apply_dynamic_filter(connector.as_ref(), handle.as_ref(), filter_rx).await
-                    {
-                        handle = dynamic_filtered_handle;
-                    }
-                }
-
-                let response = connector
-                    .query(&collection, handle.as_ref(), split.as_deref())
-                    .await?;
-                match response {
-                    QueryResponse::Logs(stream) => {
-                        try_stream_to_tx(stream, tx, "scan").await?;
-                    }
-                    QueryResponse::Count(count) => {
-                        count_to_tx(count, tx).await;
-                    }
-                }
+        let iter = match self {
+            WorkflowStep::Scan(scan) => {
+                assert!(matches!(rx, WorkflowRx::None));
+                let (rx, task) = scan_rx(scan, cancel);
+                async_tasks.push(task);
+                Box::new(LogItemReceiverIter { rx })
             }
-            WorkflowStep::Filter(ast) => {
-                let stream = filter_stream(ast, rx_union_stream(rxs));
-                stream_to_tx(stream, tx, "filter").await?;
-            }
-            WorkflowStep::Project(fields) => {
-                let stream = project_stream(fields, rx_union_stream(rxs)).await;
-                stream_to_tx(stream, tx, "project").await?;
-            }
-            WorkflowStep::Extend(fields) => {
-                let stream = extend_stream(fields, rx_union_stream(rxs)).await;
-                stream_to_tx(stream, tx, "extend").await?;
-            }
-            WorkflowStep::Limit(limit) | WorkflowStep::MuxLimit(limit) => {
-                let stream = limit_stream(limit, rx_union_stream(rxs));
-                stream_to_tx(stream, tx, "limit").await?;
-            }
-            WorkflowStep::Sort(sorts) => {
-                let logs = sort_stream(sorts, rx_union_stream(rxs)).await?;
-                logs_iter_to_tx(logs, tx, "sort").await;
-            }
-            WorkflowStep::MuxTopN(sorts, limit) if partial_stream.is_some() => {
-                let (executor, config) = PartialTopNExecutor::new(sorts, limit);
-                let stream_fut = execute_partial_stream(
-                    Box::new(executor),
-                    partial_stream.unwrap(),
-                    rxs,
-                    tx,
-                    identity,
-                    "partial mux top-n",
-                );
-                SORT_CONFIG.scope(config, stream_fut).await?;
-            }
-            WorkflowStep::TopN(sorts, limit) | WorkflowStep::MuxTopN(sorts, limit) => {
-                let (stream, config) = topn_stream(sorts, limit, rx_union_stream(rxs)).await;
-                SORT_CONFIG
-                    .scope(config, stream_to_tx(stream, tx, "top-n"))
-                    .await?;
-            }
-            WorkflowStep::MuxSummarize(config) if partial_stream.is_some() => {
-                execute_partial_stream(
-                    create_summarize_executor(config),
-                    partial_stream.unwrap(),
-                    rxs,
-                    tx,
-                    identity,
-                    "mux summarize",
-                )
-                .await
-                .context("partial mux summarize stream")?;
-            }
-            WorkflowStep::Summarize(config) | WorkflowStep::MuxSummarize(config) => {
-                let executor = create_summarize_executor(config);
-                let logs = executor.execute(rx_union_stream(rxs)).await?;
-                logs_iter_to_tx(logs, tx, "summarize").await;
+            WorkflowStep::Union(workflow) if workflow.steps.is_empty() => {
+                Box::new(iter::empty()) as LogIter
             }
             WorkflowStep::Union(workflow) => {
-                assert!(rxs.is_empty());
-
-                if workflow.steps.is_empty() {
-                    return Ok(());
+                assert!(matches!(rx, WorkflowRx::None));
+                let (rxs, inner_threads, inner_async_tasks) = workflow.create_pipelines(cancel)?;
+                threads.extend(inner_threads);
+                async_tasks.extend(inner_async_tasks);
+                rxs_to_iter(rxs)
+            }
+            WorkflowStep::Filter(ast) => Box::new(FilterIter::new(rx.into_iter(), ast)),
+            WorkflowStep::Project(fields) => {
+                Box::new(ProjectIter::new_project(rx.into_iter(), fields))
+            }
+            WorkflowStep::Extend(fields) => {
+                Box::new(ProjectIter::new_extend(rx.into_iter(), fields))
+            }
+            WorkflowStep::Limit(limit) | WorkflowStep::MuxLimit(limit) => {
+                Box::new(LimitIter::new(rx.into_iter(), limit))
+            }
+            WorkflowStep::Sort(sorts) => {
+                let (rx, thread) = sort_rx(rx.into_iter(), sorts, cancel);
+                threads.push(thread);
+                Box::new(LogItemReceiverIter { rx })
+            }
+            WorkflowStep::MuxTopN(sorts, limit) if partial_stream.is_some() => {
+                Box::new(PartialStreamIter::new(
+                    Box::new(PartialTopNIter::new(rx.into_iter(), sorts, limit)),
+                    partial_stream.unwrap(),
+                ))
+            }
+            WorkflowStep::TopN(sorts, limit) | WorkflowStep::MuxTopN(sorts, limit) => {
+                Box::new(TopNIter::new(rx.into_iter(), sorts, limit as usize))
+            }
+            WorkflowStep::MuxSummarize(config) if partial_stream.is_some() => {
+                Box::new(PartialStreamIter::new(
+                    create_summarize_iter(rx.into_iter(), config),
+                    partial_stream.unwrap(),
+                ))
+            }
+            WorkflowStep::Summarize(config) | WorkflowStep::MuxSummarize(config) => {
+                create_summarize_iter(rx.into_iter(), config)
+            }
+            WorkflowStep::Join(join, workflow) if workflow.steps.is_empty() => {
+                if matches!(join.type_, JoinType::Left | JoinType::Outer) {
+                    rx.into_iter()
+                } else {
+                    Box::new(iter::empty())
                 }
-
-                let (tasks, rx) = workflow.create_tasks(cancel.clone())?;
-                tasks.push(spawn(pipe_task(rx, tx)));
-
-                execute_tasks(tasks, cancel).await?;
             }
             WorkflowStep::Join(join, workflow) => {
-                let input_stream = rx_union_stream(rxs);
-                if workflow.steps.is_empty() {
-                    if matches!(join.type_, JoinType::Left | JoinType::Outer) {
-                        pipe(input_stream, tx).await;
-                    }
-                    return Ok(());
-                }
-
                 let WorkflowStep::Scan(scan) = &workflow.steps[0] else {
                     panic!("scan not as first step in join?");
                 };
                 let is_left_sending_dynamic_filter = scan.dynamic_filter_rx.is_some();
-                let dynamic_filter_tx = scan.dynamic_filter_tx.clone();
-
-                let (tasks, right_stream) = workflow.create_tasks(cancel.clone())?;
-
-                tasks.push(spawn(async move {
-                    let left_stream = input_stream;
-
-                    let (left_stream, right_stream) = match dynamic_filter_tx {
-                        Some(tx) if is_left_sending_dynamic_filter => (
-                            stream_to_dynamic_filter_tx_stream(left_stream, tx, &join.on.0),
-                            right_stream,
-                        ),
-                        Some(tx) => (
-                            left_stream,
-                            stream_to_dynamic_filter_tx_stream(right_stream, tx, &join.on.1),
-                        ),
-                        _ => (left_stream, right_stream),
-                    };
-
-                    let partitions = join.partitions;
-                    if partitions > 1 {
-                        join_streams_partitioned(join, left_stream, right_stream, partitions, tx)
-                            .await?;
+                let dynamic_filter_tx = scan.dynamic_filter_tx.clone().map(|tx| {
+                    let field = if is_left_sending_dynamic_filter {
+                        join.on.0.clone()
                     } else {
-                        let stream = join_streams(join, left_stream, right_stream).await;
-                        stream_to_tx(stream, tx, "join").await?;
-                    }
-                    Ok(())
-                }));
+                        join.on.1.clone()
+                    };
+                    DynamicFilterTx::new(tx, is_left_sending_dynamic_filter, field)
+                });
 
-                execute_tasks(tasks, cancel).await?;
-            }
-            WorkflowStep::MuxCount if partial_stream.is_some() => {
-                execute_partial_stream(
-                    Box::new(PartialMuxCountExecutor::default()),
-                    partial_stream.unwrap(),
-                    rxs,
-                    tx,
-                    |count| vec![count_to_log(count); 1],
-                    "partial mux count",
-                )
-                .await?;
-            }
-            WorkflowStep::MuxCount => {
-                let count = mux_count_stream(rx_union_stream(rxs)).await;
-                count_to_tx(count, tx).await;
-            }
-            WorkflowStep::Count => {
-                let count = count_stream(rx_union_stream(rxs)).await;
-                count_to_tx(count, tx).await;
-            }
-        }
+                let (right_rxs, inner_threads, inner_async_tasks) =
+                    workflow.create_pipelines(cancel.clone())?;
 
-        Ok(())
+                threads.extend(inner_threads);
+                async_tasks.extend(inner_async_tasks);
+
+                let (rx, join_threads) = join_rx(join, rx, right_rxs, dynamic_filter_tx, cancel);
+                threads.extend(join_threads);
+
+                Box::new(rx.into_iter().map(LogItem::Log))
+            }
+            WorkflowStep::MuxCount if partial_stream.is_some() => Box::new(PartialStreamIter::new(
+                Box::new(MuxCountIter::new(rx.into_iter())),
+                partial_stream.unwrap(),
+            )),
+            WorkflowStep::MuxCount => Box::new(MuxCountIter::new(rx.into_iter())),
+            WorkflowStep::Count => Box::new(CountIter::new(rx.into_iter())),
+        };
+
+        Ok((iter, threads, async_tasks))
     }
 
     #[inline]
@@ -520,35 +302,89 @@ impl WorkflowStep {
 }
 
 #[instrument(skip_all)]
-async fn execute_tasks(mut tasks: WorkflowTasks, cancel: Arc<Notify>) -> Result<()> {
+fn prepare_execute_pipeline(
+    pipeline: Vec<(WorkflowStep, Option<PartialStream>)>,
+    rxs_opt: Option<Vec<Receiver<Log>>>,
+    cancel: CancellationToken,
+) -> PipelineRunResult {
+    let mut workflow_rx = if let Some(rxs) = rxs_opt {
+        WorkflowRx::MuxPipelines(rxs)
+    } else {
+        WorkflowRx::None
+    };
+
+    let mut threads = Vec::new();
+    let mut async_tasks = Vec::new();
+    for (step, partial_stream) in pipeline {
+        let (iter, inner_threads, inner_async_tasks) = step
+            .execute(workflow_rx, partial_stream, cancel.clone())
+            .context("execute pipeline step")?;
+
+        threads.extend(inner_threads);
+        async_tasks.extend(inner_async_tasks);
+
+        workflow_rx = WorkflowRx::Pipeline(iter);
+    }
+
+    let WorkflowRx::Pipeline(iter) = workflow_rx else {
+        panic!("last rx must be of a pipeline");
+    };
+
+    Ok((iter, threads, async_tasks))
+}
+
+#[instrument(skip_all)]
+fn execute_pipeline(iter: impl Iterator<Item = LogItem>, tx: Sender<Log>) -> Result<()> {
+    for item in iter {
+        match item {
+            LogItem::Log(log) => {
+                if let Err(e) = tx.send(log) {
+                    debug!("Closing pipeline {:?}", e);
+                    break;
+                }
+            }
+            LogItem::Err(e) => return Err(e),
+            LogItem::OneRxDone => {}
+        }
+    }
+
+    Ok(())
+}
+
+#[instrument(skip_all)]
+async fn wait_for_threads_and_async_tasks(
+    threads: Vec<ThreadRx>,
+    async_tasks: Vec<AsyncTask>,
+    cancel: CancellationToken,
+) -> Result<()> {
     let start = Instant::now();
     let _guard = scopeguard::guard((), |_| {
         let duration = start.elapsed();
         info!(elapsed_time = ?duration, "Workflow execution time");
     });
 
+    let mut futs = threads
+        .into_iter()
+        .map(|rx| async move { rx.await.map_err(|_| eyre!("thread done")) }.boxed())
+        .chain(async_tasks.into_iter().map(|jh| {
+            async move { jh.await.map_err(|e| eyre!("async task panic: {e:?}")) }.boxed()
+        }))
+        .collect::<FuturesUnordered<_>>();
+
     loop {
         tokio::select! {
-            // First select cancel, and only then the tasks.
-            biased;
-
-            _ = cancel.notified() => {
+            _ = cancel.cancelled() => {
                 info!("Workflow cancelled");
-                for handle in &tasks {
-                    handle.abort();
-                }
                 break;
             }
-            task_result = tasks.next() => {
-                let Some(join_result) = task_result else {
+            fut_result = futs.next() => {
+                let Some(join_result) = fut_result else {
                     break;
                 };
 
-                let result = join_result?;
+                let result = join_result.context("join result")?;
                 if let Err(e) = result {
-                    for handle in &tasks {
-                        handle.abort();
-                    }
+                    cancel.cancel();
                     return Err(e.wrap_err("failed one of the workflow steps"));
                 }
             }
@@ -599,44 +435,93 @@ impl Workflow {
         partial_stream_step_idx
     }
 
-    fn create_tasks(self, cancel: Arc<Notify>) -> Result<(WorkflowTasks, LogStream)> {
+    fn create_pipelines(mut self, cancel: CancellationToken) -> WorkflowRunResult {
         assert!(!self.steps.is_empty());
 
-        let (mut tx, mut rx) = mpsc::channel(1);
-        let mut mux_rxs: Vec<mpsc::Receiver<Log>> = Vec::new();
         let partial_stream_step_idx = self.get_partial_stream_step_idx();
-
-        let tasks = FuturesUnordered::new();
+        let mut pipelines = Vec::new();
+        let mut pipeline = Vec::new();
+        let mut last_was_union = false;
 
         for (i, step) in self.steps.into_iter().enumerate() {
-            let rxs = if matches!(step, WorkflowStep::Scan(..) | WorkflowStep::Union(..)) {
-                Vec::new()
-            } else {
-                std::mem::take(&mut mux_rxs)
-            };
+            let is_union = matches!(step, WorkflowStep::Union(..));
+            if is_union || last_was_union {
+                pipelines.push(std::mem::take(&mut pipeline));
+            }
 
             let partial_stream = if partial_stream_step_idx == Some(i) {
-                self.partial_stream.clone()
+                self.partial_stream.take()
             } else {
                 None
             };
 
-            tasks.push(spawn(step.execute(rxs, tx, partial_stream, cancel.clone())));
-
-            mux_rxs.push(rx);
-            (tx, rx) = mpsc::channel(1);
+            last_was_union = is_union;
+            pipeline.push((step, partial_stream));
         }
 
-        Ok((tasks, rx_union_stream(mux_rxs)))
+        if !pipeline.is_empty() {
+            pipelines.push(pipeline);
+        }
+
+        let mut rxs = Vec::new();
+        let mut threads = Vec::new();
+        let mut async_tasks = Vec::new();
+
+        for pipeline in pipelines {
+            assert!(!pipeline.is_empty());
+
+            let (tx, rx) = flume::bounded(1);
+
+            let skip_rx = matches!(
+                pipeline[0].0,
+                WorkflowStep::Scan(..) | WorkflowStep::Union(..)
+            );
+
+            let rxs_opt = if skip_rx {
+                rxs.push(rx);
+                None
+            } else {
+                Some(std::mem::replace(&mut rxs, vec![rx]))
+            };
+
+            let (iter, inner_threads, inner_async_tasks) =
+                prepare_execute_pipeline(pipeline, rxs_opt, cancel.clone())
+                    .context("prepare execute pipeline")?;
+            threads.extend(inner_threads);
+            async_tasks.extend(inner_async_tasks);
+
+            let iter = SendOnce::new(CancelIter::new(iter, cancel.clone()));
+            threads.push(spawn(
+                move || execute_pipeline(iter.take(), tx).context("pipe iter to tx"),
+                "pipeline",
+            ));
+        }
+
+        Ok((rxs, threads, async_tasks))
     }
 
-    pub fn execute(self, cancel: Arc<Notify>) -> Result<LogTryStream> {
+    pub fn execute(self, cancel: CancellationToken) -> Result<LogTryStream> {
         if self.steps.is_empty() {
             return Ok(Box::pin(stream::empty()));
         }
 
-        let (tasks, mut stream) = self.create_tasks(cancel.clone())?;
-        let mut task = spawn(execute_tasks(tasks, cancel));
+        let cancel_clone = cancel.clone();
+        let (rxs, threads, async_tasks) = self
+            .create_pipelines(cancel_clone)
+            .context("create pipelines")?;
+
+        let mut streams: Vec<_> = rxs.into_iter().map(|rx| rx.into_stream()).collect();
+        let mut stream: LogStream = if streams.len() == 1 {
+            Box::pin(streams.pop().unwrap())
+        } else {
+            Box::pin(select_all(streams))
+        };
+
+        let mut task = tokio::spawn(wait_for_threads_and_async_tasks(
+            threads,
+            async_tasks,
+            cancel,
+        ));
 
         Ok(Box::pin(try_stream! {
             let task_alive = loop {

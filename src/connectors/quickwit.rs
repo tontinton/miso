@@ -40,6 +40,17 @@ static AGGREGATION_RESULTS_NAME: &str = "summarize";
 /// This will be the max amount of groups we pull from it (taken from quickwit's code).
 const MAX_NUM_GROUPS: usize = 65000;
 
+macro_rules! increment_and_ret_on_limit {
+    ($counter:expr, $limit:expr) => {
+        $counter += 1;
+        if let Some(limit) = $limit {
+            if $counter >= limit {
+                return;
+            }
+        }
+    };
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct QuickwitSplit {}
 
@@ -83,7 +94,7 @@ impl fmt::Display for QuickwitHandle {
                 if i > 0 {
                     s.push_str(", ");
                 }
-                s.push_str(&format!("{}", query));
+                s.push_str(&format!("{query}"));
             }
             s.push(']');
             items.push(s);
@@ -571,7 +582,7 @@ async fn continue_search(
     scroll_id: String,
     scroll_timeout: &Duration,
 ) -> Result<(Vec<Log>, String)> {
-    let url = format!("{}/api/v1/_elastic/_search/scroll", base_url);
+    let url = format!("{base_url}/api/v1/_elastic/_search/scroll");
 
     let req = client.get(&url).json(&ContinueSearchRequest {
         scroll_id,
@@ -589,7 +600,7 @@ async fn continue_search(
 
 #[instrument(skip(query), name = "GET and parse quickwit count result")]
 async fn count(client: &Client, base_url: &str, index: &str, query: Option<Value>) -> Result<u64> {
-    let url = format!("{}/api/v1/_elastic/{}/_count", base_url, index);
+    let url = format!("{base_url}/api/v1/_elastic/{index}/_count");
 
     let mut req = client.get(&url);
     if let Some(query) = query {
@@ -612,7 +623,7 @@ async fn search_aggregation(
     index: &str,
     query: Option<Value>,
 ) -> Result<SearchAggregationResponse> {
-    let url = format!("{}/api/v1/_elastic/{}/_search", base_url, index,);
+    let url = format!("{base_url}/api/v1/_elastic/{index}/_search",);
 
     let mut req = client.get(&url);
     if let Some(query) = query {
@@ -625,7 +636,7 @@ async fn search_aggregation(
 
 #[instrument(name = "GET and parse quickwit indexes")]
 async fn get_indexes(client: &Client, base_url: &str) -> Result<QuickwitIndexes> {
-    let url = format!("{}/api/v1/indexes", base_url);
+    let url = format!("{base_url}/api/v1/indexes");
     let mut bytes = send_request(client.get(&url)).await?;
     let data: Vec<IndexResponse> =
         simd_json::serde::from_slice(bytes.as_mut()).context("parse response")?;
@@ -714,12 +725,7 @@ impl QuickwitConnector {
 
             for log in logs {
                 yield log;
-                streamed += 1;
-                if let Some(limit) = limit {
-                    if streamed >= limit {
-                        return;
-                    }
-                }
+                increment_and_ret_on_limit!(streamed, limit);
             }
 
             loop {
@@ -729,12 +735,7 @@ impl QuickwitConnector {
                 }
                 for log in logs {
                     yield log;
-                    streamed += 1;
-                    if let Some(limit) = limit {
-                        if streamed >= limit {
-                            return;
-                        }
-                    }
+                    increment_and_ret_on_limit!(streamed, limit);
                 }
             }
         }))
@@ -794,7 +795,7 @@ impl QuickwitConnector {
                     logs,
                 )?;
             } else {
-                let bucket_name = format!("{}_{}", AGGREGATION_RESULTS_NAME, index);
+                let bucket_name = format!("{AGGREGATION_RESULTS_NAME}_{index}");
                 let Some(next_buckets_or_value) = bucket.buckets_or_value.remove(&bucket_name)
                 else {
                     bail!("bucket '{bucket_name}' not found");
@@ -831,7 +832,7 @@ impl QuickwitConnector {
 
         let mut logs = Vec::new();
 
-        let first_bucket_name = format!("{}_0", AGGREGATION_RESULTS_NAME);
+        let first_bucket_name = format!("{AGGREGATION_RESULTS_NAME}_0");
         if let Some(buckets_or_value) = response.aggregations.remove(&first_bucket_name) {
             Self::parse_buckets(
                 buckets_or_value,
@@ -860,15 +861,9 @@ impl QuickwitConnector {
             }
 
             let mut streamed = 0;
-
             for log in logs {
                 yield log;
-                streamed += 1;
-                if let Some(limit) = limit {
-                    if streamed >= limit {
-                        return;
-                    }
-                }
+                increment_and_ret_on_limit!(streamed, limit);
             }
         }))
     }
@@ -1132,7 +1127,7 @@ impl Connector for QuickwitConnector {
 
         let mut current_agg = &mut aggs;
         for (i, field) in config.by.iter().enumerate() {
-            let name = format!("{}_{}", AGGREGATION_RESULTS_NAME, i);
+            let name = format!("{AGGREGATION_RESULTS_NAME}_{i}");
             let nested_agg = json!({
                     &name: {
                         "terms": {

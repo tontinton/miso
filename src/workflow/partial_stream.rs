@@ -1,28 +1,19 @@
-use std::{sync::Arc, time::Duration};
-
-use async_stream::stream;
-use axum::async_trait;
-use color_eyre::{eyre::Context, Result};
-use futures_util::{
-    future::{join, join_all},
-    pin_mut,
-    stream::select_all,
+use std::{
+    iter,
+    time::{Duration, Instant},
 };
+
+use flume::{Receiver, RecvError, Selector, TryRecvError};
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
-use tokio::{
-    spawn,
-    sync::{mpsc, Notify},
-    time::sleep,
-};
-use tracing::debug;
 
 use crate::{
     humantime_utils::deserialize_duration,
-    log::{Log, LogStream},
+    log::{Log, LogItem, LogIter},
+    try_next,
 };
 
-use super::{logs_iter_to_tx, MISO_METADATA_FIELD_NAME};
+use super::MISO_METADATA_FIELD_NAME;
 
 const PARTIAL_STREAM_ID_FIELD_NAME: &str = "id";
 const PARTIAL_STREAM_DONE_FIELD_NAME: &str = "done";
@@ -42,12 +33,8 @@ pub struct PartialStream {
     debounce: Duration,
 }
 
-#[async_trait]
-pub trait PartialStreamExecutor {
-    type Output;
-
-    async fn execute(&self, input_stream: LogStream) -> Result<Self::Output>;
-    fn get_partial(&self) -> Self::Output;
+pub trait PartialLogIter: Iterator<Item = LogItem> {
+    fn get_partial(&self) -> LogIter;
 }
 
 fn add_partial_stream_id(mut log: Log, id: usize) -> Log {
@@ -88,91 +75,138 @@ pub fn get_partial_id(log: &Log) -> Option<(usize, bool)> {
     Some((id, done))
 }
 
-fn rx_stream_notify(mut rx: mpsc::Receiver<Log>, notify: Arc<Notify>) -> LogStream {
-    Box::pin(stream! {
-        while let Some(log) = rx.recv().await {
-            yield log
-        }
-        notify.notify_one();
-    })
+pub struct UnionIter {
+    rxs: Vec<Receiver<Log>>,
 }
 
-fn rx_union_stream_notify(rxs: Vec<mpsc::Receiver<Log>>, notify: Arc<Notify>) -> LogStream {
-    let streams: Vec<LogStream> = rxs
-        .into_iter()
-        .map(|rx| rx_stream_notify(rx, notify.clone()))
-        .collect();
-    Box::pin(select_all(streams))
-}
-
-async fn partial_logs_iter_to_tx<I>(logs: I, id: usize, tx: mpsc::Sender<Log>, tag: &str)
-where
-    I: IntoIterator<Item = Log>,
-{
-    for log in logs {
-        if let Err(e) = tx.send(add_partial_stream_id(log, id)).await {
-            debug!("Closing {} step: {:?}", tag, e);
-            break;
-        }
-    }
-
-    let done_log = build_partial_stream_id_done_log(id);
-    if let Err(e) = tx.send(done_log).await {
-        debug!("Closing {} step: {:?}", tag, e);
+impl UnionIter {
+    pub fn new(rxs: Vec<Receiver<Log>>) -> Self {
+        Self { rxs }
     }
 }
 
-pub async fn execute_partial_stream<T, LogsFn>(
-    executor: Box<dyn PartialStreamExecutor<Output = T> + Send>,
+impl Iterator for UnionIter {
+    type Item = LogItem;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.rxs.is_empty() {
+            return None;
+        }
+
+        let mut i = 0;
+        while i < self.rxs.len() {
+            match self.rxs[i].try_recv() {
+                Ok(log) => return Some(LogItem::Log(log)),
+                Err(TryRecvError::Disconnected) => {
+                    self.rxs.swap_remove(i);
+                    if self.rxs.is_empty() {
+                        return None;
+                    }
+                    return Some(LogItem::OneRxDone);
+                }
+                Err(TryRecvError::Empty) => {
+                    i += 1;
+                }
+            }
+        }
+
+        let mut selector = Selector::new();
+        for (i, rx) in self.rxs.iter().enumerate() {
+            selector = selector.recv(rx, move |result| (i, result));
+        }
+
+        let (i, result) = selector.wait();
+        match result {
+            Ok(log) => Some(LogItem::Log(log)),
+            Err(RecvError::Disconnected) => {
+                self.rxs.swap_remove(i);
+                (!self.rxs.is_empty()).then_some(LogItem::OneRxDone)
+            }
+        }
+    }
+}
+
+pub struct PartialStreamIter {
+    input: Box<dyn PartialLogIter>,
     config: PartialStream,
-    rxs: Vec<mpsc::Receiver<Log>>,
-    tx: mpsc::Sender<Log>,
-    mut output_to_logs_fn: LogsFn,
-    tag: &'static str,
-) -> Result<()>
-where
-    LogsFn: FnMut(T) -> Vec<Log>,
-{
-    let stream_done_notify = Arc::new(Notify::new());
+    id: usize,
+    partial_iter: LogIter,
+    partial_iter_start: Option<Instant>,
+    debounced_partial_iter: Option<(Instant, LogIter)>,
+}
 
-    let partial_stream_fut =
-        executor.execute(rx_union_stream_notify(rxs, stream_done_notify.clone()));
-    pin_mut!(partial_stream_fut);
-
-    let debounce = config.debounce;
-
-    let mut partial_sender_tasks = Vec::new();
-    let mut partial_send_id = 0;
-
-    let result = loop {
-        tokio::select! {
-            result = &mut partial_stream_fut => break result,
-            () = stream_done_notify.notified() => {},
+impl PartialStreamIter {
+    pub fn new(input: Box<dyn PartialLogIter>, config: PartialStream) -> Self {
+        Self {
+            input,
+            config,
+            id: 0,
+            partial_iter: Box::new(iter::empty()),
+            partial_iter_start: None,
+            debounced_partial_iter: None,
         }
+    }
 
-        let sleep_fut = sleep(debounce);
+    fn set_partial_iter(&mut self, partial_iter: LogIter, now: Instant) {
+        let id = self.id;
+        self.id += 1;
 
-        let logs = output_to_logs_fn(executor.get_partial());
-        partial_sender_tasks.push(spawn(partial_logs_iter_to_tx(
-            logs,
-            partial_send_id,
-            tx.clone(),
-            tag,
-        )));
-        partial_send_id += 1;
+        let done_log = LogItem::Log(build_partial_stream_id_done_log(id));
+        self.partial_iter = Box::new(
+            partial_iter
+                .map(move |item| item.map_log(|log| add_partial_stream_id(log, id)))
+                .chain(iter::once(done_log)),
+        );
+        self.partial_iter_start = Some(now);
+    }
 
-        tokio::select! {
-            result = &mut partial_stream_fut => break result,
-            () = sleep_fut => {}
+    fn handle_debounced_partial_iter(&mut self) -> bool {
+        if let Some((debounced_time, partial_iter)) = self.debounced_partial_iter.take() {
+            let now = Instant::now();
+            if now >= debounced_time {
+                self.set_partial_iter(partial_iter, now);
+                return true;
+            }
+            self.debounced_partial_iter = Some((debounced_time, partial_iter));
         }
-    };
+        false
+    }
 
-    let logs = output_to_logs_fn(result.with_context(|| format!("full stream output of {tag}"))?);
-    join(
-        logs_iter_to_tx(logs, tx, tag),
-        join_all(partial_sender_tasks),
-    )
-    .await;
+    fn update_partial_iter(&mut self) {
+        let now = Instant::now();
+        let partial_iter = self.input.get_partial();
 
-    Ok(())
+        let debounced_time = self
+            .partial_iter_start
+            .filter(|start| now.duration_since(*start) <= self.config.debounce)
+            .and_then(|start| start.checked_add(self.config.debounce));
+
+        if let Some(debounced_time) = debounced_time {
+            self.debounced_partial_iter = Some((debounced_time, partial_iter));
+        } else {
+            self.set_partial_iter(partial_iter, now);
+        }
+    }
+}
+
+impl Iterator for PartialStreamIter {
+    type Item = LogItem;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            if let Some(log) = try_next!(self.partial_iter) {
+                return Some(LogItem::Log(log));
+            }
+
+            if self.handle_debounced_partial_iter() {
+                continue;
+            }
+
+            match self.input.next()? {
+                LogItem::Log(log) => return Some(LogItem::Log(log)),
+                LogItem::Err(e) => return Some(LogItem::Err(e)),
+                LogItem::OneRxDone => self.update_partial_iter(),
+            }
+        }
+    }
 }

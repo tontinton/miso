@@ -1,7 +1,6 @@
-use tokio::sync::watch;
-
 use crate::{
     pattern,
+    watch::Watch,
     workflow::{scan::Scan, WorkflowStep},
 };
 
@@ -65,17 +64,17 @@ impl Optimization for DynamicFilter {
             return None;
         };
 
-        let (tx, rx) = watch::channel(None);
-        right_scan.dynamic_filter_tx = Some(tx);
+        let watch = Watch::default();
+        right_scan.dynamic_filter_tx = Some(watch.clone());
 
         if left_dcount < self.max_distinct_values {
             if left_dcount > right_dcount {
-                left_scan.dynamic_filter_rx = Some(rx);
+                left_scan.dynamic_filter_rx = Some(watch);
             } else {
-                right_scan.dynamic_filter_rx = Some(rx);
+                right_scan.dynamic_filter_rx = Some(watch);
             }
         } else if right_dcount < self.max_distinct_values {
-            left_scan.dynamic_filter_rx = Some(rx);
+            left_scan.dynamic_filter_rx = Some(watch);
         } else {
             panic!("just checked that the two distinct counts are more than max");
         }

@@ -201,7 +201,7 @@ impl<'a> Val<'a> {
     pub fn add(&self, other: &Val) -> Result<Option<Value>> {
         if let (Some(lhs_cow), Some(rhs_cow)) = (&self.0, &other.0) {
             if let (Value::String(x), Value::String(y)) = (lhs_cow.as_ref(), rhs_cow.as_ref()) {
-                return Ok(Some(Value::String(format!("{}{}", x, y))));
+                return Ok(Some(Value::String(format!("{x}{y}"))));
             }
         }
         impl_op!(self, other, |x, y| x + y, "+")

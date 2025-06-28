@@ -1,8 +1,7 @@
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
-use futures_util::{stream::iter, StreamExt};
 use miso::{
-    log::{Log, LogStream},
-    workflow::join::{join_streams, Join, JoinType},
+    log::Log,
+    workflow::join::{join_iter, Join, JoinType},
 };
 use serde_json::Value;
 
@@ -16,33 +15,49 @@ fn create_test_log(id: u64, field_key: &str, field_value: String) -> Log {
     log
 }
 
-fn create_test_stream(size: usize, field_key: &str) -> LogStream {
-    let logs = (0..size)
+fn create_test_stream(
+    left_size: usize,
+    right_size: usize,
+    field_key: &str,
+) -> impl Iterator<Item = (bool, Log)> {
+    let left_logs = (0..left_size)
         .map(|i| {
-            let value = format!("value{}", i % (size / 10).max(1));
-            create_test_log(i as u64, field_key, value)
+            let value = format!("value{}", i % (left_size / 10).max(1));
+            (true, create_test_log(i as u64, field_key, value))
         })
         .collect::<Vec<_>>();
-    Box::pin(iter(logs))
+    let right_logs = (0..right_size)
+        .map(|i| {
+            let value = format!("value{}", i % (right_size / 10).max(1));
+            (false, create_test_log(i as u64, field_key, value))
+        })
+        .collect::<Vec<_>>();
+    left_logs.into_iter().chain(right_logs)
+}
+
+fn run_join(config: Join, iter: impl Iterator<Item = (bool, Log)>) -> usize {
+    let (tx, rx) = flume::bounded(1);
+    join_iter(config, iter, tx);
+    let mut count = 0;
+    while rx.recv().is_ok() {
+        count += 1;
+    }
+    count
 }
 
 fn bench_join_various_sizes(c: &mut Criterion) {
     let mut group = c.benchmark_group("join_streams_sizes");
     for size in [100, 1000, 10000].iter() {
         group.bench_with_input(BenchmarkId::from_parameter(size), size, |b, &size| {
-            b.to_async(tokio::runtime::Runtime::new().unwrap())
-                .iter(|| async {
-                    let left_stream = create_test_stream(size, JOIN_KEY);
-                    let right_stream = create_test_stream(size, JOIN_KEY);
-                    let config = Join {
-                        type_: JoinType::Inner,
-                        on: (JOIN_KEY.to_string(), JOIN_KEY.to_string()),
-                        ..Default::default()
-                    };
-
-                    let stream = join_streams(config, left_stream, right_stream).await;
-                    stream.fold(0, |acc, _| async move { acc + 1 }).await
-                });
+            b.iter(|| {
+                let iter = create_test_stream(size, size, JOIN_KEY);
+                let config = Join {
+                    type_: JoinType::Inner,
+                    on: (JOIN_KEY.to_string(), JOIN_KEY.to_string()),
+                    ..Default::default()
+                };
+                run_join(config, iter)
+            });
         });
     }
     group.finish();
@@ -53,19 +68,15 @@ fn bench_join_different_ratios(c: &mut Criterion) {
     let base_size = 1000;
     for ratio in [1, 5, 10].iter() {
         group.bench_with_input(BenchmarkId::from_parameter(ratio), ratio, |b, &ratio| {
-            b.to_async(tokio::runtime::Runtime::new().unwrap())
-                .iter(|| async {
-                    let left_stream = create_test_stream(base_size, JOIN_KEY);
-                    let right_stream = create_test_stream(base_size * ratio, JOIN_KEY);
-                    let config = Join {
-                        type_: JoinType::Inner,
-                        on: (JOIN_KEY.to_string(), JOIN_KEY.to_string()),
-                        ..Default::default()
-                    };
-
-                    let stream = join_streams(config, left_stream, right_stream).await;
-                    stream.fold(0, |acc, _| async move { acc + 1 }).await
-                });
+            b.iter(|| {
+                let iter = create_test_stream(base_size, base_size * ratio, JOIN_KEY);
+                let config = Join {
+                    type_: JoinType::Inner,
+                    on: (JOIN_KEY.to_string(), JOIN_KEY.to_string()),
+                    ..Default::default()
+                };
+                run_join(config, iter)
+            });
         });
     }
     group.finish();
@@ -82,22 +93,18 @@ fn bench_join_types(c: &mut Criterion) {
 
     for join_type in join_types {
         group.bench_with_input(
-            BenchmarkId::from_parameter(&join_type),
+            BenchmarkId::from_parameter(join_type),
             &join_type,
             |b, join_type| {
-                b.to_async(tokio::runtime::Runtime::new().unwrap())
-                    .iter(|| async {
-                        let left_stream = create_test_stream(1000, JOIN_KEY);
-                        let right_stream = create_test_stream(1000, JOIN_KEY);
-                        let config = Join {
-                            type_: join_type.clone(),
-                            on: (JOIN_KEY.to_string(), JOIN_KEY.to_string()),
-                            ..Default::default()
-                        };
-
-                        let stream = join_streams(config, left_stream, right_stream).await;
-                        stream.fold(0, |acc, _| async move { acc + 1 }).await
-                    });
+                b.iter(|| {
+                    let iter = create_test_stream(1000, 1000, JOIN_KEY);
+                    let config = Join {
+                        type_: *join_type,
+                        on: (JOIN_KEY.to_string(), JOIN_KEY.to_string()),
+                        ..Default::default()
+                    };
+                    run_join(config, iter)
+                });
             },
         );
     }

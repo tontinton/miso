@@ -122,7 +122,7 @@ impl CompPattern {
             CompPattern::Start => Pattern::Start,
             CompPattern::End => Pattern::End,
             _ => {
-                panic!("Did not expect: {:?}", self);
+                panic!("Did not expect: {self:?}");
             }
         }
     }
@@ -172,14 +172,14 @@ impl Default for VecCollector {
 impl GroupCollector for VecCollector {
     fn stage_start(&self, start: usize) {
         if DEBUG_GROUPS_PRINTS {
-            println!("Staging start: {}", start);
+            println!("Staging start: {start}");
         }
         self.staged.borrow_mut().push((start, true))
     }
 
     fn stage_end(&self, end: usize) {
         if DEBUG_GROUPS_PRINTS {
-            println!("Staging end: {}", end);
+            println!("Staging end: {end}");
         }
         self.staged.borrow_mut().push((end, false))
     }
@@ -277,7 +277,7 @@ impl Pattern {
         assert!(!pattern.is_empty());
 
         if DEBUG_PATTERN_PRINTS {
-            println!("1: {:?}::{:?}, {:?}::{:?}", pattern, p_idx, input, i_idx);
+            println!("1: {pattern:?}::{p_idx:?}, {input:?}::{i_idx:?}");
         }
 
         if p_idx == pattern.len() {

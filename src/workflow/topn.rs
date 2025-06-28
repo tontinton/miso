@@ -1,23 +1,21 @@
-use std::{cmp::Ordering, collections::BinaryHeap};
+use std::{cmp::Ordering, collections::BinaryHeap, iter, rc::Rc};
 
-use async_stream::stream;
-use axum::async_trait;
-use color_eyre::Result;
-use futures_util::StreamExt;
 use hashbrown::HashMap;
-use parking_lot::Mutex;
-use tokio::task_local;
+use scoped_thread_local::scoped_thread_local;
 
-use crate::log::{Log, LogStream};
+use crate::{
+    log::{Log, LogItem, LogIter},
+    try_next,
+};
 
 use super::{
-    partial_stream::{get_partial_id, PartialStreamExecutor},
+    partial_stream::{get_partial_id, PartialLogIter},
     sort::{cmp_logs, Sort, SortConfig},
 };
 
-task_local! {
-    pub static SORT_CONFIG: SortConfig;
-}
+struct SortConfigTLS<'a>(&'a SortConfig);
+
+scoped_thread_local!(static SORT_CONFIG: for<'a> SortConfigTLS<'a>);
 
 /// A wrapper to be able to use Log in a BinaryHeap by reading the comparison configuration from a
 /// task local variable.
@@ -27,7 +25,7 @@ struct SortableLog(Log);
 impl Ord for SortableLog {
     fn cmp(&self, other: &Self) -> Ordering {
         SORT_CONFIG
-            .with(|config| cmp_logs(&self.0, &other.0, config))
+            .with(|tls| cmp_logs(&self.0, &other.0, tls.0))
             // On wrong type, provide the opposite to get the log out of the heap.
             .unwrap_or(Ordering::Greater)
     }
@@ -47,108 +45,160 @@ impl PartialEq for SortableLog {
     }
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 struct TopNState {
     limit: usize,
     heap: BinaryHeap<SortableLog>,
+    config: Rc<SortConfig>,
 }
 
 impl TopNState {
-    fn new(limit: usize) -> Self {
+    fn new(limit: usize, config: Rc<SortConfig>) -> Self {
         Self {
             limit,
             heap: BinaryHeap::new(),
+            config,
         }
     }
 
     fn push(&mut self, log: Log) {
         let sortable = SortableLog(log);
 
-        if self.heap.len() < self.limit {
-            self.heap.push(sortable);
-        } else {
-            let bottom_of_top = self.heap.peek().unwrap();
-            if sortable.cmp(bottom_of_top) == Ordering::Less {
-                self.heap.pop();
+        SORT_CONFIG.set(&mut SortConfigTLS(&self.config), || {
+            if self.heap.len() < self.limit {
                 self.heap.push(sortable);
+            } else {
+                let bottom_of_top = self.heap.peek().unwrap();
+                if sortable.cmp(bottom_of_top) == Ordering::Less {
+                    self.heap.pop();
+                    self.heap.push(sortable);
+                }
             }
-        }
+        });
     }
 
-    fn into_sorted_iter(self) -> impl Iterator<Item = Log> {
-        self.heap.into_sorted_vec().into_iter().map(|x| x.0)
+    fn into_sorted_vec(self) -> Vec<SortableLog> {
+        SORT_CONFIG.set(&mut SortConfigTLS(&self.config), || {
+            self.heap.into_sorted_vec()
+        })
     }
 }
 
-/// The caller must scope the returned config via SORT_CONFIG.scope(), this is an optimization to
-/// not need to store (a pointer to) the sort config per item in the binary heap.
-pub async fn topn_stream(
-    sorts: Vec<Sort>,
-    limit: u32,
-    mut input_stream: LogStream,
-) -> (LogStream, SortConfig) {
-    let stream = Box::pin(stream! {
-        let mut state = TopNState::new(limit as usize);
-        let mut partial_states: HashMap<usize, TopNState> = HashMap::new();
+pub struct TopNIter {
+    input: LogIter,
+    config: Rc<SortConfig>,
+    limit: usize,
+    state: Option<TopNState>,
+    partial_states: HashMap<usize, TopNState>,
+    logs: LogIter,
+}
 
-        while let Some(log) = input_stream.next().await {
+impl TopNIter {
+    pub fn new(input: LogIter, sorts: Vec<Sort>, limit: usize) -> Self {
+        let config = Rc::new(SortConfig::new(sorts));
+
+        Self {
+            input,
+            config: config.clone(),
+            limit,
+            state: Some(TopNState::new(limit, config)),
+            partial_states: HashMap::new(),
+            logs: Box::new(iter::empty()),
+        }
+    }
+
+    fn set_next_batch(&mut self, logs: Vec<SortableLog>) -> Option<LogItem> {
+        self.logs = Box::new(logs.into_iter().map(|x| LogItem::Log(x.0)));
+        self.logs.next()
+    }
+}
+
+impl Iterator for TopNIter {
+    type Item = LogItem;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if let Some(log) = self.logs.next() {
+            return Some(log);
+        }
+        let state = self.state.as_mut()?;
+
+        while let Some(log) = try_next!(self.input) {
             match get_partial_id(&log) {
                 None => {
                     state.push(log);
                 }
                 Some((id, false)) => {
-                    partial_states
+                    self.partial_states
                         .entry(id)
-                        .or_insert_with(|| TopNState::new(limit as usize))
+                        .or_insert_with(|| TopNState::new(self.limit, self.config.clone()))
                         .push(log);
                 }
                 Some((id, true)) => {
-                    if let Some(state) = partial_states.remove(&id) {
-                        for log in state.into_sorted_iter() {
-                            yield log;
-                        }
-                        yield log;
+                    if let Some(state) = self.partial_states.remove(&id) {
+                        return self.set_next_batch(state.into_sorted_vec());
                     }
                 }
             }
         }
 
-        for log in state.into_sorted_iter() {
-            yield log;
-        }
-    });
-
-    (stream, SortConfig::new(sorts))
+        let logs = self.state.take().unwrap().into_sorted_vec();
+        self.set_next_batch(logs)
+    }
 }
 
-pub struct PartialTopNExecutor {
+pub struct PartialTopNIter {
+    input: LogIter,
     // Assuming there cannot be a partial stream into a partial top-n stream, so only need to track
     // the top-n state of one stream (no passthrough).
-    state: Mutex<TopNState>,
+    state: Option<TopNState>,
+    logs: LogIter,
 }
 
-impl PartialTopNExecutor {
-    /// Same as topn_stream, the caller must scope the returned config via SORT_CONFIG.scope().
-    pub fn new(sorts: Vec<Sort>, limit: u32) -> (Self, SortConfig) {
-        let state = Mutex::new(TopNState::new(limit as usize));
-        (Self { state }, SortConfig::new(sorts))
-    }
-}
-
-#[async_trait]
-impl PartialStreamExecutor for PartialTopNExecutor {
-    type Output = Vec<Log>;
-
-    async fn execute(&self, mut input_stream: LogStream) -> Result<Self::Output> {
-        while let Some(log) = input_stream.next().await {
-            self.state.lock().push(log);
+impl PartialTopNIter {
+    pub fn new(input: LogIter, sorts: Vec<Sort>, limit: u32) -> Self {
+        Self {
+            input,
+            state: Some(TopNState::new(
+                limit as usize,
+                Rc::new(SortConfig::new(sorts)),
+            )),
+            logs: Box::new(iter::empty()),
         }
-        let state = std::mem::take(&mut *self.state.lock());
-        return Ok(state.into_sorted_iter().collect());
     }
 
-    fn get_partial(&self) -> Self::Output {
-        let state = self.state.lock().clone();
-        state.into_sorted_iter().collect()
+    fn set_next_batch(&mut self, logs: Vec<SortableLog>) -> Option<LogItem> {
+        self.logs = Box::new(logs.into_iter().map(|x| LogItem::Log(x.0)));
+        self.logs.next()
+    }
+}
+
+impl PartialLogIter for PartialTopNIter {
+    fn get_partial(&self) -> LogIter {
+        Box::new(
+            self.state
+                .clone()
+                .unwrap()
+                .into_sorted_vec()
+                .into_iter()
+                .map(|x| LogItem::Log(x.0)),
+        )
+    }
+}
+
+impl Iterator for PartialTopNIter {
+    type Item = LogItem;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if let Some(log) = self.logs.next() {
+            return Some(log);
+        }
+
+        let state = self.state.as_mut()?;
+        while let Some(log) = try_next!(self.input) {
+            state.push(log);
+        }
+
+        let logs = self.state.take().unwrap().into_sorted_vec();
+        self.set_next_batch(logs)
     }
 }

@@ -1,10 +1,11 @@
-use async_stream::stream;
 use color_eyre::Result;
-use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use tracing::warn;
 
-use crate::log::{Log, LogStream};
+use crate::{
+    log::{Log, LogItem, LogIter},
+    try_next,
+};
 
 use super::interpreter::{ident, Val};
 
@@ -110,22 +111,37 @@ impl FilterInterpreter {
     }
 }
 
-pub fn filter_stream(ast: FilterAst, mut input_stream: LogStream) -> LogStream {
-    Box::pin(stream! {
-        while let Some(log) = input_stream.next().await {
-            let interpreter = FilterInterpreter::new(log);
+pub struct FilterIter {
+    input: LogIter,
+    ast: FilterAst,
+}
 
-            let keep = match interpreter.eval(&ast) {
+impl FilterIter {
+    pub fn new(input: LogIter, ast: FilterAst) -> Self {
+        Self { input, ast }
+    }
+}
+
+impl Iterator for FilterIter {
+    type Item = LogItem;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        while let Some(log) = try_next!(self.input) {
+            let interpreter = FilterInterpreter::new(log);
+            let keep = match interpreter.eval(&self.ast) {
                 Ok(v) => v.to_bool(),
                 Err(e) => {
                     warn!("Filter failed: {e}");
                     false
-                },
+                }
             };
 
-            if keep {
-                yield interpreter.log;
+            if !keep {
+                continue;
             }
+
+            return Some(LogItem::Log(interpreter.log));
         }
-    })
+        None
+    }
 }

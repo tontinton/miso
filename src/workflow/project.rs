@@ -1,12 +1,13 @@
 use std::borrow::Cow;
 
-use async_stream::stream;
 use color_eyre::eyre::Result;
-use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use tracing::warn;
 
-use crate::log::{Log, LogStream};
+use crate::{
+    log::{Log, LogItem, LogIter},
+    try_next,
+};
 
 use super::interpreter::{ident, CastType, Val};
 
@@ -57,56 +58,64 @@ impl<'a> ProjectInterpreter<'a> {
     }
 }
 
-async fn project_stream_ex(
+pub struct ProjectIter {
+    input: LogIter,
     project_fields: Vec<ProjectField>,
-    mut input_stream: LogStream,
     extend: bool,
-) -> LogStream {
-    Box::pin(stream! {
-        while let Some(mut log) = input_stream.next().await {
-            let mut output = Log::new();
+}
 
-            {
-                let interpreter = ProjectInterpreter::new(&log);
+impl ProjectIter {
+    pub fn new_project(input: LogIter, project_fields: Vec<ProjectField>) -> Self {
+        Self {
+            input,
+            project_fields,
+            extend: false,
+        }
+    }
 
-                for field in &project_fields {
-                    match interpreter.eval(&field.from) {
-                        Ok(Val(None)) => {} // Skip.
-                        Ok(v) => {
-                            let owned = match v.0.unwrap() {
-                                Cow::Borrowed(borrowed) => borrowed.clone(),
-                                Cow::Owned(owned) => owned,
-                            };
-                            output.insert(field.to.clone(), owned);
-                        }
-                        Err(e) => {
-                            warn!("Project failed: {e}");
-                            continue;
-                        }
-                    };
-                }
-            }
+    pub fn new_extend(input: LogIter, project_fields: Vec<ProjectField>) -> Self {
+        Self {
+            input,
+            project_fields,
+            extend: true,
+        }
+    }
+}
 
-            if extend {
-                log.extend(output);
-                yield log;
-            } else {
-                yield output;
+impl Iterator for ProjectIter {
+    type Item = LogItem;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let mut log = try_next!(self.input)?;
+        let mut output = Log::new();
+
+        {
+            let interpreter = ProjectInterpreter::new(&log);
+
+            for field in &self.project_fields {
+                match interpreter.eval(&field.from) {
+                    Ok(Val(None)) => {} // Skip.
+                    Ok(v) => {
+                        let owned = match v.0.unwrap() {
+                            Cow::Borrowed(borrowed) => borrowed.clone(),
+                            Cow::Owned(owned) => owned,
+                        };
+                        output.insert(field.to.clone(), owned);
+                    }
+                    Err(e) => {
+                        warn!("Project failed: {e}");
+                        continue;
+                    }
+                };
             }
         }
-    })
-}
 
-pub async fn project_stream(
-    project_fields: Vec<ProjectField>,
-    input_stream: LogStream,
-) -> LogStream {
-    project_stream_ex(project_fields, input_stream, false).await
-}
+        if self.extend {
+            log.extend(output);
+        } else {
+            log = output;
+        }
 
-pub async fn extend_stream(
-    project_fields: Vec<ProjectField>,
-    input_stream: LogStream,
-) -> LogStream {
-    project_stream_ex(project_fields, input_stream, true).await
+        Some(LogItem::Log(log))
+    }
 }

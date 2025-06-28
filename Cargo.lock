@@ -153,12 +153,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
 
 [[package]]
-name = "atomic_float"
-version = "1.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "628d228f918ac3b82fe590352cc719d30664a0c13ca3a60266fe02c7132d480a"
-
-[[package]]
 name = "autocfg"
 version = "1.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -531,7 +525,7 @@ dependencies = [
  "criterion-plot",
  "futures",
  "is-terminal",
- "itertools 0.10.5",
+ "itertools",
  "num-traits",
  "once_cell",
  "oorandom",
@@ -553,7 +547,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6b50826342786a51a89e2da3a28f1c32b06e387201bc2d19791f622c673706b1"
 dependencies = [
  "cast",
- "itertools 0.10.5",
+ "itertools",
 ]
 
 [[package]]
@@ -1263,15 +1257,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "itertools"
-version = "0.13.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "413ee7dfc52ee1a4949ceeb7dbc8a33f2d6c088194d9f922fb8318faf1f01186"
-dependencies = [
- "either",
-]
-
-[[package]]
 name = "itoa"
 version = "1.0.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1423,7 +1408,6 @@ version = "0.1.0"
 dependencies = [
  "async-recursion",
  "async-stream",
- "atomic_float",
  "axum",
  "bon",
  "bytes",
@@ -1433,11 +1417,9 @@ dependencies = [
  "criterion",
  "ctor",
  "flume",
- "futures-core",
  "futures-util",
  "hashbrown 0.15.3",
  "humantime",
- "itertools 0.13.0",
  "kinded",
  "mimalloc",
  "once_cell",
@@ -1445,6 +1427,7 @@ dependencies = [
  "prometheus",
  "rayon",
  "reqwest",
+ "scoped_thread_local",
  "scopeguard",
  "serde",
  "serde_json",
@@ -1455,6 +1438,7 @@ dependencies = [
  "tokio",
  "tokio-retry",
  "tokio-test",
+ "tokio-util",
  "tracing",
  "tracing-subscriber",
  "typetag",
@@ -1919,6 +1903,7 @@ dependencies = [
  "base64 0.22.1",
  "bytes",
  "encoding_rs",
+ "futures-channel",
  "futures-core",
  "futures-util",
  "h2",
@@ -2081,6 +2066,12 @@ checksum = "01227be5826fa0690321a2ba6c5cd57a19cf3f6a09e76973b58e61de6ab9d1c1"
 dependencies = [
  "windows-sys 0.59.0",
 ]
+
+[[package]]
+name = "scoped_thread_local"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "72f74536a5851ef52e5e8a5e8ba1449fe69a310181df41c453a0b31d0d9a3a0c"
 
 [[package]]
 name = "scopeguard"
@@ -2663,9 +2654,9 @@ dependencies = [
 
 [[package]]
 name = "tokio-util"
-version = "0.7.12"
+version = "0.7.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "61e7c3654c13bcd040d4a03abee2c75b1d14a37b423cf5a813ceae1cc903ec6a"
+checksum = "66a539a9ad6d5d281510d5bd368c973d636c02dbf8a67300bfb6b950696ad7df"
 dependencies = [
  "bytes",
  "futures-core",

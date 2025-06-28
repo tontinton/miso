@@ -1,47 +1,63 @@
-use async_stream::stream;
-use futures_util::{stream, StreamExt};
 use hashbrown::HashMap;
 
-use crate::log::LogStream;
+use crate::{
+    log::{LogItem, LogIter},
+    try_next,
+};
 
 use super::partial_stream::get_partial_id;
 
-pub fn limit_stream(limit: u32, mut input_stream: LogStream) -> LogStream {
-    if limit == 0 {
-        return Box::pin(stream::empty());
+pub struct LimitIter {
+    input: LogIter,
+    limit: u32,
+    streamed: u32,
+    partial_limits: HashMap<usize, Option<u32>>,
+}
+
+impl LimitIter {
+    pub fn new(input: LogIter, limit: u32) -> Self {
+        Self {
+            input,
+            limit,
+            streamed: 0,
+            partial_limits: HashMap::new(),
+        }
     }
+}
 
-    let mut streamed = 0;
-    let mut partial_limits: HashMap<usize, Option<u32>> = HashMap::new();
+impl Iterator for LimitIter {
+    type Item = LogItem;
 
-    Box::pin(stream! {
-        while let Some(log) = input_stream.next().await {
-            let partial_result = get_partial_id(&log);
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.streamed == self.limit {
+            return None;
+        }
 
-            yield log;
-
-            match partial_result {
+        while let Some(log) = try_next!(self.input) {
+            let should_stream = match get_partial_id(&log) {
                 None => {
-                    streamed += 1;
-                    if streamed >= limit {
-                        break;
-                    }
-                }
-                Some((id, false)) => {
-                    let entry = partial_limits.entry(id).or_insert(Some(0));
-                    if let Some(active_entry) = entry {
-                        *active_entry += 1;
-                        if *active_entry >= limit {
-                            *entry = None;
-                        }
-                    }
+                    self.streamed += 1;
+                    true
                 }
                 Some((id, true)) => {
-                    if let Some(entry) = partial_limits.get_mut(&id) {
-                        *entry = None;
-                    }
+                    self.partial_limits.remove(&id);
+                    true
                 }
+                Some((id, false)) => match self.partial_limits.entry(id).or_insert(Some(0)) {
+                    Some(streamed) if *streamed == self.limit => false,
+                    Some(streamed) => {
+                        *streamed += 1;
+                        true
+                    }
+                    None => false,
+                },
+            };
+
+            if should_stream {
+                return Some(LogItem::Log(log));
             }
         }
-    })
+
+        None
+    }
 }

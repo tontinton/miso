@@ -16,10 +16,8 @@ use stats::{ConnectorStats, IntervalStatsCollector};
 use thiserror::Error;
 use tokio::time::sleep;
 
-use crate::{
-    log::LogTryStream,
-    workflow::{filter::FilterAst, sort::Sort, summarize::Summarize, Workflow},
-};
+use crate::log::LogTryStream;
+use crate::workflow::{filter::FilterAst, sort::Sort, summarize::Summarize, Workflow};
 
 const CLOSE_WHEN_LAST_OWNER_INTERVAL: Duration = Duration::from_millis(100);
 
