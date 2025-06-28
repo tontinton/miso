@@ -1,13 +1,23 @@
+use color_eyre::{eyre::Context, Result};
+use flume::Receiver;
+use futures_util::{stream::once, StreamExt};
 use parking_lot::Mutex;
-use std::sync::Arc;
-use tokio::sync::watch;
+use std::{future::Future, sync::Arc, time::Duration};
+use tokio_util::sync::CancellationToken;
+use tracing::{debug, info};
 
-use crate::connectors::{
-    stats::{ConnectorStats, FieldStats},
-    Connector, ConnectorState, QueryHandle, Split,
+use crate::{
+    connectors::{
+        stats::{ConnectorStats, FieldStats},
+        Connector, ConnectorState, QueryHandle, QueryResponse, Split,
+    },
+    log::{LogItem, LogTryStream},
+    watch::Watch,
 };
 
-use super::filter::FilterAst;
+use super::{count::count_to_log, filter::FilterAst, AsyncTask};
+
+const DYNAMIC_FILTER_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Clone, Debug)]
 pub struct Scan {
@@ -19,8 +29,8 @@ pub struct Scan {
     pub split: Option<Arc<dyn Split>>,
     pub stats: Arc<Mutex<ConnectorStats>>,
 
-    pub dynamic_filter_tx: Option<watch::Sender<Option<FilterAst>>>,
-    pub dynamic_filter_rx: Option<watch::Receiver<Option<FilterAst>>>,
+    pub dynamic_filter_tx: Option<Watch<FilterAst>>,
+    pub dynamic_filter_rx: Option<Watch<FilterAst>>,
 }
 
 impl PartialEq for Scan {
@@ -58,4 +68,85 @@ impl Scan {
             .and_then(|x| x.get(field))
             .cloned()
     }
+}
+
+fn count_to_stream(count: u64) -> LogTryStream {
+    Box::pin(once(async move { Ok(count_to_log(count)) }))
+}
+
+async fn apply_dynamic_filter(
+    connector: &dyn Connector,
+    handle: &dyn QueryHandle,
+    dynamic_filter_rx: Watch<FilterAst>,
+) -> Option<Arc<dyn QueryHandle>> {
+    info!("Waiting for dynamic filter");
+
+    let Some(ast) = dynamic_filter_rx.wait_for(DYNAMIC_FILTER_TIMEOUT).await else {
+        info!("Timeout waiting on dynamic filter");
+        return None;
+    };
+
+    info!("Got dynamic filter");
+    let dynamic_filtered_handle = connector.apply_filter(&ast, handle)?;
+
+    info!("Applied dynamic filter");
+    Some(dynamic_filtered_handle.into())
+}
+
+async fn scan_stream(scan: Scan) -> Result<LogTryStream> {
+    let Scan {
+        collection,
+        connector,
+        mut handle,
+        split,
+        dynamic_filter_rx,
+        ..
+    } = scan;
+
+    if let Some(filter_rx) = dynamic_filter_rx {
+        if let Some(dynamic_filtered_handle) =
+            apply_dynamic_filter(connector.as_ref(), handle.as_ref(), filter_rx).await
+        {
+            handle = dynamic_filtered_handle;
+        }
+    }
+
+    let response = connector
+        .query(&collection, handle.as_ref(), split.as_deref())
+        .await?;
+    let stream = match response {
+        QueryResponse::Logs(logs) => Box::pin(logs.map(Into::into)),
+        QueryResponse::Count(count) => count_to_stream(count),
+    };
+
+    Ok(stream)
+}
+
+pub async fn cancel_or<F, T>(cancel: &CancellationToken, fut: F) -> Option<T>
+where
+    F: Future<Output = T> + Send,
+{
+    tokio::select! {
+        _ = cancel.cancelled() => {
+            None
+        }
+        result = fut => {
+            Some(result)
+        }
+    }
+}
+
+pub fn scan_rx(scan: Scan, cancel: CancellationToken) -> (Receiver<LogItem>, AsyncTask) {
+    let (tx, rx) = flume::bounded(1);
+    let task = tokio::spawn(async move {
+        let mut stream = scan_stream(scan).await.context("create scan stream")?;
+        while let Some(Some(item)) = cancel_or(&cancel, stream.next()).await {
+            if let Err(e) = tx.send_async(item.into()).await {
+                debug!("Closing scan task: {e:?}");
+                break;
+            }
+        }
+        Ok(())
+    });
+    (rx, task)
 }

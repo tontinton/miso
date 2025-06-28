@@ -1,15 +1,27 @@
 use std::{cmp::Ordering, fmt, num::NonZero, thread::available_parallelism};
 
 use color_eyre::eyre::{bail, Context, Result};
-use futures_util::StreamExt;
+use flume::Receiver;
 use rayon::{slice::ParallelSliceMut, ThreadPool, ThreadPoolBuilder};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tracing::info;
+use tokio_util::sync::CancellationToken;
+use tracing::debug;
 
-use crate::log::{Log, LogStream};
+use crate::{
+    cancel_iter::CancelIter,
+    log::{Log, LogItem, LogIter},
+    metrics::METRICS,
+    send_once::SendOnce,
+    spawn_thread::{spawn, ThreadRx},
+};
 
 use super::serde_json_utils::partial_cmp_values;
+
+/// If the sorting set is smaller than this, just sort immediately without building a thread pool
+/// to sort in parallel.
+const PARALLEL_SORT_THREASHOLD: usize = 5000;
+const SORT_THREAD_TAG: &str = "sort";
 
 #[derive(Debug, Serialize, Deserialize, Default, PartialEq, Clone)]
 #[serde(rename_all = "snake_case")]
@@ -133,11 +145,17 @@ pub fn cmp_logs(a: &Log, b: &Log, config: &SortConfig) -> Option<Ordering> {
     Some(Ordering::Equal)
 }
 
-async fn collect_logs(by: &[String], mut input_stream: LogStream) -> Result<Vec<Log>> {
+fn collect_logs(by: &[String], input: impl Iterator<Item = LogItem>) -> Result<Vec<Log>> {
     let mut tracked_types = vec![None; by.len()];
 
     let mut logs = Vec::new();
-    while let Some(log) = input_stream.next().await {
+    for log in input {
+        let log = match log {
+            LogItem::Log(log) => log,
+            LogItem::Err(e) => return Err(e),
+            LogItem::OneRxDone => continue,
+        };
+
         for (tracked_type, key) in tracked_types.iter_mut().zip(by) {
             if let Some(value) = log.get(key) {
                 if value != &Value::Null {
@@ -167,37 +185,70 @@ async fn collect_logs(by: &[String], mut input_stream: LogStream) -> Result<Vec<
 fn sort_thread_pool() -> Result<ThreadPool> {
     let num_cores = available_parallelism().map(NonZero::get).unwrap_or(1);
     let num_threads = (num_cores / 4).max(1);
+
     ThreadPoolBuilder::new()
-        .thread_name(|i| format!("parallel-sort-{}", i))
+        .thread_name(|i| format!("parallel-sort-{i}"))
         .num_threads(num_threads)
+        .spawn_handler(move |thread| {
+            std::thread::spawn(move || {
+                let metric = METRICS.alive_threads.with_label_values(&[SORT_THREAD_TAG]);
+                metric.inc();
+                let _guard = scopeguard::guard(metric, |metric| {
+                    metric.dec();
+                });
+
+                thread.run()
+            });
+            Ok(())
+        })
         .build()
         .context("create sort thread pool")
 }
 
-pub async fn sort_stream(sorts: Vec<Sort>, input_stream: LogStream) -> Result<Vec<Log>> {
-    info!(
-        "Sorting by {}",
-        sorts
-            .iter()
-            .map(|sort| sort.to_string())
-            .collect::<Vec<_>>()
-            .join(", ")
+pub fn sort_rx(
+    input: LogIter,
+    sorts: Vec<Sort>,
+    cancel: CancellationToken,
+) -> (Receiver<LogItem>, ThreadRx) {
+    let (tx, rx) = flume::bounded(1);
+
+    let input = SendOnce::new(input);
+    let thread = spawn(
+        move || {
+            let config = SortConfig::new(sorts);
+            let mut logs = collect_logs(&config.by, CancelIter::new(input.take(), cancel.clone()))?;
+
+            let sorted = if logs.len() < PARALLEL_SORT_THREASHOLD {
+                logs.sort_unstable_by(|a, b| {
+                    cmp_logs(a, b, &config).expect("types should have been validated")
+                });
+                logs
+            } else {
+                sort_thread_pool()?.install(move || {
+                    // How to cancel this operation?
+                    // One idea is to use par_chunks_mut() and sort_unstable_by() on each chunk,
+                    // then use itertools::kmerge(). This will split the operations a little and we
+                    // can check for cancel between operations. What I don't like about this
+                    // solution is: it seems like par_sort_unstable_by() is optimized and will be
+                    // faster than a manual naive implementation.
+                    logs.par_sort_unstable_by(|a, b| {
+                        cmp_logs(a, b, &config).expect("types should have been validated")
+                    });
+                    logs
+                })
+            };
+
+            let iter = CancelIter::new(sorted.into_iter(), cancel);
+            for log in iter {
+                if let Err(e) = tx.send(LogItem::Log(log)) {
+                    debug!("Closing sort step: {e:?}");
+                    break;
+                }
+            }
+            Ok(())
+        },
+        SORT_THREAD_TAG,
     );
 
-    let config = SortConfig::new(sorts);
-    let mut logs = collect_logs(&config.by, input_stream).await?;
-
-    let logs = tokio::task::spawn_blocking(move || {
-        let logs = sort_thread_pool()?.install(|| {
-            logs.par_sort_unstable_by(|a, b| {
-                cmp_logs(a, b, &config).expect("types should have been validated")
-            });
-            logs
-        });
-        Ok::<Vec<Log>, color_eyre::eyre::Error>(logs)
-    })
-    .await?
-    .context("sort thread panicked")?;
-
-    Ok(logs)
+    (rx, thread)
 }

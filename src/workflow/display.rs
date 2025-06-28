@@ -9,7 +9,7 @@ impl fmt::Display for WorkflowStep {
             indent: 0,
             section: None,
         };
-        write!(f, "{}", display_step)
+        write!(f, "{display_step}")
     }
 }
 
@@ -82,33 +82,33 @@ impl fmt::Display for DisplayableWorkflowStep<'_> {
                 "{}Scan({}.{}){{{}}}",
                 pre, scan.connector_name, scan.collection, scan.handle
             ),
-            WorkflowStep::Filter(..) => write!(f, "{}Filter", pre),
-            WorkflowStep::Project(..) => write!(f, "{}Project", pre),
-            WorkflowStep::Extend(..) => write!(f, "{}Extend", pre),
-            WorkflowStep::Limit(limit) => write!(f, "{}Limit({})", pre, limit),
-            WorkflowStep::MuxLimit(limit) => write!(f, "{}MuxLimit({})", pre, limit),
+            WorkflowStep::Filter(..) => write!(f, "{pre}Filter"),
+            WorkflowStep::Project(..) => write!(f, "{pre}Project"),
+            WorkflowStep::Extend(..) => write!(f, "{pre}Extend"),
+            WorkflowStep::Limit(limit) => write!(f, "{pre}Limit({limit})"),
+            WorkflowStep::MuxLimit(limit) => write!(f, "{pre}MuxLimit({limit})"),
             WorkflowStep::Sort(sorts) => {
-                write!(f, "{}Sort", pre)?;
+                write!(f, "{pre}Sort")?;
                 fmt_sorts(f, sorts)
             }
             WorkflowStep::TopN(sorts, limit) => {
-                write!(f, "{}TopN({})", pre, limit)?;
+                write!(f, "{pre}TopN({limit})")?;
                 fmt_sorts(f, sorts)
             }
             WorkflowStep::MuxTopN(sorts, limit) => {
-                write!(f, "{}MuxTopN({})", pre, limit)?;
+                write!(f, "{pre}MuxTopN({limit})")?;
                 fmt_sorts(f, sorts)
             }
-            WorkflowStep::Summarize(summarize) => write!(f, "{}Summarize({})", pre, summarize),
+            WorkflowStep::Summarize(summarize) => write!(f, "{pre}Summarize({summarize})"),
             WorkflowStep::MuxSummarize(summarize) => {
-                write!(f, "{}MuxSummarize({})", pre, summarize)
+                write!(f, "{pre}MuxSummarize({summarize})")
             }
             WorkflowStep::Union(workflow) => {
                 let display_steps = DisplayableWorkflowSteps {
                     steps: &workflow.steps,
                     indent: self.indent + 1,
                 };
-                write!(f, "{}Union\n{}", pre, display_steps)
+                write!(f, "{pre}Union\n{display_steps}")
             }
             WorkflowStep::Join(join, workflow) => {
                 let dynamic_filter_tx = match workflow.steps.first() {
@@ -122,14 +122,10 @@ impl fmt::Display for DisplayableWorkflowStep<'_> {
                     steps: &workflow.steps,
                     indent: self.indent + 1,
                 };
-                write!(
-                    f,
-                    "{}Join({}){}\n{}",
-                    pre, join, dynamic_filter_tx, display_steps
-                )
+                write!(f, "{pre}Join({join}){dynamic_filter_tx}\n{display_steps}")
             }
-            WorkflowStep::Count => write!(f, "{}Count", pre),
-            WorkflowStep::MuxCount => write!(f, "{}MuxCount", pre),
+            WorkflowStep::Count => write!(f, "{pre}Count"),
+            WorkflowStep::MuxCount => write!(f, "{pre}MuxCount"),
         }
     }
 }
@@ -140,7 +136,7 @@ fn fmt_sorts(f: &mut fmt::Formatter<'_>, sorts: &[Sort]) -> fmt::Result {
         if i > 0 {
             write!(f, ", ")?;
         }
-        write!(f, "{}", sort)?;
+        write!(f, "{sort}")?;
     }
     write!(f, ")")
 }
@@ -185,7 +181,7 @@ impl fmt::Display for DisplayableWorkflowSteps<'_> {
                 indent: self.indent,
                 section: Some(section),
             };
-            write!(f, "{}", display_step)?;
+            write!(f, "{display_step}")?;
         }
         Ok(())
     }

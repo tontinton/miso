@@ -14,15 +14,12 @@ use axum::{
     Json, Router,
 };
 use color_eyre::{eyre::Context, Result};
-use futures_core::Stream;
-use futures_util::TryStreamExt;
+use futures_util::{Stream, TryStreamExt};
 use prometheus::TextEncoder;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use tokio::{
-    sync::{Notify, RwLock},
-    task::spawn_blocking,
-};
+use tokio::{sync::RwLock, task::spawn_blocking};
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, span, Level};
 use uuid::Uuid;
 
@@ -124,7 +121,7 @@ pub(crate) async fn to_workflow_steps(
                 let Some(view_steps) = views.get(&view).cloned() else {
                     return Err(HttpError::new(
                         StatusCode::NOT_FOUND,
-                        format!("view '{}' not found", view),
+                        format!("view '{view}' not found"),
                     ));
                 };
 
@@ -134,7 +131,7 @@ pub(crate) async fn to_workflow_steps(
                 let Some(connector_state) = connectors.get(&connector_name).cloned() else {
                     return Err(HttpError::new(
                         StatusCode::NOT_FOUND,
-                        format!("connector '{}' not found", connector_name),
+                        format!("connector '{connector_name}' not found"),
                     ));
                 };
 
@@ -143,7 +140,7 @@ pub(crate) async fn to_workflow_steps(
                     info!(?collection, "Collection doesn't exist");
                     return Err(HttpError::new(
                         StatusCode::NOT_FOUND,
-                        format!("collection '{}' not found", collection),
+                        format!("collection '{collection}' not found"),
                     ));
                 }
 
@@ -292,18 +289,18 @@ async fn query_stream(
 
     debug!(?workflow, "Executing workflow");
 
-    let cancel = Arc::new(Notify::new());
+    let cancel = CancellationToken::new();
     let mut logs_stream = workflow.execute(cancel.clone()).map_err(|e| {
         HttpError::new(
             StatusCode::INTERNAL_SERVER_ERROR,
-            format!("failed to execute workflow: {}", e),
+            format!("failed to execute workflow: {e}"),
         )
     })?;
 
     Ok(Sse::new(stream! {
         let _cancel_on_drop = scopeguard::guard(cancel, |cancel| {
             debug!("Cancelling query");
-            cancel.notify_one();
+            cancel.cancel();
         });
 
         loop {
@@ -497,7 +494,7 @@ async fn metrics() -> Result<Response, HttpError> {
         .map_err(|e| {
             HttpError::new(
                 StatusCode::INTERNAL_SERVER_ERROR,
-                format!("failed to encode metrics: {}", e),
+                format!("failed to encode metrics: {e}"),
             )
         })?;
     Ok(buffer.into_response())
