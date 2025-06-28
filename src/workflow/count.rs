@@ -26,19 +26,34 @@ fn log_to_count(mut log: Log) -> Option<u64> {
     None
 }
 
+enum CountMode {
+    Simple,
+    Mux,
+}
+
 pub struct CountIter {
     input: LogIter,
     count: u64,
+    mode: CountMode,
     done: bool,
 }
 
 impl CountIter {
-    pub fn new(input: LogIter) -> Self {
+    fn new(input: LogIter, mode: CountMode) -> Self {
         Self {
             input,
             count: 0,
+            mode,
             done: false,
         }
+    }
+
+    pub fn new_simple(input: LogIter) -> Self {
+        Self::new(input, CountMode::Simple)
+    }
+
+    pub fn new_mux(input: LogIter) -> Self {
+        Self::new(input, CountMode::Mux)
     }
 }
 
@@ -49,48 +64,24 @@ impl Iterator for CountIter {
         if self.done {
             return None;
         }
-        while try_next!(self.input).is_some() {
-            self.count += 1;
-        }
-        self.done = true;
-        Some(LogItem::Log(count_to_log(self.count)))
-    }
-}
 
-pub struct MuxCountIter {
-    input: LogIter,
-    count: u64,
-    done: bool,
-}
-
-impl MuxCountIter {
-    pub fn new(input: LogIter) -> Self {
-        Self {
-            input,
-            count: 0,
-            done: false,
-        }
-    }
-}
-
-impl Iterator for MuxCountIter {
-    type Item = LogItem;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.done {
-            return None;
-        }
         while let Some(log) = try_next!(self.input) {
-            if let Some(count) = log_to_count(log) {
-                self.count += count;
+            match self.mode {
+                CountMode::Simple => self.count += 1,
+                CountMode::Mux => {
+                    if let Some(count) = log_to_count(log) {
+                        self.count += count;
+                    }
+                }
             }
         }
+
         self.done = true;
         Some(LogItem::Log(count_to_log(self.count)))
     }
 }
 
-impl PartialLogIter for MuxCountIter {
+impl PartialLogIter for CountIter {
     fn get_partial(&self) -> LogIter {
         Box::new(iter::once(LogItem::Log(count_to_log(self.count))))
     }

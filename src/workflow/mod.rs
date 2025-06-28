@@ -17,7 +17,7 @@ use crate::{
     send_once::SendOnce,
     spawn_thread::{spawn, ThreadRx},
     workflow::{
-        count::{CountIter, MuxCountIter},
+        count::CountIter,
         filter::FilterIter,
         join::{join_rx, DynamicFilterTx, Join, JoinType},
         limit::LimitIter,
@@ -260,11 +260,11 @@ impl WorkflowStep {
                 Box::new(rx.into_iter().map(LogItem::Log))
             }
             WorkflowStep::MuxCount if partial_stream.is_some() => Box::new(PartialStreamIter::new(
-                Box::new(MuxCountIter::new(rx.into_iter())),
+                Box::new(CountIter::new_mux(rx.into_iter())),
                 partial_stream.unwrap(),
             )),
-            WorkflowStep::MuxCount => Box::new(MuxCountIter::new(rx.into_iter())),
-            WorkflowStep::Count => Box::new(CountIter::new(rx.into_iter())),
+            WorkflowStep::MuxCount => Box::new(CountIter::new_mux(rx.into_iter())),
+            WorkflowStep::Count => Box::new(CountIter::new_simple(rx.into_iter())),
         };
 
         Ok((iter, threads, async_tasks))
