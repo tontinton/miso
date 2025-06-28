@@ -37,7 +37,7 @@ pub trait PartialLogIter: Iterator<Item = LogItem> {
     fn get_partial(&self) -> LogIter;
 }
 
-fn add_partial_stream_id(mut log: Log, id: usize) -> Log {
+pub fn add_partial_stream_id(mut log: Log, id: usize) -> Log {
     log.entry(MISO_METADATA_FIELD_NAME)
         .or_insert_with(|| Value::Object(Map::new()))
         .as_object_mut()

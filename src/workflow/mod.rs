@@ -286,8 +286,6 @@ impl WorkflowStep {
             | Self::Join(..)
             | Self::Summarize(..)
             | Self::MuxSummarize(..)
-            | Self::Count
-            | Self::MuxCount
             | Self::Union(..)
             | Self::MuxTopN(..) => false,
 
@@ -296,7 +294,9 @@ impl WorkflowStep {
             | Self::Limit(..)
             | Self::MuxLimit(..)
             | Self::Sort(..)
-            | Self::TopN(..) => true,
+            | Self::TopN(..)
+            | Self::Count
+            | Self::MuxCount => true,
         }
     }
 }
