@@ -84,7 +84,7 @@ impl Iterator for UnionIter {
                     if self.rxs.is_empty() {
                         return None;
                     }
-                    return Some(LogItem::OneRxDone);
+                    return Some(LogItem::UnionSomePipelineDone);
                 }
                 Err(TryRecvError::Empty) => {
                     i += 1;
@@ -102,7 +102,7 @@ impl Iterator for UnionIter {
             Ok(log) => Some(LogItem::Log(log)),
             Err(RecvError::Disconnected) => {
                 self.rxs.swap_remove(i);
-                (!self.rxs.is_empty()).then_some(LogItem::OneRxDone)
+                (!self.rxs.is_empty()).then_some(LogItem::UnionSomePipelineDone)
             }
         }
     }
@@ -186,7 +186,7 @@ impl Iterator for PartialStreamIter {
             match self.input.next()? {
                 LogItem::Log(log) => return Some(LogItem::Log(log)),
                 LogItem::Err(e) => return Some(LogItem::Err(e)),
-                LogItem::OneRxDone => self.update_partial_iter(),
+                LogItem::UnionSomePipelineDone => self.update_partial_iter(),
                 LogItem::PartialStreamLog(..) | LogItem::PartialStreamDone(..) => {
                     panic!("partial stream items should not reach the partial stream log generator")
                 }

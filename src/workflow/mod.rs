@@ -342,7 +342,7 @@ fn execute_pipeline(iter: impl Iterator<Item = LogItem>, tx: Sender<Log>) -> Res
             LogItem::Log(log) => log,
             LogItem::PartialStreamLog(log, id) => add_partial_stream_id(log, id),
             LogItem::PartialStreamDone(id) => build_partial_stream_id_done_log(id),
-            LogItem::OneRxDone => continue,
+            LogItem::UnionSomePipelineDone => continue,
         };
 
         if let Err(e) = tx.send(log) {

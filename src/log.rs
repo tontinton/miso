@@ -7,7 +7,9 @@ use futures_util::Stream;
 macro_rules! try_next {
     ($iter:expr) => {
         match $iter.next() {
-            Some($crate::log::LogItem::OneRxDone) => return Some($crate::log::LogItem::OneRxDone),
+            Some($crate::log::LogItem::UnionSomePipelineDone) => {
+                return Some($crate::log::LogItem::UnionSomePipelineDone);
+            }
             Some($crate::log::LogItem::Err(e)) => return Some($crate::log::LogItem::Err(e)),
             Some($crate::log::LogItem::Log(log)) => Some(log),
             Some($crate::log::LogItem::PartialStreamLog(..)) => None,
@@ -21,8 +23,8 @@ macro_rules! try_next {
 macro_rules! try_next_with_partial_passthrough {
     ($iter:expr) => {
         match $iter.next() {
-            Some($crate::log::LogItem::OneRxDone) => {
-                return Some($crate::log::LogItem::OneRxDone);
+            Some($crate::log::LogItem::UnionSomePipelineDone) => {
+                return Some($crate::log::LogItem::UnionSomePipelineDone);
             }
             Some($crate::log::LogItem::Err(e)) => return Some($crate::log::LogItem::Err(e)),
             Some($crate::log::LogItem::PartialStreamLog(log, id)) => {
@@ -47,7 +49,9 @@ pub enum PartialStreamItem {
 macro_rules! try_next_with_partial_stream {
     ($iter:expr) => {
         match $iter.next() {
-            Some($crate::log::LogItem::OneRxDone) => return Some($crate::log::LogItem::OneRxDone),
+            Some($crate::log::LogItem::UnionSomePipelineDone) => {
+                return Some($crate::log::LogItem::UnionSomePipelineDone);
+            }
             Some($crate::log::LogItem::Err(e)) => return Some($crate::log::LogItem::Err(e)),
             Some($crate::log::LogItem::Log(log)) => Some($crate::log::PartialStreamItem::Log(log)),
             Some($crate::log::LogItem::PartialStreamLog(log, id)) => {
@@ -72,7 +76,7 @@ pub enum LogItem<E = Report> {
     Err(E),
     PartialStreamLog(Log, usize),
     PartialStreamDone(usize),
-    OneRxDone,
+    UnionSomePipelineDone,
 }
 
 impl LogItem {

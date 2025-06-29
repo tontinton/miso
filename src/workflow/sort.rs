@@ -153,7 +153,9 @@ fn collect_logs(by: &[String], input: impl Iterator<Item = LogItem>) -> Result<V
         let log = match log {
             LogItem::Log(log) => log,
             LogItem::Err(e) => return Err(e),
-            LogItem::OneRxDone | LogItem::PartialStreamLog(..) | LogItem::PartialStreamDone(..) => {
+            LogItem::UnionSomePipelineDone
+            | LogItem::PartialStreamLog(..)
+            | LogItem::PartialStreamDone(..) => {
                 continue;
             }
         };

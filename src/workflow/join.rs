@@ -257,8 +257,9 @@ fn pipe_logiter_to_tx(iter: LogIter, tx: Sender<Log>) -> Result<()> {
         match item {
             LogItem::Log(log) => tx.send(log).context("pipe log to tx")?,
             LogItem::Err(e) => return Err(e),
-            LogItem::OneRxDone | LogItem::PartialStreamLog(..) | LogItem::PartialStreamDone(..) => {
-            }
+            LogItem::UnionSomePipelineDone
+            | LogItem::PartialStreamLog(..)
+            | LogItem::PartialStreamDone(..) => {}
         }
     }
     Ok(())
