@@ -10,6 +10,52 @@ macro_rules! try_next {
             Some($crate::log::LogItem::OneRxDone) => return Some($crate::log::LogItem::OneRxDone),
             Some($crate::log::LogItem::Err(e)) => return Some($crate::log::LogItem::Err(e)),
             Some($crate::log::LogItem::Log(log)) => Some(log),
+            Some($crate::log::LogItem::PartialStreamLog(..)) => None,
+            Some($crate::log::LogItem::PartialStreamDone(..)) => None,
+            None => None,
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! try_next_with_partial_passthrough {
+    ($iter:expr) => {
+        match $iter.next() {
+            Some($crate::log::LogItem::OneRxDone) => {
+                return Some($crate::log::LogItem::OneRxDone);
+            }
+            Some($crate::log::LogItem::Err(e)) => return Some($crate::log::LogItem::Err(e)),
+            Some($crate::log::LogItem::PartialStreamLog(log, id)) => {
+                return Some($crate::log::LogItem::PartialStreamLog(log, id));
+            }
+            Some($crate::log::LogItem::PartialStreamDone(id)) => {
+                return Some($crate::log::LogItem::PartialStreamDone(id));
+            }
+            Some($crate::log::LogItem::Log(log)) => Some(log),
+            None => None,
+        }
+    };
+}
+
+pub enum PartialStreamItem {
+    Log(Log),
+    PartialStreamLog(Log, usize),
+    PartialStreamDone(usize),
+}
+
+#[macro_export]
+macro_rules! try_next_with_partial_stream {
+    ($iter:expr) => {
+        match $iter.next() {
+            Some($crate::log::LogItem::OneRxDone) => return Some($crate::log::LogItem::OneRxDone),
+            Some($crate::log::LogItem::Err(e)) => return Some($crate::log::LogItem::Err(e)),
+            Some($crate::log::LogItem::Log(log)) => Some($crate::log::PartialStreamItem::Log(log)),
+            Some($crate::log::LogItem::PartialStreamLog(log, id)) => {
+                Some($crate::log::PartialStreamItem::PartialStreamLog(log, id))
+            }
+            Some($crate::log::LogItem::PartialStreamDone(id)) => {
+                Some($crate::log::PartialStreamItem::PartialStreamDone(id))
+            }
             None => None,
         }
     };
@@ -24,13 +70,15 @@ pub type LogTryStream = Pin<Box<dyn Stream<Item = Result<Log>> + Send>>;
 pub enum LogItem<E = Report> {
     Log(Log),
     Err(E),
+    PartialStreamLog(Log, usize),
+    PartialStreamDone(usize),
     OneRxDone,
 }
 
 impl LogItem {
-    pub fn map_log(self, map_fn: impl Fn(Log) -> Log) -> LogItem {
+    pub fn attach_partial_stream_id(self, id: usize) -> LogItem {
         match self {
-            LogItem::Log(log) => LogItem::Log(map_fn(log)),
+            LogItem::Log(log) => LogItem::PartialStreamLog(log, id),
             other => other,
         }
     }

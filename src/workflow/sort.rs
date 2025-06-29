@@ -153,7 +153,9 @@ fn collect_logs(by: &[String], input: impl Iterator<Item = LogItem>) -> Result<V
         let log = match log {
             LogItem::Log(log) => log,
             LogItem::Err(e) => return Err(e),
-            LogItem::OneRxDone => continue,
+            LogItem::OneRxDone | LogItem::PartialStreamLog(..) | LogItem::PartialStreamDone(..) => {
+                continue;
+            }
         };
 
         for (tracked_type, key) in tracked_types.iter_mut().zip(by) {

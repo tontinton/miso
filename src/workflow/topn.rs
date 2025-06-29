@@ -4,12 +4,12 @@ use hashbrown::HashMap;
 use scoped_thread_local::scoped_thread_local;
 
 use crate::{
-    log::{Log, LogItem, LogIter},
-    try_next,
+    log::{Log, LogItem, LogIter, PartialStreamItem},
+    try_next, try_next_with_partial_stream,
 };
 
 use super::{
-    partial_stream::{get_partial_id, PartialLogIter},
+    partial_stream::PartialLogIter,
     sort::{cmp_logs, Sort, SortConfig},
 };
 
@@ -111,6 +111,19 @@ impl TopNIter {
         self.logs = Box::new(logs.into_iter().map(|x| LogItem::Log(x.0)));
         self.logs.next()
     }
+
+    fn set_next_partial_stream_batch(
+        &mut self,
+        logs: Vec<SortableLog>,
+        id: usize,
+    ) -> Option<LogItem> {
+        self.logs = Box::new(
+            logs.into_iter()
+                .map(move |x| LogItem::PartialStreamLog(x.0, id))
+                .chain(iter::once(LogItem::PartialStreamDone(id))),
+        );
+        self.logs.next()
+    }
 }
 
 impl Iterator for TopNIter {
@@ -122,23 +135,23 @@ impl Iterator for TopNIter {
         }
         let state = self.state.as_mut()?;
 
-        while let Some(log) = try_next!(self.input) {
-            match get_partial_id(&log) {
-                None => {
+        while let Some(item) = try_next_with_partial_stream!(self.input) {
+            match item {
+                PartialStreamItem::Log(log) => {
                     state.push(log);
                 }
-                Some((id, false)) => {
+                PartialStreamItem::PartialStreamLog(log, id) => {
                     self.partial_states
                         .entry(id)
                         .or_insert_with(|| TopNState::new(self.limit, self.config.clone()))
                         .push(log);
                 }
-                Some((id, true)) => {
+                PartialStreamItem::PartialStreamDone(id) => {
                     if let Some(state) = self.partial_states.remove(&id) {
-                        return self.set_next_batch(state.into_sorted_vec());
+                        return self.set_next_partial_stream_batch(state.into_sorted_vec(), id);
                     }
                 }
-            }
+            };
         }
 
         let logs = self.state.take().unwrap().into_sorted_vec();

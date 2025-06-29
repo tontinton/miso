@@ -10,7 +10,6 @@ use serde_json::{json, Map, Value};
 use crate::{
     humantime_utils::deserialize_duration,
     log::{Log, LogItem, LogIter},
-    try_next,
 };
 
 use super::MISO_METADATA_FIELD_NAME;
@@ -46,7 +45,7 @@ pub fn add_partial_stream_id(mut log: Log, id: usize) -> Log {
     log
 }
 
-fn build_partial_stream_id_done_log(id: usize) -> Log {
+pub fn build_partial_stream_id_done_log(id: usize) -> Log {
     let mut log = Map::with_capacity(1);
     log.insert(
         MISO_METADATA_FIELD_NAME.to_string(),
@@ -56,23 +55,6 @@ fn build_partial_stream_id_done_log(id: usize) -> Log {
         }),
     );
     log
-}
-
-pub fn get_partial_id(log: &Log) -> Option<(usize, bool)> {
-    let metadata = log.get(MISO_METADATA_FIELD_NAME)?;
-    let obj = metadata.as_object()?;
-
-    let id = obj
-        .get(PARTIAL_STREAM_ID_FIELD_NAME)
-        .and_then(|v| v.as_u64())
-        .map(|v| v as usize)?;
-
-    let done = obj
-        .get(PARTIAL_STREAM_DONE_FIELD_NAME)
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
-
-    Some((id, done))
 }
 
 pub struct UnionIter {
@@ -151,11 +133,10 @@ impl PartialStreamIter {
         let id = self.id;
         self.id += 1;
 
-        let done_log = LogItem::Log(build_partial_stream_id_done_log(id));
         self.partial_iter = Box::new(
             partial_iter
-                .map(move |item| item.map_log(|log| add_partial_stream_id(log, id)))
-                .chain(iter::once(done_log)),
+                .map(move |item| item.attach_partial_stream_id(id))
+                .chain(iter::once(LogItem::PartialStreamDone(id))),
         );
         self.partial_iter_start = Some(now);
     }
@@ -194,8 +175,8 @@ impl Iterator for PartialStreamIter {
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {
-            if let Some(log) = try_next!(self.partial_iter) {
-                return Some(LogItem::Log(log));
+            if let Some(item) = self.partial_iter.next() {
+                return Some(item);
             }
 
             if self.handle_debounced_partial_iter() {
@@ -206,6 +187,9 @@ impl Iterator for PartialStreamIter {
                 LogItem::Log(log) => return Some(LogItem::Log(log)),
                 LogItem::Err(e) => return Some(LogItem::Err(e)),
                 LogItem::OneRxDone => self.update_partial_iter(),
+                LogItem::PartialStreamLog(..) | LogItem::PartialStreamDone(..) => {
+                    panic!("partial stream items should not reach the partial stream log generator")
+                }
             }
         }
     }

@@ -1,17 +1,15 @@
 use hashbrown::HashMap;
 
 use crate::{
-    log::{LogItem, LogIter},
-    try_next,
+    log::{LogItem, LogIter, PartialStreamItem},
+    try_next_with_partial_stream,
 };
-
-use super::partial_stream::get_partial_id;
 
 pub struct LimitIter {
     input: LogIter,
     limit: u32,
     streamed: u32,
-    partial_limits: HashMap<usize, Option<u32>>,
+    partial_limits: HashMap<usize, u32>,
 }
 
 impl LimitIter {
@@ -33,27 +31,28 @@ impl Iterator for LimitIter {
             return None;
         }
 
-        while let Some(log) = try_next!(self.input) {
-            let should_stream = match get_partial_id(&log) {
-                None => {
+        while let Some(item) = try_next_with_partial_stream!(self.input) {
+            let log_to_stream = match item {
+                PartialStreamItem::Log(log) => {
                     self.streamed += 1;
-                    true
+                    Some(log)
                 }
-                Some((id, true)) => {
-                    self.partial_limits.remove(&id);
-                    true
-                }
-                Some((id, false)) => match self.partial_limits.entry(id).or_insert(Some(0)) {
-                    Some(streamed) if *streamed == self.limit => false,
-                    Some(streamed) => {
+                PartialStreamItem::PartialStreamLog(log, id) => {
+                    let streamed = self.partial_limits.entry(id).or_insert(0);
+                    if *streamed == self.limit {
+                        None
+                    } else {
                         *streamed += 1;
-                        true
+                        Some(log)
                     }
-                    None => false,
-                },
+                }
+                PartialStreamItem::PartialStreamDone(id) => {
+                    self.partial_limits.remove(&id);
+                    None
+                }
             };
 
-            if should_stream {
+            if let Some(log) = log_to_stream {
                 return Some(LogItem::Log(log));
             }
         }

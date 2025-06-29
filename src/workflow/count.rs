@@ -4,11 +4,11 @@ use hashbrown::HashMap;
 use serde_json::Value;
 
 use crate::{
-    log::{Log, LogItem, LogIter},
-    try_next,
+    log::{Log, LogItem, LogIter, PartialStreamItem},
+    try_next_with_partial_stream,
 };
 
-use super::partial_stream::{add_partial_stream_id, get_partial_id, PartialLogIter};
+use super::partial_stream::PartialLogIter;
 
 pub const COUNT_LOG_FIELD_NAME: &str = "count";
 
@@ -54,6 +54,7 @@ pub struct CountIter {
     count: u64,
     partial_counts: HashMap<usize, u64>,
     mode: CountMode,
+    next: Option<LogItem>,
     done: bool,
 }
 
@@ -64,6 +65,7 @@ impl CountIter {
             count: 0,
             partial_counts: HashMap::new(),
             mode,
+            next: None,
             done: false,
         }
     }
@@ -85,21 +87,26 @@ impl Iterator for CountIter {
             return None;
         }
 
-        while let Some(log) = try_next!(self.input) {
-            match get_partial_id(&log) {
-                None => {
+        if let Some(log) = self.next.take() {
+            return Some(log);
+        }
+
+        while let Some(item) = try_next_with_partial_stream!(self.input) {
+            match item {
+                PartialStreamItem::Log(log) => {
                     self.mode.update_count(&mut self.count, log);
                 }
-                Some((id, true)) => {
-                    if let Some(count) = self.partial_counts.remove(&id) {
-                        return Some(LogItem::Log(add_partial_stream_id(count_to_log(count), id)));
-                    }
-                }
-                Some((id, false)) => {
+                PartialStreamItem::PartialStreamLog(log, id) => {
                     let count = self.partial_counts.entry(id).or_insert(0);
                     self.mode.update_count(count, log);
                 }
-            }
+                PartialStreamItem::PartialStreamDone(id) => {
+                    if let Some(count) = self.partial_counts.remove(&id) {
+                        self.next = Some(LogItem::PartialStreamDone(id));
+                        return Some(LogItem::PartialStreamLog(count_to_log(count), id));
+                    }
+                }
+            };
         }
 
         self.done = true;

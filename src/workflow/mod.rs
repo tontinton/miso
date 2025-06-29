@@ -8,6 +8,7 @@ use futures_util::{
     FutureExt, StreamExt,
 };
 use kinded::Kinded;
+use partial_stream::{add_partial_stream_id, build_partial_stream_id_done_log};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, instrument};
 
@@ -336,15 +337,17 @@ fn prepare_execute_pipeline(
 #[instrument(skip_all)]
 fn execute_pipeline(iter: impl Iterator<Item = LogItem>, tx: Sender<Log>) -> Result<()> {
     for item in iter {
-        match item {
-            LogItem::Log(log) => {
-                if let Err(e) = tx.send(log) {
-                    debug!("Closing pipeline {:?}", e);
-                    break;
-                }
-            }
+        let log = match item {
             LogItem::Err(e) => return Err(e),
-            LogItem::OneRxDone => {}
+            LogItem::Log(log) => log,
+            LogItem::PartialStreamLog(log, id) => add_partial_stream_id(log, id),
+            LogItem::PartialStreamDone(id) => build_partial_stream_id_done_log(id),
+            LogItem::OneRxDone => continue,
+        };
+
+        if let Err(e) = tx.send(log) {
+            debug!("Closing pipeline {:?}", e);
+            break;
         }
     }
 

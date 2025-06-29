@@ -4,7 +4,7 @@ use tracing::warn;
 
 use crate::{
     log::{Log, LogItem, LogIter},
-    try_next,
+    try_next_with_partial_passthrough,
 };
 
 use super::interpreter::{ident, Val};
@@ -126,7 +126,7 @@ impl Iterator for FilterIter {
     type Item = LogItem;
 
     fn next(&mut self) -> Option<Self::Item> {
-        while let Some(log) = try_next!(self.input) {
+        while let Some(log) = try_next_with_partial_passthrough!(self.input) {
             let interpreter = FilterInterpreter::new(log);
             let keep = match interpreter.eval(&self.ast) {
                 Ok(v) => v.to_bool(),

@@ -6,7 +6,7 @@ use tracing::warn;
 
 use crate::{
     log::{Log, LogItem, LogIter},
-    try_next,
+    try_next_with_partial_passthrough,
 };
 
 use super::interpreter::{ident, CastType, Val};
@@ -86,7 +86,7 @@ impl Iterator for ProjectIter {
     type Item = LogItem;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let mut log = try_next!(self.input)?;
+        let mut log = try_next_with_partial_passthrough!(self.input)?;
         let mut output = Log::new();
 
         {
