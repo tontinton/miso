@@ -8,21 +8,24 @@ use crate::{log::Log, workflow::serde_json_utils::get_value_kind};
 
 use super::serde_json_utils::{partial_cmp_values, value_to_bool};
 
+/// Extract the inner value as ref, propagate and return None if no value.
+macro_rules! val {
+    ($v:expr) => {{
+        match &$v.0 {
+            Some(cow) => cow.as_ref(),
+            None => return Ok(None),
+        }
+    }};
+}
+
 macro_rules! impl_two_strs_fn {
     ($l:expr, $r:expr, $func:expr, $op_str:literal) => {{
-        let lhs_val = match &$l.0 {
-            Some(cow) => cow.as_ref(),
-            None => return Ok(None),
-        };
-        let rhs_val = match &$r.0 {
-            Some(cow) => cow.as_ref(),
-            None => return Ok(None),
-        };
+        let lhs_val = val!($l);
+        let rhs_val = val!($r);
 
         let Value::String(lhs) = lhs_val else {
             bail!("LHS of '{}' operation must be a string", $op_str);
         };
-
         let Value::String(rhs) = rhs_val else {
             bail!("RHS of '{}' operation must be a string", $op_str);
         };
@@ -56,17 +59,11 @@ macro_rules! impl_cmp {
 }
 
 macro_rules! impl_op {
-    ($self:expr, $other:expr, $op:expr, $op_str:literal) => {{
-        let lhs_val = match &$self.0 {
-            Some(cow) => cow.as_ref(),
-            None => return Ok(None),
-        };
-        let rhs_val = match &$other.0 {
-            Some(cow) => cow.as_ref(),
-            None => return Ok(None),
-        };
+    ($lhs:expr, $rhs:expr, $op:expr, $op_str:literal) => {{
+        let lhs = $lhs;
+        let rhs = $rhs;
 
-        match (lhs_val, rhs_val) {
+        match (lhs, rhs) {
             (Value::Number(l), Value::Number(r)) => {
                 if let (Some(l_i64), Some(r_i64)) = (l.as_i64(), r.as_i64()) {
                     if $op_str != "/" {
@@ -89,8 +86,8 @@ macro_rules! impl_op {
             _ => {}
         }
 
-        let lhs_kind = get_value_kind(lhs_val);
-        let rhs_kind = get_value_kind(rhs_val);
+        let lhs_kind = get_value_kind(lhs);
+        let rhs_kind = get_value_kind(rhs);
         bail!(
             "unsupported '{}' operation between: {}, {}",
             $op_str,
@@ -199,32 +196,30 @@ impl<'a> Val<'a> {
     }
 
     pub fn add(&self, other: &Val) -> Result<Option<Value>> {
-        if let (Some(lhs_cow), Some(rhs_cow)) = (&self.0, &other.0) {
-            if let (Value::String(x), Value::String(y)) = (lhs_cow.as_ref(), rhs_cow.as_ref()) {
-                return Ok(Some(Value::String(format!("{x}{y}"))));
-            }
+        let lhs = val!(self);
+        let rhs = val!(other);
+        if let (Value::String(x), Value::String(y)) = (lhs, rhs) {
+            return Ok(Some(Value::String(format!("{x}{y}"))));
         }
-        impl_op!(self, other, |x, y| x + y, "+")
+        impl_op!(lhs, rhs, |x, y| x + y, "+")
     }
 
     pub fn sub(&self, other: &Val) -> Result<Option<Value>> {
-        impl_op!(self, other, |x, y| x - y, "-")
+        impl_op!(val!(self), val!(other), |x, y| x - y, "-")
     }
 
     pub fn mul(&self, other: &Val) -> Result<Option<Value>> {
-        impl_op!(self, other, |x, y| x * y, "*")
+        impl_op!(val!(self), val!(other), |x, y| x * y, "*")
     }
 
     pub fn div(&self, other: &Val) -> Result<Option<Value>> {
-        if let Some(rhs_cow) = &other.0 {
-            let rhs = rhs_cow.as_ref();
-            if let Value::Number(n) = rhs {
-                if n.as_i64() == Some(0) || n.as_f64() == Some(0.0) {
-                    bail!("division by zero");
-                }
+        let rhs = val!(other);
+        if let Value::Number(n) = rhs {
+            if n.as_i64() == Some(0) || n.as_f64() == Some(0.0) {
+                bail!("division by zero");
             }
         }
-        impl_op!(self, other, |x, y| x / y, "/")
+        impl_op!(val!(self), rhs, |x, y| x / y, "/")
     }
 
     pub fn cast(self, ty: CastType) -> Result<Val<'a>> {
