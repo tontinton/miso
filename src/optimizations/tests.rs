@@ -4,7 +4,7 @@ use crate::workflow::{
     filter::FilterAst,
     project::{ProjectAst, ProjectField},
     sort::{NullsOrder, Sort, SortOrder},
-    summarize::{Aggregation, Summarize},
+    summarize::{Aggregation, GroupAst, Summarize},
     Workflow, WorkflowStep as S,
 };
 
@@ -207,14 +207,14 @@ fn summarize_into_union() {
             "c".to_string() => Aggregation::Count,
             "s".to_string() => Aggregation::Sum("y".to_string()),
         },
-        by: vec!["x".to_string()],
+        by: vec![GroupAst::Id("x".to_string())],
     });
     let post = S::MuxSummarize(Summarize {
         aggs: btreemap! {
             "c".to_string() => Aggregation::Sum("c".to_string()),
             "s".to_string() => Aggregation::Sum("s".to_string()),
         },
-        by: vec!["x".to_string()],
+        by: vec![GroupAst::Id("x".to_string())],
     });
 
     check_default(

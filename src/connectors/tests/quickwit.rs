@@ -451,7 +451,7 @@ async fn predicate_pushdown_same_results(
               "sumQuestionId": {"sum": "questionId"},
               "count": "count"
             },
-            "by": ["user"]
+            "by": [{"id": "user"}]
           }
         }
     ]"#,
@@ -465,7 +465,7 @@ async fn predicate_pushdown_same_results(
         {
           "summarize": {
             "aggs": {},
-            "by": ["user"]
+            "by": [{"id": "user"}]
           }
         }
     ]"#,
@@ -479,7 +479,7 @@ async fn predicate_pushdown_same_results(
         {
           "summarize": {
             "aggs": {"minQuestionId": {"min": "questionId"}},
-            "by": ["user"]
+            "by": [{"id": "user"}]
           }
         },
         {"top": [[{"by": "minQuestionId"}], 3]}
@@ -498,7 +498,7 @@ async fn predicate_pushdown_same_results(
         {
           "summarize": {
             "aggs": {"minQuestionId": {"min": "questionId"}},
-            "by": ["user"]
+            "by": [{"id": "user"}]
           }
         }
     ]"#,
@@ -507,7 +507,7 @@ async fn predicate_pushdown_same_results(
         {
           "summarize": {
             "aggs": {"minQuestionId": {"min": "questionId"}},
-            "by": ["user"]
+            "by": [{"id": "user"}]
           }
         }
     ]"#,
