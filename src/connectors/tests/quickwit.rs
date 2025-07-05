@@ -464,6 +464,25 @@ async fn predicate_pushdown_same_results(
         {"scan": ["test", "stack"]},
         {
           "summarize": {
+            "aggs": {
+              "minQuestionId": {"min": "questionId"},
+              "maxQuestionId": {"max": "questionId"},
+              "sumQuestionId": {"sum": "questionId"},
+              "count": "count"
+            },
+            "by": [{"bin": ["answerId", 5]}]
+          }
+        }
+    ]"#,
+    r#"[{"scan": ["test", "stack"]}]"#,
+    2;
+    "summarize_min_max_count_by_bin"
+)]
+#[test_case(
+    r#"[
+        {"scan": ["test", "stack"]},
+        {
+          "summarize": {
             "aggs": {},
             "by": [{"id": "user"}]
           }
