@@ -864,6 +864,29 @@ async fn summarize() -> Result<()> {
 }
 
 #[tokio::test]
+async fn summarize_bin() -> Result<()> {
+    check(
+        r#"[
+            {"scan": ["test", "c"]},
+            {
+                "summarize": {
+                    "aggs": {
+                        "max_x": {"max": "x"},
+                        "min_x": {"min": "x"},
+                        "sum_x": {"sum": "x"},
+                        "c": "count"
+                    },
+                    "by": [{"bin": ["y", 2]}]
+                }
+            }
+        ]"#,
+        r#"[{"x": 3, "y": 0}, {"x": 5, "y": 1}, {"x": 1, "y": 4}, {"x": 9, "y": 5}, {"x": 5}]"#,
+        r#"[{"max_x": 5, "min_x": 3, "sum_x": 8.0, "c": 2, "y": 0.0}, {"max_x": 9, "min_x": 1, "sum_x": 10.0, "c": 2, "y": 4.0}]"#,
+    )
+    .await
+}
+
+#[tokio::test]
 #[test_case(1)]
 #[test_case(10)]
 async fn join_inner(partitions: usize) -> Result<()> {
