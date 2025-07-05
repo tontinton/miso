@@ -1087,11 +1087,6 @@ impl Connector for QuickwitConnector {
             return None;
         }
 
-        if !config.by.iter().all(|x| matches!(x, GroupAst::Id(..))) {
-            // Only regular group by is currently supported, need to implement bin using histogram.
-            return None;
-        }
-
         let mut count_fields = Vec::new();
         let mut inner_aggs = BTreeMap::new();
 
@@ -1133,14 +1128,24 @@ impl Connector for QuickwitConnector {
         let mut current_agg = &mut aggs;
         for (i, ast) in config.by.iter().enumerate() {
             let name = format!("{AGGREGATION_RESULTS_NAME}_{i}");
-            let nested_agg = json!({
-                    &name: {
-                        "terms": {
-                            "field": ast.field(),
-                            "size": MAX_NUM_GROUPS,
+            let nested_agg = match ast {
+                GroupAst::Id(field) => json!({
+                        &name: {
+                            "terms": {
+                                "field": field,
+                                "size": MAX_NUM_GROUPS,
+                            }
                         }
-                    }
-            });
+                }),
+                GroupAst::Bin(field, value) => json!({
+                        &name: {
+                            "histogram": {
+                                "field": field,
+                                "interval": value,
+                            }
+                        }
+                }),
+            };
             current_agg["aggs"] = nested_agg;
             current_agg = current_agg.get_mut("aggs").unwrap().get_mut(&name).unwrap();
         }
