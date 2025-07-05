@@ -1,5 +1,3 @@
-use std::borrow::Cow;
-
 use color_eyre::eyre::Result;
 use serde::{Deserialize, Serialize};
 use tracing::warn;
@@ -96,10 +94,7 @@ impl Iterator for ProjectIter {
                 match interpreter.eval(&field.from) {
                     Ok(Val(None)) => {} // Skip.
                     Ok(v) => {
-                        let owned = match v.0.unwrap() {
-                            Cow::Borrowed(borrowed) => borrowed.clone(),
-                            Cow::Owned(owned) => owned,
-                        };
+                        let owned = v.0.unwrap().into_owned();
                         output.insert(field.to.clone(), owned);
                     }
                     Err(e) => {

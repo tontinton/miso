@@ -2,7 +2,7 @@ use std::{borrow::Cow, cmp::Ordering};
 
 use color_eyre::eyre::{bail, eyre, OptionExt, Result};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Number, Value};
 
 use crate::{log::Log, workflow::serde_json_utils::get_value_kind};
 
@@ -276,6 +276,35 @@ impl<'a> Val<'a> {
         };
 
         Ok(Val::owned(casted_value))
+    }
+
+    pub fn bin(&self, by: &Val) -> Result<Option<Value>> {
+        let self_val = val!(self);
+        let by_val = val!(by);
+
+        let Value::Number(self_num) = self_val else {
+            bail!(
+                "cannot bin '{}', currently only numbers are supported",
+                get_value_kind(self_val)
+            );
+        };
+        let Value::Number(by_num) = by_val else {
+            bail!(
+                "cannot bin by '{}', currently only numbers are supported",
+                get_value_kind(by_val)
+            );
+        };
+
+        let Some(a) = self_num.as_f64() else {
+            bail!("cannot bin NaN");
+        };
+        let Some(b) = by_num.as_f64() else {
+            bail!("cannot bin by NaN");
+        };
+
+        Ok(Some(Value::Number(
+            Number::from_f64((a / b).floor() * b).unwrap(),
+        )))
     }
 }
 

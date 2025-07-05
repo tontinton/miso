@@ -1,13 +1,10 @@
-use std::{
-    cmp::Ordering,
-    collections::{BTreeMap, BTreeSet},
-    fmt, iter,
-    mem::Discriminant,
-};
+use std::{borrow::Cow, cmp::Ordering, collections::BTreeMap, fmt, iter, mem::Discriminant};
 
-use color_eyre::eyre::eyre;
+use color_eyre::{eyre::eyre, Result};
+use hashbrown::HashMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use tracing::warn;
 
 use crate::{
     log::{Log, LogItem, LogIter},
@@ -15,9 +12,48 @@ use crate::{
 };
 
 use super::{
-    partial_stream::PartialLogIter, serde_json_utils::partial_cmp_values,
-    sortable_value::SortableValue,
+    interpreter::{ident, Val},
+    partial_stream::PartialLogIter,
+    serde_json_utils::partial_cmp_values,
 };
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum GroupAst {
+    Id(String),
+    Bin(String, serde_json::Value),
+}
+
+impl GroupAst {
+    #[must_use]
+    pub fn field(&self) -> &str {
+        match self {
+            GroupAst::Id(field) | GroupAst::Bin(field, _) => field,
+        }
+    }
+}
+
+impl fmt::Display for GroupAst {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            GroupAst::Id(name) => write!(f, "{name}"),
+            GroupAst::Bin(name, by) => write!(f, "bin({name}, {by})"),
+        }
+    }
+}
+
+struct AggGroupInterpreter<'a> {
+    log: &'a Log,
+}
+
+impl<'a> AggGroupInterpreter<'a> {
+    fn eval(&self, ast: &'a GroupAst) -> Result<Val<'a>> {
+        Ok(match ast {
+            GroupAst::Id(name) => ident(self.log, name)?,
+            GroupAst::Bin(name, by) => ident(self.log, name)?.bin(&Val::borrowed(by))?.into(),
+        })
+    }
+}
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "snake_case")]
@@ -41,14 +77,6 @@ impl fmt::Display for Aggregation {
 
 impl Aggregation {
     #[must_use]
-    fn field(&self) -> Option<String> {
-        match self {
-            Self::Count => None,
-            Self::Sum(field) | Self::Min(field) | Self::Max(field) => Some(field.clone()),
-        }
-    }
-
-    #[must_use]
     pub fn convert_to_mux(self, field: String) -> Self {
         match self {
             Self::Count => Self::Sum(field),
@@ -62,7 +90,7 @@ impl Aggregation {
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct Summarize {
     pub aggs: BTreeMap<String, Aggregation>,
-    pub by: Vec<String>,
+    pub by: Vec<GroupAst>,
 }
 
 impl fmt::Display for Summarize {
@@ -267,15 +295,14 @@ impl PartialLogIter for SummarizeAllIter {
     }
 }
 
-type GroupAggregates = BTreeMap<Vec<SortableValue>, Vec<Box<dyn Aggregate>>>;
+type GroupAggregates = HashMap<Vec<Value>, Vec<Box<dyn Aggregate>>>;
 
 /// Executes summarize with some aggregations.
 pub struct SummarizeGroupByIter {
     input: LogIter,
-    group_by: Vec<String>,
+    group_by: Vec<GroupAst>,
     output_fields: Vec<String>,
     aggregations: Vec<Aggregation>,
-    get_value_fn: fn(&mut Log, &String) -> Value,
     tracked_types: Vec<Option<Discriminant<Value>>>,
 
     // All of HashMap, HashSet, BTreeMap and BtreeSet rely on either the hash or the order of keys
@@ -291,29 +318,16 @@ pub struct SummarizeGroupByIter {
 impl SummarizeGroupByIter {
     fn new(
         input: LogIter,
-        group_by: Vec<String>,
+        group_by: Vec<GroupAst>,
         output_fields: Vec<String>,
         aggregations: Vec<Aggregation>,
     ) -> Self {
-        let agg_fields: BTreeSet<String> =
-            aggregations.iter().flat_map(Aggregation::field).collect();
-
-        let get_value_fn = if group_by.iter().any(|x| agg_fields.contains(x)) {
-            |log: &mut Log, key: &String| log.get(key).cloned().unwrap_or(Value::Null)
-        } else {
-            // Optimization: remove item from map instead of cloning when no aggregation references
-            // a field that is grouped by.
-            |log: &mut Log, key: &String| log.remove(key).unwrap_or(Value::Null)
-        };
-
         let tracked_types = vec![None; group_by.len()];
-
         Self {
             input,
             group_by,
             output_fields,
             aggregations,
-            get_value_fn,
             tracked_types,
             group_aggregates: GroupAggregates::new(),
             output: Box::new(iter::empty()),
@@ -329,15 +343,11 @@ impl PartialLogIter for SummarizeGroupByIter {
         for (group_keys, aggregates) in &self.group_aggregates {
             let mut log = Log::new();
 
-            for (key, value) in self.group_by.clone().into_iter().zip(group_keys) {
-                log.insert(key, value.0.clone());
+            for (ast, value) in self.group_by.iter().zip(group_keys.clone()) {
+                log.insert(ast.field().to_string(), value);
             }
 
-            for (output_field, aggregate) in self
-                .output_fields
-                .clone()
-                .into_iter()
-                .zip(aggregates.iter())
+            for (output_field, aggregate) in self.output_fields.clone().into_iter().zip(aggregates)
             {
                 log.insert(output_field, aggregate.value());
             }
@@ -353,22 +363,31 @@ impl Iterator for SummarizeGroupByIter {
     type Item = LogItem;
 
     fn next(&mut self) -> Option<Self::Item> {
-        while let Some(mut log) = try_next!(self.input) {
+        'next_log: while let Some(log) = try_next!(self.input) {
+            let interpreter = AggGroupInterpreter { log: &log };
             let mut group_keys = Vec::with_capacity(self.group_by.len());
 
-            for (tracked_type, key) in self.tracked_types.iter_mut().zip(&self.group_by) {
-                let value = (self.get_value_fn)(&mut log, key);
-                if value == Value::Null {
-                    group_keys.push(SortableValue(value));
-                    continue;
+            for (tracked_type, ast) in self.tracked_types.iter_mut().zip(&self.group_by) {
+                let value_cow = match interpreter.eval(ast) {
+                    Ok(Val(None)) => Cow::Owned(Value::Null),
+                    Ok(v) => v.0.unwrap(),
+                    Err(e) => {
+                        warn!("Aggregation group by evaluation failed: {e}");
+                        Cow::Owned(Value::Null)
+                    }
+                };
+
+                if value_cow.as_ref() == &Value::Null {
+                    continue 'next_log;
                 }
+                let value = value_cow.into_owned();
 
                 let value_type = std::mem::discriminant(&value);
                 if let Some(t) = tracked_type {
                     if *t != value_type {
                         return Some(LogItem::Err(eyre!(
                             "cannot summarize over differing types (key '{}'): {:?} != {:?}",
-                            key,
+                            ast,
                             *t,
                             value_type
                         )));
@@ -377,7 +396,7 @@ impl Iterator for SummarizeGroupByIter {
                     *tracked_type = Some(value_type);
                 }
 
-                group_keys.push(SortableValue(value));
+                group_keys.push(value);
             }
 
             let entry = self.group_aggregates.entry(group_keys).or_insert_with(|| {

@@ -25,7 +25,7 @@ curl -N -H 'Content-Type: application/json' localhost:8080/query -d '{
           "max_tenant": {"max": "tenant_id"},
           "count": "count"
         },
-        "by": ["timestamp", "severity_text"]
+        "by": [{"id": "timestamp"}, {"id": "severity_text"}]
       }
     },
     {

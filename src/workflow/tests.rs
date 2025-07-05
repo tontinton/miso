@@ -853,7 +853,7 @@ async fn summarize() -> Result<()> {
                         "sum_x": {"sum": "x"},
                         "c": "count"
                     },
-                    "by": ["y"]
+                    "by": [{"id": "y"}]
                 }
             }
         ]"#,
@@ -1142,7 +1142,7 @@ async fn union_summarize() -> Result<()> {
                             "sum_x": {"sum": "x"},
                             "c": "count"
                         },
-                        "by": ["y"]
+                        "by": [{"id": "y"}]
                     }
                 }
             ]"#,

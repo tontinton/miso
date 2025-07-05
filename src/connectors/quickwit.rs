@@ -27,7 +27,7 @@ use crate::{
     workflow::{
         filter::FilterAst,
         sort::Sort,
-        summarize::{Aggregation, Summarize},
+        summarize::{Aggregation, GroupAst, Summarize},
         Workflow, WorkflowStep,
     },
 };
@@ -1087,6 +1087,11 @@ impl Connector for QuickwitConnector {
             return None;
         }
 
+        if !config.by.iter().all(|x| matches!(x, GroupAst::Id(..))) {
+            // Only regular group by is currently supported, need to implement bin using histogram.
+            return None;
+        }
+
         let mut count_fields = Vec::new();
         let mut inner_aggs = BTreeMap::new();
 
@@ -1126,12 +1131,12 @@ impl Connector for QuickwitConnector {
         let mut aggs = json!({});
 
         let mut current_agg = &mut aggs;
-        for (i, field) in config.by.iter().enumerate() {
+        for (i, ast) in config.by.iter().enumerate() {
             let name = format!("{AGGREGATION_RESULTS_NAME}_{i}");
             let nested_agg = json!({
                     &name: {
                         "terms": {
-                            "field": field,
+                            "field": ast.field(),
                             "size": MAX_NUM_GROUPS,
                         }
                     }
@@ -1144,9 +1149,14 @@ impl Connector for QuickwitConnector {
             current_agg["aggs"] = json!(inner_aggs);
         }
 
+        let group_by = config
+            .by
+            .iter()
+            .map(|ast| ast.field().to_string())
+            .collect();
         Some(Box::new(handle.with_summarize(
             aggs,
-            config.by.clone(),
+            group_by,
             count_fields,
         )))
     }
