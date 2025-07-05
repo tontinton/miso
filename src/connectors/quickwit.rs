@@ -1037,6 +1037,8 @@ impl Connector for QuickwitConnector {
 
         if !handle.group_by.is_empty() {
             // Maybe this can actually be implemented, need to check in the future.
+            // https://quickwit.io/docs/reference/aggregation#order,
+            // https://quickwit.io/docs/reference/aggregation#size.
             return None;
         }
 
