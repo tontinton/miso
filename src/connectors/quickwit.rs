@@ -382,6 +382,9 @@ fn filter_ast_to_query(ast: &FilterAst) -> Option<Value> {
             })
         }
         FilterAst::Exists(field) => {
+            if field.find('[').is_some() {
+                return None;
+            }
             json!({
                 "exists": {
                     "field": field,
@@ -392,6 +395,9 @@ fn filter_ast_to_query(ast: &FilterAst) -> Option<Value> {
             let FilterAst::Id(field) = &**lhs else {
                 return None;
             };
+            if field.find('[').is_some() {
+                return None;
+            }
 
             let values = rhs
                 .iter()
@@ -412,6 +418,9 @@ fn filter_ast_to_query(ast: &FilterAst) -> Option<Value> {
             let (FilterAst::Id(field), FilterAst::Lit(prefix)) = (&**lhs, &**rhs) else {
                 return None;
             };
+            if field.find('[').is_some() {
+                return None;
+            }
             json!({
                 "match_phrase_prefix": {
                     field: {
@@ -428,6 +437,9 @@ fn filter_ast_to_query(ast: &FilterAst) -> Option<Value> {
             let (FilterAst::Id(field), FilterAst::Lit(value)) = (&**lhs, &**rhs) else {
                 return None;
             };
+            if field.find('[').is_some() {
+                return None;
+            }
             json!({
                 "term": {
                     field: {
@@ -444,6 +456,9 @@ fn filter_ast_to_query(ast: &FilterAst) -> Option<Value> {
             let (FilterAst::Id(field), FilterAst::Lit(value)) = (&**lhs, &**rhs) else {
                 return None;
             };
+            if field.find('[').is_some() {
+                return None;
+            }
             json!({
                 "bool": {
                     "must_not": {
@@ -462,6 +477,9 @@ fn filter_ast_to_query(ast: &FilterAst) -> Option<Value> {
             let (FilterAst::Id(field), FilterAst::Lit(value)) = (&**lhs, &**rhs) else {
                 return None;
             };
+            if field.find('[').is_some() {
+                return None;
+            }
             json!({
                 "range": {
                     field: {
@@ -478,6 +496,9 @@ fn filter_ast_to_query(ast: &FilterAst) -> Option<Value> {
             let (FilterAst::Id(field), FilterAst::Lit(value)) = (&**lhs, &**rhs) else {
                 return None;
             };
+            if field.find('[').is_some() {
+                return None;
+            }
             json!({
                 "range": {
                     field: {
@@ -494,6 +515,9 @@ fn filter_ast_to_query(ast: &FilterAst) -> Option<Value> {
             let (FilterAst::Id(field), FilterAst::Lit(value)) = (&**lhs, &**rhs) else {
                 return None;
             };
+            if field.find('[').is_some() {
+                return None;
+            }
             json!({
                 "range": {
                     field: {
@@ -510,6 +534,9 @@ fn filter_ast_to_query(ast: &FilterAst) -> Option<Value> {
             let (FilterAst::Id(field), FilterAst::Lit(value)) = (&**lhs, &**rhs) else {
                 return None;
             };
+            if field.find('[').is_some() {
+                return None;
+            }
             json!({
                 "range": {
                     field: {
