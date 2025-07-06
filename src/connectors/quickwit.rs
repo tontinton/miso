@@ -1120,6 +1120,9 @@ impl Connector for QuickwitConnector {
                     count_fields.push(output_field.clone());
                     continue;
                 }
+
+                // Currently unsupported.
+                Aggregation::DCount(..) => return None,
             };
 
             inner_aggs.insert(output_field, value);

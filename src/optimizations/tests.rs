@@ -206,13 +206,26 @@ fn summarize_into_union() {
         aggs: btreemap! {
             "c".to_string() => Aggregation::Count,
             "s".to_string() => Aggregation::Sum("y".to_string()),
+            "d".to_string() => Aggregation::DCount("x".to_string()),
+            "dd".to_string() => Aggregation::DCount("z".to_string()),
         },
         by: vec![GroupAst::Id("x".to_string())],
     });
+
+    let partial = S::Summarize(Summarize {
+        aggs: btreemap! {
+            "c".to_string() => Aggregation::Count,
+            "s".to_string() => Aggregation::Sum("y".to_string()),
+        },
+        by: vec![GroupAst::Id("x".to_string()), GroupAst::Id("z".to_string())],
+    });
+
     let post = S::MuxSummarize(Summarize {
         aggs: btreemap! {
             "c".to_string() => Aggregation::Sum("c".to_string()),
             "s".to_string() => Aggregation::Sum("s".to_string()),
+            "d".to_string() => Aggregation::DCount("x".to_string()),
+            "dd".to_string() => Aggregation::DCount("z".to_string()),
         },
         by: vec![GroupAst::Id("x".to_string())],
     });
@@ -220,8 +233,8 @@ fn summarize_into_union() {
     check_default(
         vec![S::Union(Workflow::new(vec![])), original.clone()],
         vec![
-            original.clone(),
-            S::Union(Workflow::new(vec![original.clone()])),
+            partial.clone(),
+            S::Union(Workflow::new(vec![partial])),
             post,
         ],
     );

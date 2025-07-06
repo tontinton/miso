@@ -1,7 +1,7 @@
 use std::{borrow::Cow, cmp::Ordering, collections::BTreeMap, fmt, iter, mem::Discriminant};
 
 use color_eyre::{eyre::eyre, Result};
-use hashbrown::HashMap;
+use hashbrown::{HashMap, HashSet};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tracing::warn;
@@ -59,6 +59,8 @@ impl<'a> AggGroupInterpreter<'a> {
 #[serde(rename_all = "snake_case")]
 pub enum Aggregation {
     Count,
+    #[serde(rename = "dcount")]
+    DCount(/*field=*/ String),
     Sum(/*field=*/ String),
     Min(/*field=*/ String),
     Max(/*field=*/ String),
@@ -68,6 +70,7 @@ impl fmt::Display for Aggregation {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Aggregation::Count => write!(f, "Count"),
+            Aggregation::DCount(x) => write!(f, "DCount({x})"),
             Aggregation::Sum(x) => write!(f, "Sum({x})"),
             Aggregation::Min(x) => write!(f, "Min({x})"),
             Aggregation::Max(x) => write!(f, "Max({x})"),
@@ -77,12 +80,13 @@ impl fmt::Display for Aggregation {
 
 impl Aggregation {
     #[must_use]
-    pub fn convert_to_mux(self, field: String) -> Self {
+    pub fn convert_to_mux(self, field: &str) -> Self {
         match self {
-            Self::Count => Self::Sum(field),
-            Self::Sum(..) => Self::Sum(field),
-            Self::Min(..) => Self::Min(field),
-            Self::Max(..) => Self::Max(field),
+            Aggregation::Count => Aggregation::Sum(field.to_string()),
+            Aggregation::Sum(..) => Aggregation::Sum(field.to_string()),
+            Aggregation::Min(..) => Aggregation::Min(field.to_string()),
+            Aggregation::Max(..) => Aggregation::Max(field.to_string()),
+            Aggregation::DCount(field) => Aggregation::DCount(field),
         }
     }
 }
@@ -114,10 +118,32 @@ impl fmt::Display for Summarize {
 }
 
 impl Summarize {
+    pub fn convert_to_partial(mut self) -> Self {
+        let mut aggs = BTreeMap::new();
+        for (field, agg) in self.aggs {
+            match agg {
+                Aggregation::Count
+                | Aggregation::Sum(..)
+                | Aggregation::Min(..)
+                | Aggregation::Max(..) => {
+                    aggs.insert(field, agg);
+                }
+                Aggregation::DCount(field) => {
+                    let new_by = GroupAst::Id(field);
+                    if !self.by.contains(&new_by) {
+                        self.by.push(new_by);
+                    }
+                }
+            }
+        }
+        Self { aggs, by: self.by }
+    }
+
     pub fn convert_to_mux(self) -> Self {
         let mut aggs = BTreeMap::new();
         for (field, agg) in self.aggs {
-            aggs.insert(field.clone(), agg.convert_to_mux(field));
+            let mux = agg.convert_to_mux(&field);
+            aggs.insert(field, mux);
         }
         Self { aggs, by: self.by }
     }
@@ -140,6 +166,33 @@ impl Aggregate for Count {
 
     fn value(&self) -> Value {
         Value::from(self.0)
+    }
+}
+
+struct DCount {
+    field: String,
+    seen: HashSet<Value>,
+}
+
+impl DCount {
+    fn new(field: String) -> Self {
+        Self {
+            field,
+            seen: HashSet::new(),
+        }
+    }
+}
+
+impl Aggregate for DCount {
+    fn input(&mut self, log: &Log) {
+        let Some(value) = log.get(&self.field) else {
+            return;
+        };
+        self.seen.insert(value.clone());
+    }
+
+    fn value(&self) -> Value {
+        Value::from(self.seen.len())
     }
 }
 
@@ -232,6 +285,7 @@ impl Aggregate for MinMax {
 fn create_aggregate(aggregation: Aggregation) -> Box<dyn Aggregate> {
     match aggregation {
         Aggregation::Count => Box::new(Count::default()),
+        Aggregation::DCount(field) => Box::new(DCount::new(field)),
         Aggregation::Sum(field) => Box::new(Sum::new(field)),
         Aggregation::Min(field) => Box::new(MinMax::new_min(field)),
         Aggregation::Max(field) => Box::new(MinMax::new_max(field)),

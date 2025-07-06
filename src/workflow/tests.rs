@@ -851,14 +851,18 @@ async fn summarize() -> Result<()> {
                         "max_x": {"max": "x"},
                         "min_x": {"min": "x"},
                         "sum_x": {"sum": "x"},
+                        "dcount_z": {"dcount": "z"},
                         "c": "count"
                     },
                     "by": [{"id": "y"}]
                 }
             }
         ]"#,
-        r#"[{"x": 3, "y": 3}, {"x": 5, "y": 6}, {"x": 1, "y": 3}, {"x": 9, "y": 6}]"#,
-        r#"[{"max_x": 3, "min_x": 1, "sum_x": 4.0, "c": 2, "y": 3}, {"max_x": 9, "min_x": 5, "sum_x": 14.0, "c": 2, "y": 6}]"#,
+        r#"[{"x": 3, "y": 3, "z": 2}, {"x": 5, "y": 6, "z": 1}, {"x": 1, "y": 3, "z": 2}, {"x": 9, "y": 6, "z": 3}]"#,
+        r#"[
+            {"max_x": 3, "min_x": 1, "sum_x": 4.0, "dcount_z": 1, "c": 2, "y": 3},
+            {"max_x": 9, "min_x": 5, "sum_x": 14.0, "dcount_z": 2, "c": 2, "y": 6}
+        ]"#,
     )
     .await
 }
@@ -874,6 +878,7 @@ async fn summarize_bin() -> Result<()> {
                         "max_x": {"max": "x"},
                         "min_x": {"min": "x"},
                         "sum_x": {"sum": "x"},
+                        "dcount_x": {"dcount": "x"},
                         "c": "count"
                     },
                     "by": [{"bin": ["y", 2]}]
@@ -881,7 +886,10 @@ async fn summarize_bin() -> Result<()> {
             }
         ]"#,
         r#"[{"x": 3, "y": 0}, {"x": 5, "y": 1}, {"x": 1, "y": 4}, {"x": 9, "y": 5}, {"x": 5}]"#,
-        r#"[{"max_x": 5, "min_x": 3, "sum_x": 8.0, "c": 2, "y": 0.0}, {"max_x": 9, "min_x": 1, "sum_x": 10.0, "c": 2, "y": 4.0}]"#,
+        r#"[
+            {"max_x": 5, "min_x": 3, "sum_x": 8.0, "dcount_x": 2, "c": 2, "y": 0.0},
+            {"max_x": 9, "min_x": 1, "sum_x": 10.0, "dcount_x": 2, "c": 2, "y": 4.0}
+        ]"#,
     )
     .await
 }

@@ -16,25 +16,31 @@ impl Optimization for MuxIntoUnion {
     fn apply(&self, steps: &[WorkflowStep], _groups: &[Group]) -> Option<Vec<WorkflowStep>> {
         let orig_step = &steps[steps.len() - 1];
 
-        let mux_step = match orig_step.clone() {
-            WorkflowStep::Limit(limit) => WorkflowStep::MuxLimit(limit),
-            WorkflowStep::TopN(sort, limit) => WorkflowStep::MuxTopN(sort, limit),
-            WorkflowStep::Count => WorkflowStep::MuxCount,
-            WorkflowStep::Summarize(summarize) => {
-                WorkflowStep::MuxSummarize(summarize.convert_to_mux())
+        let (partial_step, mux_step) = match orig_step {
+            WorkflowStep::Limit(limit) => {
+                (WorkflowStep::Limit(*limit), WorkflowStep::MuxLimit(*limit))
             }
+            WorkflowStep::TopN(sort, limit) => (
+                WorkflowStep::TopN(sort.clone(), *limit),
+                WorkflowStep::MuxTopN(sort.clone(), *limit),
+            ),
+            WorkflowStep::Count => (WorkflowStep::Count, WorkflowStep::MuxCount),
+            WorkflowStep::Summarize(summarize) => (
+                WorkflowStep::Summarize(summarize.clone().convert_to_partial()),
+                WorkflowStep::MuxSummarize(summarize.clone().convert_to_mux()),
+            ),
 
             _ => return None,
         };
 
         let mut new_steps = Vec::with_capacity(1 + steps.len());
-        new_steps.push(orig_step.clone());
+        new_steps.push(partial_step.clone());
         new_steps.extend(steps[..steps.len() - 1].to_vec());
         new_steps.push(mux_step);
 
         for step in &mut new_steps[1..steps.len()] {
             if let WorkflowStep::Union(ref mut workflow) = step {
-                workflow.steps.push(orig_step.clone());
+                workflow.steps.push(partial_step.clone());
             }
         }
 
