@@ -308,18 +308,38 @@ impl<'a> Val<'a> {
     }
 }
 
+fn follow_key<'a>(obj: &'a Log, key: &str) -> Result<Option<&'a Value>> {
+    let Some(arr_start) = key.find('[') else {
+        return Ok(obj.get(key));
+    };
+
+    if !key.ends_with(']') {
+        bail!("invalid array indexing syntax (doesn't end with ']'): {key}");
+    }
+
+    let idx_str = &key[arr_start + 1..key.len() - 1];
+    let idx: usize = idx_str
+        .parse()
+        .map_err(|_| eyre!("invalid array indexing syntax (index not positive number): {key}"))?;
+
+    let key_name = &key[..arr_start];
+    Ok(obj
+        .get(key_name)
+        .and_then(|v| v.as_array())
+        .and_then(|arr| arr.get(idx)))
+}
+
 pub fn ident<'a>(log: &'a Log, name: &str) -> Result<Val<'a>> {
     let split: Vec<_> = name.split('.').collect();
 
     let mut obj = log;
     for key in &split[..split.len() - 1] {
-        obj = match obj.get(*key) {
-            Some(Value::Object(v)) => v,
+        obj = match follow_key(obj, key)? {
+            Some(Value::Object(map)) => map,
             _ => return Ok(Val::not_exist()),
         };
     }
 
-    Ok(obj
-        .get(split[split.len() - 1])
-        .map_or_else(Val::not_exist, Val::borrowed))
+    let last = split.last().unwrap();
+    Ok(follow_key(obj, last)?.map_or_else(Val::not_exist, Val::borrowed))
 }

@@ -735,6 +735,23 @@ async fn project_add() -> Result<()> {
 }
 
 #[tokio::test]
+async fn project_array() -> Result<()> {
+    check(
+        r#"[
+            {"scan": ["test", "c"]},
+            {"project": [{"to": "world", "from": {"id": "world[0].x[1]"}}]}
+        ]"#,
+        r#"[
+            {"world": [{"x": [1, 2]}]},
+            {"world": [{"x": [5, 6]}]},
+            {"hello": ["world"]}
+        ]"#,
+        r#"[{"world": 2}, {"world": 6}, {}]"#,
+    )
+    .await
+}
+
+#[tokio::test]
 async fn extend_add() -> Result<()> {
     check(
         r#"[
