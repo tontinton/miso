@@ -1,7 +1,8 @@
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
-use miso::{
+use miso_workflow::join::join_iter;
+use miso_workflow_types::{
+    join::{Join, JoinType},
     log::Log,
-    workflow::join::{join_iter, Join, JoinType},
 };
 use serde_json::Value;
 

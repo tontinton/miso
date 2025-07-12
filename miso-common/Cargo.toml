@@ -1,0 +1,13 @@
+[package]
+name = "miso-common"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+humantime.workspace = true
+once_cell.workspace = true
+parking_lot.workspace = true
+prometheus.workspace = true
+serde.workspace = true
+tokio.workspace = true
+tracing.workspace = true

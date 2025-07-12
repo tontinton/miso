@@ -3,25 +3,28 @@ name = "miso"
 version = "0.1.0"
 edition = "2021"
 
-[lib]
-doctest = false
+[workspace]
+resolver = "3"
+members = [
+    "miso-common",
+    "miso-connectors",
+    "miso-optimizations",
+    "miso-server",
+    "miso-workflow",
+    "miso-workflow-types",
+]
 
-[profile.release]
-strip = "none"
-lto = true
-panic = "abort"
-
-[profile.release-thin-lto]
-inherits = "release"
-lto = "thin"
-
-[dependencies]
+[workspace.dependencies]
 async-recursion = "1.1.1"
 async-stream = "0.3.6"
 axum = { version = "0.7.7", features = ["macros"] }
+bon = "3.6.3"
 bytes = "1.10.1"
 clap = { version = "4.5.20", features = ["derive"] }
+collection_macros = "0.2.0"
 color-eyre = { version = "0.6.3", default-features = false }
+criterion = { version = "0.5.1", features = ["async_tokio"] }
+ctor = "0.2.9"
 flume = "0.11.1"
 futures-util = "0.3.31"
 hashbrown = "0.15.3"
@@ -29,6 +32,12 @@ humantime = "2.1.0"
 kinded = "0.3.0"
 memchr = "2.7.5"
 mimalloc = "0.1.46"
+miso-common = { path = "miso-common" }
+miso-connectors = { path = "miso-connectors" }
+miso-optimizations = { path = "miso-optimizations" }
+miso-server = { path = "miso-server" }
+miso-workflow = { path = "miso-workflow" }
+miso-workflow-types = { path = "miso-workflow-types" }
 once_cell = "1.21.3"
 parking_lot = "0.12.3"
 prometheus = "0.14.0"
@@ -39,24 +48,60 @@ scopeguard = "1.2.0"
 serde = { version = "1.0.210", features = ["derive"] }
 serde_json = "1.0.132"
 simd-json = "0.15.1"
+test-case = "3.3.1"
+testcontainers = { version = "0.23.3", features = ["blocking"] }
 thiserror = "2.0.12"
 tokio = { version = "1.40.0", features = ["full"] }
+tokio-retry = "0.3.0"
+tokio-test = "0.4.4"
 tokio-util = "0.7.15"
 tracing = "0.1.40"
 tracing-subscriber = "0.3.18"
 typetag = "0.2.18"
 uuid = { version = "1.11.0", features = ["v7", "serde"] }
 
+[lib]
+doctest = false
+
+[dependencies]
+axum.workspace = true
+clap.workspace = true
+color-eyre.workspace = true
+mimalloc.workspace = true
+miso-server.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
 [dev-dependencies]
-bon = "3.6.3"
-collection_macros = "0.2.0"
-criterion = { version = "0.5.1", features = ["async_tokio"] }
-ctor = "0.2.9"
-test-case = "3.3.1"
-testcontainers = { version = "0.23.3", features = ["blocking"] }
-tokio-retry = "0.3.0"
-tokio-test = "0.4.4"
+collection_macros.workspace = true
+criterion.workspace = true
+flume.workspace = true
+futures-util.workspace = true
+miso-connectors.workspace = true
+miso-optimizations.workspace = true
+miso-server.workspace = true
+miso-workflow.workspace = true
+miso-workflow-types.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+test-case.workspace = true
+testcontainers.workspace = true
+tokio-retry.workspace = true
+tokio-test.workspace = true
+tokio-util.workspace = true
+
+[profile.release]
+strip = "none"
+lto = true
+panic = "abort"
+
+[profile.release-thin-lto]
+inherits = "release"
+lto = "thin"
 
 [[bench]]
 name = "join"
 harness = false
+
