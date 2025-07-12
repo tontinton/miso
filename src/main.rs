@@ -1,9 +1,10 @@
 use color_eyre::eyre::{Context, Result};
 use mimalloc::MiMalloc;
+use miso_server::http_server::{create_axum_app, OptimizationConfig};
 use tokio::{net::TcpListener, signal};
 use tracing::{debug, info};
 
-use miso::{args::parse_args, http_server::create_axum_app};
+use miso::args::parse_args;
 
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
@@ -45,7 +46,15 @@ async fn main() -> Result<()> {
     let args = parse_args();
     debug!(?args, "Init");
 
-    let app = create_axum_app(&args)?;
+    let config = if args.no_optimizations {
+        OptimizationConfig::NoOptimizations
+    } else {
+        OptimizationConfig::WithOptimizations {
+            dynamic_filter_max_distinct_values: args.dynamic_filter_max_distinct_values,
+        }
+    };
+
+    let app = create_axum_app(config)?;
     let listener = TcpListener::bind(&args.listen).await?;
 
     info!("Listening on {}", args.listen);

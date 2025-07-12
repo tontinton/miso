@@ -1,0 +1,16 @@
+[package]
+name = "miso-optimizations"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+flume.workspace = true
+miso-common.workspace = true
+miso-workflow.workspace = true
+miso-workflow-types.workspace = true
+scopeguard.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+collection_macros.workspace = true

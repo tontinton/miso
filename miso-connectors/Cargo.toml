@@ -1,0 +1,23 @@
+[package]
+name = "miso-connectors"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+async-stream.workspace = true
+axum.workspace = true
+bytes.workspace = true
+color-eyre.workspace = true
+futures-util.workspace = true
+humantime.workspace = true
+miso-common.workspace = true
+miso-workflow-types.workspace = true
+parking_lot.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+simd-json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+typetag.workspace = true

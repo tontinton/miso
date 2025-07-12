@@ -51,7 +51,7 @@ jobs:
           tool: cargo-nextest
 
       - name: Tests
-        run: cargo nextest run
+        run: cargo nextest run --workspace
 
   lint:
     name: rustfmt + clippy
