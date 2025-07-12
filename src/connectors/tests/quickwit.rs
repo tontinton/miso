@@ -495,6 +495,15 @@ async fn predicate_pushdown_same_results(
 #[test_case(
     r#"[
         {"scan": ["test", "stack"]},
+        {"distinct": ["user"]}
+    ]"#,
+    r#"[{"scan": ["test", "stack"]}]"#,
+    5;
+    "distinct"
+)]
+#[test_case(
+    r#"[
+        {"scan": ["test", "stack"]},
         {
           "summarize": {
             "aggs": {"minQuestionId": {"min": "questionId"}},
