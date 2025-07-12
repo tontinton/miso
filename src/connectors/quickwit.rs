@@ -429,6 +429,23 @@ fn filter_ast_to_query(ast: &FilterAst) -> Option<Value> {
                 }
             })
         }
+        FilterAst::HasCs(lhs, rhs) => {
+            let (FilterAst::Id(field), FilterAst::Lit(phrase)) = (&**lhs, &**rhs) else {
+                return None;
+            };
+            if field.find('[').is_some() {
+                return None;
+            }
+            json!({
+                "match_phrase": {
+                    field: if let Value::String(v) = phrase {
+                        v.clone()
+                    } else {
+                        phrase.to_string()
+                    }
+                }
+            })
+        }
         FilterAst::Eq(lhs, rhs) => {
             let (FilterAst::Id(field), FilterAst::Lit(value)) = (&**lhs, &**rhs) else {
                 return None;

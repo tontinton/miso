@@ -95,6 +95,7 @@ async fn get_quickwit_connector_map(image: &QuickwitImage) -> Result<ConnectorsM
                     ..Default::default()
                 }],
                 timestamp_field: "creationDate".to_string(),
+                ..Default::default()
             },
         );
         create_index_futures.push(fut);
@@ -114,6 +115,7 @@ async fn get_quickwit_connector_map(image: &QuickwitImage) -> Result<ConnectorsM
                 ..Default::default()
             }],
             timestamp_field: "timestamp".to_string(),
+            ..Default::default()
         },
     ));
 
@@ -201,8 +203,36 @@ struct FieldMapping {
     input_formats: Vec<String>,
 }
 
+#[derive(Serialize)]
+struct DynamicMapping {
+    indexed: bool,
+    stored: bool,
+    tokenizer: String,
+    expand_dots: bool,
+    fast: bool,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    record: Option<String>,
+}
+
+impl Default for DynamicMapping {
+    fn default() -> Self {
+        Self {
+            indexed: true,
+            stored: true,
+            tokenizer: "default".to_string(),
+            expand_dots: true,
+            fast: true,
+            record: Some("position".to_string()),
+        }
+    }
+}
+
 #[derive(Serialize, Default)]
 struct DocMapping {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    mode: Option<String>,
+    dynamic_mapping: DynamicMapping,
     field_mappings: Vec<FieldMapping>,
     timestamp_field: String,
 }
@@ -413,6 +443,15 @@ async fn predicate_pushdown_same_results(
     r#"[{"scan": ["test", "stack"]}]"#,
     1;
     "filter_eq"
+)]
+#[test_case(
+    r#"[
+        {"scan": ["test", "stack"]},
+        {"filter": {"has_cs": [{"id": "body"}, {"lit": "VB.NET"}]}}
+    ]"#,
+    r#"[{"scan": ["test", "stack"]}]"#,
+    1;
+    "filter_has_cs"
 )]
 #[test_case(
     r#"[
