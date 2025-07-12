@@ -17,7 +17,8 @@ use thiserror::Error;
 use tokio::time::sleep;
 
 use crate::log::LogTryStream;
-use crate::workflow::{filter::FilterAst, sort::Sort, summarize::Summarize, Workflow};
+use crate::workflow::scan::Scan;
+use crate::workflow::{filter::FilterAst, sort::Sort, summarize::Summarize};
 
 const CLOSE_WHEN_LAST_OWNER_INTERVAL: Duration = Duration::from_millis(100);
 
@@ -188,7 +189,7 @@ pub trait Connector: Debug + Send + Sync {
     fn apply_union(
         &self,
         _scan_collection: &str,
-        _union: &Workflow,
+        _union_scan: &Scan,
         _handle: &dyn QueryHandle,
     ) -> Option<Box<dyn QueryHandle>> {
         None

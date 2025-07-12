@@ -26,9 +26,9 @@ use crate::{
     shutdown_future::ShutdownFuture,
     workflow::{
         filter::FilterAst,
+        scan::Scan,
         sort::Sort,
         summarize::{Aggregation, GroupAst, Summarize},
-        Workflow, WorkflowStep,
     },
 };
 
@@ -129,10 +129,6 @@ impl fmt::Display for QuickwitHandle {
 }
 
 impl QuickwitHandle {
-    fn is_empty(&self) -> bool {
-        self == &Self::default()
-    }
-
     fn with_filter(&self, query: Value) -> QuickwitHandle {
         let mut handle = self.clone();
         handle.queries.push(query);
@@ -1201,23 +1197,20 @@ impl Connector for QuickwitConnector {
     fn apply_union(
         &self,
         scan_collection: &str,
-        union: &Workflow,
+        union_scan: &Scan,
         handle: &dyn QueryHandle,
     ) -> Option<Box<dyn QueryHandle>> {
         let handle = downcast_unwrap!(handle, QuickwitHandle);
+        let union_handle = downcast_unwrap!(union_scan.handle.as_ref(), QuickwitHandle);
 
-        if !handle.is_empty() || union.steps.len() > 1 {
+        if handle != union_handle {
             // Quickwit only supports querying multiple indexes with the exact same query.
             return None;
         }
 
-        let WorkflowStep::Scan(scan) = &union.steps[0] else {
-            return None;
-        };
-
         let can_union = match (
             self.indexes.read().get(scan_collection),
-            self.indexes.read().get(&scan.collection),
+            self.indexes.read().get(&union_scan.collection),
         ) {
             (Some(l), Some(r)) => l.timestamp_field == r.timestamp_field,
             _ => false,
@@ -1228,7 +1221,7 @@ impl Connector for QuickwitConnector {
             return None;
         }
 
-        Some(Box::new(handle.with_union(&scan.collection)))
+        Some(Box::new(handle.with_union(&union_scan.collection)))
     }
 
     async fn close(&self) {

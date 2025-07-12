@@ -10,16 +10,22 @@ impl Optimization for PushUnionIntoScan {
     }
 
     fn apply(&self, steps: &[WorkflowStep], _groups: &[Group]) -> Option<Vec<WorkflowStep>> {
-        let WorkflowStep::Scan(mut scan) = steps[0].clone() else {
+        let WorkflowStep::Union(workflow) = &steps[1] else {
             return None;
         };
-        let WorkflowStep::Union(workflow) = &steps[1] else {
+        if workflow.steps.len() != 1 {
+            return None;
+        }
+        let WorkflowStep::Scan(union_scan) = workflow.steps[0].clone() else {
+            return None;
+        };
+        let WorkflowStep::Scan(mut scan) = steps[0].clone() else {
             return None;
         };
 
         scan.handle = scan
             .connector
-            .apply_union(&scan.collection, workflow, scan.handle.as_ref())?
+            .apply_union(&scan.collection, &union_scan, scan.handle.as_ref())?
             .into();
 
         Some(vec![WorkflowStep::Scan(scan)])
