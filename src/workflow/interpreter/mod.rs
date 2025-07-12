@@ -201,6 +201,10 @@ impl<'a> Val<'a> {
         impl_two_strs_fn!(self, other, string_ops::has, "has")
     }
 
+    pub fn has_cs(&self, other: &Val) -> Result<Option<bool>> {
+        impl_two_strs_fn!(self, other, string_ops::has_cs, "has_cs")
+    }
+
     pub fn add(&self, other: &Val) -> Result<Option<Value>> {
         let lhs = val!(self);
         let rhs = val!(other);

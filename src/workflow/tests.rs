@@ -668,15 +668,36 @@ async fn filter_has() -> Result<()> {
             {"hello": "there wor"},
             {"hello": "there.world"},
             {"world": 2},
-            {"hello": "abc-there world/def"},
+            {"hello": "abc-THeRE world/def"},
             {"hello": "there world end"},
-            {"hello": "start,there world"}
+            {"hello": "start,tHere world"}
         ]"#,
         r#"[
-            {"hello": "abc-there world/def"},
+            {"hello": "abc-THeRE world/def"},
             {"hello": "there world end"},
-            {"hello": "start,there world"}
+            {"hello": "start,tHere world"}
         ]"#,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn filter_has_cs() -> Result<()> {
+    check(
+        r#"[
+            {"scan": ["test", "c"]},
+            {"filter": {"has_cs": [{"id": "hello"}, {"lit": "there world"}]}}
+        ]"#,
+        r#"[
+            {"hello": "world"},
+            {"hello": "there wor"},
+            {"hello": "there.world"},
+            {"world": 2},
+            {"hello": "abc-THeRE world/def"},
+            {"hello": "there world end"},
+            {"hello": "start,tHere world"}
+        ]"#,
+        r#"[{"hello": "there world end"}]"#,
     )
     .await
 }

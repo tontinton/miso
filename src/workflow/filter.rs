@@ -26,6 +26,7 @@ pub enum FilterAst {
     StartsWith(Box<FilterAst>, Box<FilterAst>), // string - left.starts_with(right)
     EndsWith(Box<FilterAst>, Box<FilterAst>), // string - left.ends_with(right)
     Has(Box<FilterAst>, Box<FilterAst>),      // string - left.contains_phrase(right)
+    HasCs(Box<FilterAst>, Box<FilterAst>),    // string - left.contains_phrase_cs(right)
 
     #[serde(rename = "==")]
     Eq(Box<FilterAst>, Box<FilterAst>),
@@ -99,6 +100,7 @@ impl FilterInterpreter {
             }
             FilterAst::EndsWith(lhs, rhs) => self.eval(lhs)?.ends_with(&self.eval(rhs)?)?.into(),
             FilterAst::Has(lhs, rhs) => self.eval(lhs)?.has(&self.eval(rhs)?)?.into(),
+            FilterAst::HasCs(lhs, rhs) => self.eval(lhs)?.has_cs(&self.eval(rhs)?)?.into(),
             FilterAst::Eq(l, r) => self.eval(l)?.eq(&self.eval(r)?)?.into(),
             FilterAst::Ne(l, r) => self.eval(l)?.ne(&self.eval(r)?)?.into(),
             FilterAst::Gt(l, r) => self.eval(l)?.gt(&self.eval(r)?)?.into(),
