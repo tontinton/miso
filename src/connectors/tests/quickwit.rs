@@ -312,7 +312,7 @@ async fn predicate_pushdown_same_results(
     .expect("to expected workflow steps");
 
     let default_optimizer = Optimizer::default();
-    let no_pushdown_optimizer = Optimizer::no_predicate_pushdowns();
+    let no_pushdown_optimizer = Optimizer::empty();
 
     let steps_cloned = steps.clone();
     let predicate_pushdown_steps =

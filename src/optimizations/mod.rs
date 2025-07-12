@@ -93,18 +93,6 @@ impl Optimizer {
         }
     }
 
-    /// empty() would also suffice for tests, but using this will make the tests faster!
-    pub fn no_predicate_pushdowns() -> Self {
-        Self::new(vec![vec![
-            opt!(ReorderFilterBeforeSort),
-            opt!(MergeFiltersIntoAndFilter),
-            opt!(PushLimitIntoLimit),
-            opt!(ConvertSortLimitToTopN),
-            opt!(PushLimitIntoTopN),
-            opt!(RemoveRedundantSortsBeforeCount),
-        ]])
-    }
-
     pub fn with_dynamic_filtering(max_distinct_values: u32) -> Self {
         Self::new(vec![
             // Pre predicate pushdowns.
