@@ -225,7 +225,7 @@ impl<'a> Val<'a> {
     pub fn div(&self, other: &Val) -> Result<Option<Value>> {
         let rhs = val!(other);
         if let Value::Number(n) = rhs {
-            if n.as_i64() == Some(0) || n.as_f64() == Some(0.0) {
+            if n.as_f64() == Some(0.0) {
                 bail!("division by zero");
             }
         }
