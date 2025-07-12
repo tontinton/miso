@@ -230,7 +230,11 @@ impl Optimizer {
             ) {}
         }
 
-        // Don't forget to optimize union & join steps too!
+        self.optimize_sub_query_steps(steps)
+    }
+
+    /// Optimize the query steps inside union and join.
+    fn optimize_sub_query_steps(&self, steps: Vec<WorkflowStep>) -> Vec<WorkflowStep> {
         let mut optimized_inner_steps = Vec::with_capacity(steps.len());
         for step in steps {
             let optimized_inner_step = match step {
