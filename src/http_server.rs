@@ -32,8 +32,14 @@ use crate::{
     run_at_interval::run_at_interval,
     shutdown_future::ShutdownFuture,
     workflow::{
-        filter::FilterAst, join::Join, partial_stream::PartialStream, project::ProjectField,
-        scan::Scan, sort::Sort, summarize::Summarize, Workflow, WorkflowStep,
+        filter::FilterAst,
+        join::Join,
+        partial_stream::PartialStream,
+        project::ProjectField,
+        scan::Scan,
+        sort::Sort,
+        summarize::{GroupAst, Summarize},
+        Workflow, WorkflowStep,
     },
 };
 
@@ -175,6 +181,12 @@ pub(crate) async fn to_workflow_steps(
             QueryStep::Summarize(config) => {
                 steps.push(WorkflowStep::Summarize(config));
             }
+            QueryStep::Distinct(by) => {
+                steps.push(WorkflowStep::Summarize(Summarize {
+                    aggs: BTreeMap::new(),
+                    by: by.into_iter().map(GroupAst::Id).collect(),
+                }));
+            }
             QueryStep::Union(inner_steps) => {
                 steps.push(WorkflowStep::Union(Workflow::new(
                     to_workflow_steps(connectors, views, inner_steps).await?,
@@ -206,6 +218,7 @@ pub(crate) enum QueryStep {
     Sort(Vec<Sort>),
     Top(Vec<Sort>, u32),
     Summarize(Summarize),
+    Distinct(Vec<String>),
     Union(Vec<QueryStep>),
     Join(Join, Vec<QueryStep>),
     Count,
