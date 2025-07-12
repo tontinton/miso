@@ -657,6 +657,31 @@ async fn filter_ends_with() -> Result<()> {
 }
 
 #[tokio::test]
+async fn filter_has() -> Result<()> {
+    check(
+        r#"[
+            {"scan": ["test", "c"]},
+            {"filter": {"has": [{"id": "hello"}, {"lit": "there world"}]}}
+        ]"#,
+        r#"[
+            {"hello": "world"},
+            {"hello": "there wor"},
+            {"hello": "there.world"},
+            {"world": 2},
+            {"hello": "abc-there world/def"},
+            {"hello": "there world end"},
+            {"hello": "start,there world"}
+        ]"#,
+        r#"[
+            {"hello": "abc-there world/def"},
+            {"hello": "there world end"},
+            {"hello": "start,there world"}
+        ]"#,
+    )
+    .await
+}
+
+#[tokio::test]
 async fn filter_exists() -> Result<()> {
     check(
         r#"[

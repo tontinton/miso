@@ -1,3 +1,5 @@
+mod string_ops;
+
 use std::{borrow::Cow, cmp::Ordering};
 
 use color_eyre::eyre::{bail, eyre, OptionExt, Result};
@@ -193,6 +195,10 @@ impl<'a> Val<'a> {
 
     pub fn ends_with(&self, other: &Val) -> Result<Option<bool>> {
         impl_two_strs_fn!(self, other, |x: &str, y: &str| x.ends_with(y), "ends_with")
+    }
+
+    pub fn has(&self, other: &Val) -> Result<Option<bool>> {
+        impl_two_strs_fn!(self, other, string_ops::has, "has")
     }
 
     pub fn add(&self, other: &Val) -> Result<Option<Value>> {

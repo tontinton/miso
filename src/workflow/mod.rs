@@ -36,7 +36,7 @@ use self::{filter::FilterAst, project::ProjectField, sort::Sort};
 mod count;
 mod display;
 pub mod filter;
-mod interpreter;
+pub mod interpreter;
 pub mod join;
 pub mod limit;
 pub mod partial_stream;

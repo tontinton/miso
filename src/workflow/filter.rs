@@ -22,9 +22,10 @@ pub enum FilterAst {
 
     In(Box<FilterAst>, Vec<FilterAst>), // like python's in
 
-    Contains(Box<FilterAst>, Box<FilterAst>), // string - right in left
-    StartsWith(Box<FilterAst>, Box<FilterAst>), // string - left starts with right
-    EndsWith(Box<FilterAst>, Box<FilterAst>), // string - left ends with right
+    Contains(Box<FilterAst>, Box<FilterAst>), // string - left.contains(right)
+    StartsWith(Box<FilterAst>, Box<FilterAst>), // string - left.starts_with(right)
+    EndsWith(Box<FilterAst>, Box<FilterAst>), // string - left.ends_with(right)
+    Has(Box<FilterAst>, Box<FilterAst>),      // string - left.contains_phrase(right)
 
     #[serde(rename = "==")]
     Eq(Box<FilterAst>, Box<FilterAst>),
@@ -97,6 +98,7 @@ impl FilterInterpreter {
                 self.eval(lhs)?.starts_with(&self.eval(rhs)?)?.into()
             }
             FilterAst::EndsWith(lhs, rhs) => self.eval(lhs)?.ends_with(&self.eval(rhs)?)?.into(),
+            FilterAst::Has(lhs, rhs) => self.eval(lhs)?.has(&self.eval(rhs)?)?.into(),
             FilterAst::Eq(l, r) => self.eval(l)?.eq(&self.eval(r)?)?.into(),
             FilterAst::Ne(l, r) => self.eval(l)?.ne(&self.eval(r)?)?.into(),
             FilterAst::Gt(l, r) => self.eval(l)?.gt(&self.eval(r)?)?.into(),
