@@ -30,10 +30,10 @@ impl Iterator for LimitIter {
         }
 
         while let Some(item) = try_next_with_partial_stream!(self.input) {
-            let log_to_stream = match item {
+            let log_item_to_stream = match item {
                 PartialStreamItem::Log(log) => {
                     self.streamed += 1;
-                    Some(log)
+                    Some(LogItem::Log(log))
                 }
                 PartialStreamItem::PartialStreamLog(log, id) => {
                     let streamed = self.partial_limits.entry(id).or_insert(0);
@@ -41,17 +41,17 @@ impl Iterator for LimitIter {
                         None
                     } else {
                         *streamed += 1;
-                        Some(log)
+                        Some(LogItem::PartialStreamLog(log, id))
                     }
                 }
                 PartialStreamItem::PartialStreamDone(id) => {
                     self.partial_limits.remove(&id);
-                    None
+                    Some(LogItem::PartialStreamDone(id))
                 }
             };
 
-            if let Some(log) = log_to_stream {
-                return Some(LogItem::Log(log));
+            if let Some(log_item) = log_item_to_stream {
+                return Some(log_item);
             }
         }
 
