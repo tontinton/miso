@@ -85,6 +85,18 @@ impl fmt::Display for QuickwitHandle {
             items.push("count".to_string());
         }
 
+        if !self.collections.is_empty() {
+            let mut s = "unions=[".to_string();
+            for (i, collection) in self.collections.iter().enumerate() {
+                if i > 0 {
+                    s.push_str(", ");
+                }
+                s.push_str(collection);
+            }
+            s.push(']');
+            items.push(s);
+        }
+
         if !self.queries.is_empty() {
             let mut s = "filters=[".to_string();
             for (i, query) in self.queries.iter().enumerate() {
