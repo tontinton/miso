@@ -9,7 +9,7 @@ use miso_connectors::{
     stats::{ConnectorStats, FieldStats},
 };
 use miso_workflow_types::{
-    filter::FilterAst,
+    expr::Expr,
     log::{LogItem, LogTryStream},
 };
 use parking_lot::Mutex;
@@ -30,8 +30,8 @@ pub struct Scan {
     pub split: Option<Arc<dyn Split>>,
     pub stats: Arc<Mutex<ConnectorStats>>,
 
-    pub dynamic_filter_tx: Option<Watch<FilterAst>>,
-    pub dynamic_filter_rx: Option<Watch<FilterAst>>,
+    pub dynamic_filter_tx: Option<Watch<Expr>>,
+    pub dynamic_filter_rx: Option<Watch<Expr>>,
 }
 
 impl PartialEq for Scan {
@@ -78,7 +78,7 @@ fn count_to_stream(count: u64) -> LogTryStream {
 async fn apply_dynamic_filter(
     connector: &dyn Connector,
     handle: &dyn QueryHandle,
-    dynamic_filter_rx: Watch<FilterAst>,
+    dynamic_filter_rx: Watch<Expr>,
 ) -> Option<Arc<dyn QueryHandle>> {
     info!("Waiting for dynamic filter");
 
@@ -104,12 +104,11 @@ async fn scan_stream(scan: Scan) -> Result<LogTryStream> {
         ..
     } = scan;
 
-    if let Some(filter_rx) = dynamic_filter_rx {
-        if let Some(dynamic_filtered_handle) =
+    if let Some(filter_rx) = dynamic_filter_rx
+        && let Some(dynamic_filtered_handle) =
             apply_dynamic_filter(connector.as_ref(), handle.as_ref(), filter_rx).await
-        {
-            handle = dynamic_filtered_handle;
-        }
+    {
+        handle = dynamic_filtered_handle;
     }
 
     let response = connector

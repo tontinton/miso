@@ -1,5 +1,5 @@
 use miso_workflow::WorkflowStep;
-use miso_workflow_types::filter::FilterAst;
+use miso_workflow_types::expr::Expr;
 
 use crate::pattern;
 
@@ -21,6 +21,11 @@ impl Optimization for MergeFiltersIntoAndFilter {
             };
             filters.push(filter.clone());
         }
-        Some(vec![WorkflowStep::Filter(FilterAst::And(filters))])
+
+        let combined = filters
+            .into_iter()
+            .reduce(|acc, filter| Expr::And(Box::new(acc), Box::new(filter)))?;
+
+        Some(vec![WorkflowStep::Filter(combined)])
     }
 }

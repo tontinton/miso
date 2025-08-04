@@ -6,13 +6,16 @@ use flume::{Receiver, RecvError, Selector, Sender, TryRecvError};
 use hashbrown::{DefaultHashBuilder, HashMap, HashSet, hash_map::RawEntryMut};
 use miso_common::watch::Watch;
 use miso_workflow_types::{
-    filter::FilterAst,
+    expr::Expr,
+    field::Field,
     join::{Join, JoinType},
     log::{Log, LogItem, LogIter},
 };
 use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
+
+use crate::interpreter::get_field_value;
 
 use super::{
     WorkflowRx,
@@ -151,10 +154,10 @@ fn collect_to_build_and_probe(
 
     for (is_left, log) in iter {
         if is_left {
-            if let Some(value) = log.get(left_key) {
+            if let Some(value) = get_field_value(&log, left_key) {
                 left.push((value.clone(), log));
             }
-        } else if let Some(value) = log.get(right_key) {
+        } else if let Some(value) = get_field_value(&log, right_key) {
             right.push((value.clone(), log));
         }
     }
@@ -178,7 +181,7 @@ fn collect_to_hash_maps(
 
     for (is_left, log) in iter {
         if is_left {
-            let Some(value) = log.get(left_key) else {
+            let Some(value) = get_field_value(&log, left_key) else {
                 continue;
             };
             match left.raw_entry_mut().from_key(value) {
@@ -190,7 +193,7 @@ fn collect_to_hash_maps(
                 }
             }
         } else {
-            let Some(value) = log.get(right_key) else {
+            let Some(value) = get_field_value(&log, right_key) else {
                 continue;
             };
             match right.raw_entry_mut().from_key(value) {
@@ -221,14 +224,14 @@ fn pipe_logiter_to_tx(iter: LogIter, tx: Sender<Log>) -> Result<()> {
 }
 
 pub struct DynamicFilterTx {
-    tx: Watch<FilterAst>,
+    tx: Watch<Expr>,
     is_left: bool,
-    field: String,
+    field: Field,
     values: HashSet<Value>,
 }
 
 impl DynamicFilterTx {
-    pub fn new(tx: Watch<FilterAst>, is_left: bool, field: String) -> Self {
+    pub fn new(tx: Watch<Expr>, is_left: bool, field: Field) -> Self {
         Self {
             tx,
             is_left,
@@ -238,9 +241,9 @@ impl DynamicFilterTx {
     }
 
     fn send(self) {
-        self.tx.set(FilterAst::In(
-            Box::new(FilterAst::Id(self.field)),
-            self.values.into_iter().map(FilterAst::Lit).collect(),
+        self.tx.set(Expr::In(
+            Box::new(Expr::Field(self.field)),
+            self.values.into_iter().map(Expr::Literal).collect(),
         ))
     }
 }
@@ -283,10 +286,8 @@ impl JoinCollectorIter {
                 self.is_left.iter().all(|x| *x)
             };
 
-            if should_send {
-                if let Some(dynamic_filter) = self.dynamic_filter_tx.take() {
-                    dynamic_filter.send();
-                }
+            if should_send && let Some(dynamic_filter) = self.dynamic_filter_tx.take() {
+                dynamic_filter.send();
             }
         }
     }
@@ -300,12 +301,10 @@ impl JoinCollectorIter {
             values,
             ..
         }) = &mut self.dynamic_filter_tx
+            && is_left == *is_left_dynamic_filter
+            && let Some(value) = get_field_value(&log, field)
         {
-            if is_left == *is_left_dynamic_filter {
-                if let Some(value) = log.get(field) {
-                    values.insert(value.clone());
-                }
-            }
+            values.insert(value.clone());
         }
 
         (is_left, log)
@@ -475,14 +474,14 @@ fn join_rx_partitioned(
 
             for (is_left, log) in iter {
                 if is_left {
-                    if let Some(value) = log.get(left_key) {
+                    if let Some(value) = get_field_value(&log, left_key) {
                         let i = (build_hasher.hash_one(value) % partitions as u64) as usize;
                         if let Err(e) = left_txs[i].send(log) {
                             debug!("Closing partition join step ({i}): {e:?}");
                             break;
                         }
                     }
-                } else if let Some(value) = log.get(right_key) {
+                } else if let Some(value) = get_field_value(&log, right_key) {
                     let i = (build_hasher.hash_one(value) % partitions as u64) as usize;
                     if let Err(e) = right_txs[i].send(log) {
                         debug!("Closing partition join step ({i}): {e:?}");

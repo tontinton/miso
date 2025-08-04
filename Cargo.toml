@@ -8,6 +8,7 @@ resolver = "3"
 members = [
     "miso-common",
     "miso-connectors",
+    "miso-kql",
     "miso-optimizations",
     "miso-server",
     "miso-workflow",
@@ -20,6 +21,7 @@ async-stream = "0.3.6"
 axum = { version = "0.7.7", features = ["macros"] }
 bon = "3.6.3"
 bytes = "1.10.1"
+chumsky = "0.10.1"
 clap = { version = "4.5.20", features = ["derive"] }
 collection_macros = "0.2.0"
 color-eyre = { version = "0.6.3", default-features = false }
@@ -27,13 +29,15 @@ criterion = { version = "0.5.1", features = ["async_tokio"] }
 ctor = "0.2.9"
 flume = "0.11.1"
 futures-util = "0.3.31"
-hashbrown = "0.15.3"
+hashbrown = { version = "0.15.3", features = ["serde"]}
 humantime = "2.1.0"
 kinded = "0.3.0"
+logos = "0.15.0"
 memchr = "2.7.5"
 mimalloc = "0.1.46"
 miso-common = { path = "miso-common" }
 miso-connectors = { path = "miso-connectors" }
+miso-kql = { path = "miso-kql" }
 miso-optimizations = { path = "miso-optimizations" }
 miso-server = { path = "miso-server" }
 miso-workflow = { path = "miso-workflow" }
@@ -79,6 +83,7 @@ criterion.workspace = true
 flume.workspace = true
 futures-util.workspace = true
 miso-connectors.workspace = true
+miso-kql.workspace = true
 miso-optimizations.workspace = true
 miso-server.workspace = true
 miso-workflow.workspace = true

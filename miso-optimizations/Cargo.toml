@@ -13,4 +13,4 @@ serde_json.workspace = true
 tokio.workspace = true
 
 [dev-dependencies]
-collection_macros.workspace = true
+hashbrown.workspace = true

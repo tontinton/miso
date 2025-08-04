@@ -3,6 +3,7 @@ use std::{
     cmp::Ordering,
     collections::{BTreeMap, BTreeSet},
     fmt,
+    str::FromStr,
     sync::Arc,
     time::Duration,
 };
@@ -19,12 +20,13 @@ use miso_connectors::{
     Connector, ConnectorState, QueryHandle, QueryResponse, Split,
     stats::{CollectionStats, ConnectorStats, FieldStats},
 };
+use miso_kql::parse;
 use miso_optimizations::Optimizer;
-use miso_server::http_server::{QueryStep, to_workflow_steps};
+use miso_server::http_server::to_workflow_steps;
 use miso_workflow::{
     Workflow, serde_json_utils::partial_cmp_values, sortable_value::SortableValue,
 };
-use miso_workflow_types::{filter::FilterAst, log::Log};
+use miso_workflow_types::{expr::Expr, field::Field, field_unwrap, log::Log};
 use serde::{Deserialize, Serialize};
 use test_case::test_case;
 use tokio::{task::spawn_blocking, time::sleep};
@@ -64,7 +66,7 @@ struct TestConnector {
     collections: BTreeMap<String, Vec<Log>>,
 
     #[serde(skip_serializing, skip_deserializing)]
-    apply_filter_tx: Option<std::sync::mpsc::Sender<FilterAst>>,
+    apply_filter_tx: Option<std::sync::mpsc::Sender<Expr>>,
 
     #[serde(skip_serializing, skip_deserializing)]
     query_sleep_pre_cancel: bool,
@@ -72,7 +74,7 @@ struct TestConnector {
 
 impl TestConnector {
     fn new(
-        apply_filter_tx: Option<std::sync::mpsc::Sender<FilterAst>>,
+        apply_filter_tx: Option<std::sync::mpsc::Sender<Expr>>,
         query_sleep_pre_cancel: bool,
     ) -> Self {
         Self {
@@ -120,11 +122,7 @@ impl Connector for TestConnector {
         Ok(QueryResponse::Logs(Box::pin(stream::iter(logs).map(Ok))))
     }
 
-    fn apply_filter(
-        &self,
-        ast: &FilterAst,
-        _handle: &dyn QueryHandle,
-    ) -> Option<Box<dyn QueryHandle>> {
+    fn apply_filter(&self, ast: &Expr, _handle: &dyn QueryHandle) -> Option<Box<dyn QueryHandle>> {
         if let Some(tx) = &self.apply_filter_tx {
             tx.send(ast.clone()).expect("send() apply dynamic filter");
         }
@@ -181,7 +179,7 @@ async fn check_multi_connectors(
     views_raw: BTreeMap<&str, &str>,
     expected: &str,
     should_cancel: bool,
-    apply_filter_tx: Option<std::sync::mpsc::Sender<FilterAst>>,
+    apply_filter_tx: Option<std::sync::mpsc::Sender<Expr>>,
 ) -> Result<()> {
     let expected_logs = {
         let mut v: Vec<_> = serde_json::from_str::<Vec<serde_json::Value>>(expected)
@@ -219,21 +217,16 @@ async fn check_multi_connectors(
 
     let views = {
         let mut views = BTreeMap::new();
-        for (name, steps_raw) in views_raw {
-            let steps = serde_json::from_str::<Vec<QueryStep>>(steps_raw)
-                .context("parse views query steps")?;
+        for (name, view_raw) in views_raw {
+            let steps = parse(view_raw).expect("parse view query");
             views.insert(name.to_string(), steps);
         }
         views
     };
 
-    let steps = to_workflow_steps(
-        &connectors,
-        &views,
-        serde_json::from_str(query).context("parse query steps from json")?,
-    )
-    .await
-    .expect("workflow steps to compile");
+    let steps = to_workflow_steps(&connectors, &views, parse(query).expect("parse query"))
+        .await
+        .expect("workflow steps to compile");
 
     let optimizer = Optimizer::default();
 
@@ -293,7 +286,7 @@ async fn check_multi_collection(
     views: Option<BTreeMap<&str, &str>>,
     expect: &str,
     cancel: Option<bool>,
-    apply_filter_tx: Option<std::sync::mpsc::Sender<FilterAst>>,
+    apply_filter_tx: Option<std::sync::mpsc::Sender<Expr>>,
 ) -> Result<()> {
     check_multi_connectors(
         query,
@@ -330,31 +323,23 @@ async fn check_cancel(query: &str, input: &str) -> Result<()> {
 #[tokio::test]
 async fn scan() -> Result<()> {
     let logs = r#"[{"hello": "world"}]"#;
-    check(r#"[{"scan": ["test", "c"]}]"#, logs, logs).await
+    check("test.c", logs, logs).await
 }
 
 #[tokio::test]
 async fn cancel() -> Result<()> {
-    check_cancel(r#"[{"scan": ["test", "c"]}]"#, r#"[{"hello": "world"}]"#).await
+    check_cancel("test.c", r#"[{"hello": "world"}]"#).await
 }
 
 #[tokio::test]
 async fn scan_view() -> Result<()> {
     check_multi_collection()
-        .query(
-            r#"[
-                {"scan": ["views", "v"]},
-                {"filter": {"ends_with": [{"id": "hello"}, {"lit": "rld"}]}}
-            ]"#,
-        )
+        .query(r#"views.v | where hello endswith "rld""#)
         .input(
             btreemap! {"c" => r#"[{"hello": "world"}, {"hello": "worrrr"}, {"hello2": "world2"}]"#},
         )
         .views(btreemap! {
-            "v" => r#"[
-                {"scan": ["test", "c"]},
-                {"filter": {"starts_with": [{"id": "hello"}, {"lit": "wor"}]}}
-            ]"#
+            "v" => r#"test.c | where hello startswith "wor""#
         })
         .expect(r#"[{"hello": "world"}]"#)
         .call()
@@ -364,10 +349,7 @@ async fn scan_view() -> Result<()> {
 #[tokio::test]
 async fn filter_eq() -> Result<()> {
     check(
-        r#"[
-            {"scan": ["test", "c"]},
-            {"filter": {"==": [{"id": "world"}, {"lit": 2}]}}
-        ]"#,
+        r#"test.c | where world == 2"#,
         r#"[{"hello": "world"}, {"world": 1}, {"world": 2}]"#,
         r#"[{"world": 2}]"#,
     )
@@ -377,10 +359,7 @@ async fn filter_eq() -> Result<()> {
 #[tokio::test]
 async fn filter_eq_float() -> Result<()> {
     check(
-        r#"[
-            {"scan": ["test", "c"]},
-            {"filter": {"==": [{"id": "world"}, {"lit": 2.5}]}}
-        ]"#,
+        r#"test.c | where world == 2.5"#,
         r#"[{"hello": "world"}, {"world": 1.5}, {"world": 2.5}]"#,
         r#"[{"world": 2.5}]"#,
     )
@@ -390,10 +369,7 @@ async fn filter_eq_float() -> Result<()> {
 #[tokio::test]
 async fn filter_eq_string() -> Result<()> {
     check(
-        r#"[
-            {"scan": ["test", "c"]},
-            {"filter": {"==": [{"id": "world"}, {"lit": "200"}]}}
-        ]"#,
+        r#"test.c | where world == "200""#,
         r#"[{"hello": "world"}, {"world": 1}, {"world": "200"}]"#,
         r#"[{"world": "200"}]"#,
     )
@@ -403,10 +379,7 @@ async fn filter_eq_string() -> Result<()> {
 #[tokio::test]
 async fn filter_eq_bool() -> Result<()> {
     check(
-        r#"[
-            {"scan": ["test", "c"]},
-            {"filter": {"==": [{"id": "world"}, {"lit": false}]}}
-        ]"#,
+        r#"test.c | where world == false"#,
         r#"[{"hello": "world"}, {"world": 5}, {"world": true}, {"world": false}]"#,
         r#"[{"world": false}]"#,
     )
@@ -416,10 +389,7 @@ async fn filter_eq_bool() -> Result<()> {
 #[tokio::test]
 async fn filter_eq_null() -> Result<()> {
     check(
-        r#"[
-            {"scan": ["test", "c"]},
-            {"filter": {"==": [{"id": "world"}, {"lit": null}]}}
-        ]"#,
+        r#"test.c | where world == null"#,
         r#"[{"hello": "world"}, {"world": 1}, {"world": null}]"#,
         r#"[{"world": null}]"#,
     )
@@ -429,10 +399,7 @@ async fn filter_eq_null() -> Result<()> {
 #[tokio::test]
 async fn filter_eq_fields() -> Result<()> {
     check(
-        r#"[
-            {"scan": ["test", "c"]},
-            {"filter": {"==": [{"id": "world"}, {"id": "world2"}]}}
-        ]"#,
+        r#"test.c | where world == world2"#,
         r#"[{"hello": "world"}, {"world": 1, "world2": 1}, {"world": "33", "world2": 33}]"#,
         r#"[{"world": 1, "world2": 1}]"#,
     )
@@ -442,10 +409,7 @@ async fn filter_eq_fields() -> Result<()> {
 #[tokio::test]
 async fn filter_eq_not_fields() -> Result<()> {
     check(
-        r#"[
-            {"scan": ["test", "c"]},
-            {"filter": {"==": [{"id": "w"}, {"not": {"id": "w2"}}]}}
-        ]"#,
+        r#"test.c | where w == not(w2)"#,
         r#"[{"hello": "world"}, {"w": true, "w2": 0}, {"w": false, "w2": "a"}, {"w": true, "w2": 22.6}]"#,
         r#"[{"w": true, "w2": 0}, {"w": false, "w2": "a"}]"#,
     )
@@ -455,10 +419,7 @@ async fn filter_eq_not_fields() -> Result<()> {
 #[tokio::test]
 async fn filter_not_eq_fields() -> Result<()> {
     check(
-        r#"[
-            {"scan": ["test", "c"]},
-            {"filter": {"not": {"==": [{"id": "w"}, {"id": "w2"}]}}}
-        ]"#,
+        r#"test.c | where not(w == w2)"#,
         r#"[{"hello": "world"}, {"w": 100, "w2": 0}, {"w": "abc", "w2": "a"}, {"w": 100.3, "w2": 100.3}]"#,
         r#"[{"hello": "world"}, {"w": 100, "w2": 0}, {"w": "abc", "w2": "a"}]"#,
     )
@@ -468,10 +429,7 @@ async fn filter_not_eq_fields() -> Result<()> {
 #[tokio::test]
 async fn filter_ne() -> Result<()> {
     check(
-        r#"[
-            {"scan": ["test", "c"]},
-            {"filter": {"!=": [{"id": "world"}, {"lit": 2}]}}
-        ]"#,
+        r#"test.c | where world != 2"#,
         r#"[{"hello": "world"}, {"world": 1}, {"world": 2}]"#,
         r#"[{"world": 1}]"#,
     )
@@ -481,10 +439,7 @@ async fn filter_ne() -> Result<()> {
 #[tokio::test]
 async fn filter_gt() -> Result<()> {
     check(
-        r#"[
-            {"scan": ["test", "c"]},
-            {"filter": {">": [{"id": "world"}, {"lit": 1}]}}
-        ]"#,
+        r#"test.c | where world > 1"#,
         r#"[{"hello": "world"}, {"world": 2}, {"world": 1}]"#,
         r#"[{"world": 2}]"#,
     )
@@ -494,10 +449,7 @@ async fn filter_gt() -> Result<()> {
 #[tokio::test]
 async fn filter_lt() -> Result<()> {
     check(
-        r#"[
-            {"scan": ["test", "c"]},
-            {"filter": {"<": [{"id": "world"}, {"lit": 3}]}}
-        ]"#,
+        r#"test.c | where world < 3"#,
         r#"[{"hello": "world"}, {"world": 2}, {"world": 3}]"#,
         r#"[{"world": 2}]"#,
     )
@@ -507,10 +459,7 @@ async fn filter_lt() -> Result<()> {
 #[tokio::test]
 async fn filter_gte() -> Result<()> {
     check(
-        r#"[
-            {"scan": ["test", "c"]},
-            {"filter": {">=": [{"id": "world"}, {"lit": 2}]}}
-        ]"#,
+        r#"test.c | where world >= 2"#,
         r#"[{"hello": "world"}, {"world": 1}, {"world": 2}, {"world": 3}]"#,
         r#"[{"world": 2}, {"world": 3}]"#,
     )
@@ -520,10 +469,7 @@ async fn filter_gte() -> Result<()> {
 #[tokio::test]
 async fn filter_lte() -> Result<()> {
     check(
-        r#"[
-            {"scan": ["test", "c"]},
-            {"filter": {"<=": [{"id": "world"}, {"lit": 3}]}}
-        ]"#,
+        r#"test.c | where world <= 3"#,
         r#"[{"hello": "world"}, {"world": 2}, {"world": 3}, {"world": 4}]"#,
         r#"[{"world": 2}, {"world": 3}]"#,
     )
@@ -533,10 +479,7 @@ async fn filter_lte() -> Result<()> {
 #[tokio::test]
 async fn filter_add_sub() -> Result<()> {
     check(
-        r#"[
-            {"scan": ["test", "c"]},
-            {"filter": {"==": [{"id": "world"}, {"-": [{"+": [{"lit": 3}, {"lit": 2}]}, {"lit": 4}]}]}}
-        ]"#,
+        r#"test.c | where world == 3 + 2 - 4"#,
         r#"[{"hello": "world"}, {"world": 1}, {"world": 2}]"#,
         r#"[{"world": 1}]"#,
     )
@@ -546,10 +489,7 @@ async fn filter_add_sub() -> Result<()> {
 #[tokio::test]
 async fn filter_mul_div() -> Result<()> {
     check(
-        r#"[
-            {"scan": ["test", "c"]},
-            {"filter": {"==": [{"id": "world"}, {"/": [{"*": [{"lit": 3}, {"lit": 2}]}, {"lit": 4}]}]}}
-        ]"#,
+        r#"test.c | where world == 3 * 2 / 4"#,
         r#"[{"hello": "world"}, {"world": 1.5}, {"world": 2}]"#,
         r#"[{"world": 1.5}]"#,
     )
@@ -559,13 +499,7 @@ async fn filter_mul_div() -> Result<()> {
 #[tokio::test]
 async fn filter_and() -> Result<()> {
     check(
-        r#"[
-            {"scan": ["test", "c"]},
-            {"filter": {"and": [
-                {"==": [{"id": "world"}, {"lit": 3}]},
-                {"==": [{"id": "hello"}, {"lit": "world"}]}
-            ]}}
-        ]"#,
+        r#"test.c | where world == 3 and hello == "world""#,
         r#"[{"hello": "world", "world": 3}, {"hello": "woold", "world": 3}, {"hello": "world", "world": 2}]"#,
         r#"[{"hello": "world", "world": 3}]"#,
     )
@@ -575,13 +509,7 @@ async fn filter_and() -> Result<()> {
 #[tokio::test]
 async fn filter_or() -> Result<()> {
     check(
-        r#"[
-            {"scan": ["test", "c"]},
-            {"filter": {"or": [
-                {"==": [{"id": "world"}, {"lit": 3}]},
-                {"==": [{"id": "hello"}, {"lit": "world"}]}
-            ]}}
-        ]"#,
+        r#"test.c | where world == 3 or hello == "world""#,
         r#"[{"hello": "world", "world": 3}, {"hello": "woold", "world": 3}, {"hello": "world", "world": 2}, {"hello": "woold", "world": 4}]"#,
         r#"[{"hello": "world", "world": 3}, {"hello": "woold", "world": 3}, {"hello": "world", "world": 2}]"#,
     )
@@ -591,10 +519,7 @@ async fn filter_or() -> Result<()> {
 #[tokio::test]
 async fn filter_in() -> Result<()> {
     check(
-        r#"[
-            {"scan": ["test", "c"]},
-            {"filter": {"in": [{"id": "world"}, [{"lit": 2}, {"lit": 4}]]}}
-        ]"#,
+        r#"test.c | where world in (2, 4)"#,
         r#"[{"hello": "world"}, {"world": 1}, {"world": 4}, {"world": 2}]"#,
         r#"[{"world": 4}, {"world": 2}]"#,
     )
@@ -604,10 +529,7 @@ async fn filter_in() -> Result<()> {
 #[tokio::test]
 async fn filter_contains() -> Result<()> {
     check(
-        r#"[
-            {"scan": ["test", "c"]},
-            {"filter": {"contains": [{"id": "hello"}, {"lit": "wor"}]}}
-        ]"#,
+        r#"test.c | where hello contains "wor""#,
         r#"[{"hello": "world"}, {"world": 2}, {"hello": "aaawora"}, {"hello": "woold"}]"#,
         r#"[{"hello": "world"}, {"hello": "aaawora"}]"#,
     )
@@ -617,10 +539,7 @@ async fn filter_contains() -> Result<()> {
 #[tokio::test]
 async fn filter_starts_with() -> Result<()> {
     check(
-        r#"[
-            {"scan": ["test", "c"]},
-            {"filter": {"starts_with": [{"id": "hello"}, {"lit": "wor"}]}}
-        ]"#,
+        r#"test.c | where hello startswith "wor""#,
         r#"[{"hello": "world"}, {"world": 2}, {"hello": "aaawora"}, {"hello": "woold"}]"#,
         r#"[{"hello": "world"}]"#,
     )
@@ -630,10 +549,7 @@ async fn filter_starts_with() -> Result<()> {
 #[tokio::test]
 async fn filter_starts_with_on_object() -> Result<()> {
     check(
-        r#"[
-            {"scan": ["test", "c"]},
-            {"filter": {"starts_with": [{"id": "hello.there"}, {"lit": "wor"}]}}
-        ]"#,
+        r#"test.c | where hello.there startswith "wor""#,
         r#"[{"hello": "world"}, {"world": 2}, {"hello": {"there": "woold"}}, {"hello": {"there": "world"}}]"#,
         r#"[{"hello": {"there": "world"}}]"#,
     )
@@ -643,10 +559,7 @@ async fn filter_starts_with_on_object() -> Result<()> {
 #[tokio::test]
 async fn filter_ends_with() -> Result<()> {
     check(
-        r#"[
-            {"scan": ["test", "c"]},
-            {"filter": {"ends_with": [{"id": "hello"}, {"lit": "ora"}]}}
-        ]"#,
+        r#"test.c | where hello endswith "ora""#,
         r#"[{"hello": "world"}, {"world": 2}, {"hello": "aaawora"}, {"hello": "woold"}]"#,
         r#"[{"hello": "aaawora"}]"#,
     )
@@ -656,10 +569,7 @@ async fn filter_ends_with() -> Result<()> {
 #[tokio::test]
 async fn filter_has() -> Result<()> {
     check(
-        r#"[
-            {"scan": ["test", "c"]},
-            {"filter": {"has": [{"id": "hello"}, {"lit": "there world"}]}}
-        ]"#,
+        r#"test.c | where hello has "there world""#,
         r#"[
             {"hello": "world"},
             {"hello": "there wor"},
@@ -681,10 +591,7 @@ async fn filter_has() -> Result<()> {
 #[tokio::test]
 async fn filter_has_cs() -> Result<()> {
     check(
-        r#"[
-            {"scan": ["test", "c"]},
-            {"filter": {"has_cs": [{"id": "hello"}, {"lit": "there world"}]}}
-        ]"#,
+        r#"test.c | where hello has_cs "there world""#,
         r#"[
             {"hello": "world"},
             {"hello": "there wor"},
@@ -702,10 +609,7 @@ async fn filter_has_cs() -> Result<()> {
 #[tokio::test]
 async fn filter_exists() -> Result<()> {
     check(
-        r#"[
-            {"scan": ["test", "c"]},
-            {"filter": {"exists": "hello"}}
-        ]"#,
+        r#"test.c | where exists(hello)"#,
         r#"[{"hello": "world"}, {"world": 2}, {"hello": "woold"}]"#,
         r#"[{"hello": "world"}, {"hello": "woold"}]"#,
     )
@@ -715,10 +619,7 @@ async fn filter_exists() -> Result<()> {
 #[tokio::test]
 async fn filter_exists_on_object() -> Result<()> {
     check(
-        r#"[
-            {"scan": ["test", "c"]},
-            {"filter": {"exists": "hello.there"}}
-        ]"#,
+        r#"test.c | where exists(hello.there)"#,
         r#"[{"hello": "world"}, {"world": 2}, {"hello": {"there": "abc"}}, {"hello": {"world": "def"}}]"#,
         r#"[{"hello": {"there": "abc"}}]"#,
     )
@@ -728,10 +629,7 @@ async fn filter_exists_on_object() -> Result<()> {
 #[tokio::test]
 async fn filter_exists_null() -> Result<()> {
     check(
-        r#"[
-            {"scan": ["test", "c"]},
-            {"filter": {"exists": "hello"}}
-        ]"#,
+        r#"test.c | where exists(hello)"#,
         r#"[{"hello": "world"}, {"world": 2}, {"hello": null}]"#,
         r#"[{"hello": "world"}, {"hello": null}]"#,
     )
@@ -741,10 +639,7 @@ async fn filter_exists_null() -> Result<()> {
 #[tokio::test]
 async fn filter_not_exists() -> Result<()> {
     check(
-        r#"[
-            {"scan": ["test", "c"]},
-            {"filter": {"not": {"exists": "hello"}}}
-        ]"#,
+        r#"test.c | where not(exists(hello))"#,
         r#"[{"hello": "world"}, {"world": 2}, {"hello": "woold"}]"#,
         r#"[{"world": 2}]"#,
     )
@@ -754,23 +649,7 @@ async fn filter_not_exists() -> Result<()> {
 #[tokio::test]
 async fn project_add() -> Result<()> {
     check(
-        r#"[
-            {"scan": ["test", "c"]},
-            {
-                "project": [
-                    {"to": "world", "from": {"id": "world"}},
-                    {
-                        "to": "test",
-                        "from": {
-                            "+": [
-                                {"cast": ["float", {"id": "world"}]},
-                                {"lit": 2}
-                            ]
-                        }
-                    }
-                ]
-            }
-        ]"#,
+        r#"test.c | project world=world, test=toreal(world) + 2"#,
         r#"[{"world": 2}, {"world": 1}, {"hello": "world"}]"#,
         r#"[{"world": 2, "test": 4.0}, {"world": 1, "test": 3.0}, {}]"#,
     )
@@ -780,10 +659,7 @@ async fn project_add() -> Result<()> {
 #[tokio::test]
 async fn project_array() -> Result<()> {
     check(
-        r#"[
-            {"scan": ["test", "c"]},
-            {"project": [{"to": "world", "from": {"id": "world[0].x[1]"}}]}
-        ]"#,
+        r#"test.c | project world=world[0].x[1]"#,
         r#"[
             {"world": [{"x": [1, 2]}]},
             {"world": [{"x": [5, 6]}]},
@@ -797,22 +673,7 @@ async fn project_array() -> Result<()> {
 #[tokio::test]
 async fn extend_add() -> Result<()> {
     check(
-        r#"[
-            {"scan": ["test", "c"]},
-            {
-                "extend": [
-                    {
-                        "to": "test",
-                        "from": {
-                            "+": [
-                                {"cast": ["float", {"id": "world"}]},
-                                {"lit": 2}
-                            ]
-                        }
-                    }
-                ]
-            }
-        ]"#,
+        r#"test.c | extend world=world, test=toreal(world) + 2"#,
         r#"[{"world": 2}, {"world": 1}, {"hello": "world"}]"#,
         r#"[{"world": 2, "test": 4.0}, {"world": 1, "test": 3.0}, {"hello": "world"}]"#,
     )
@@ -822,10 +683,7 @@ async fn extend_add() -> Result<()> {
 #[tokio::test]
 async fn sort_asc_then_desc() -> Result<()> {
     check(
-        r#"[
-            {"scan": ["test", "c"]},
-            {"sort": [{"by": "world"}, {"by": "test", "order": "desc"}]}
-        ]"#,
+        r#"test.c | sort by world, test desc"#,
         r#"[{"world": 3, "test": 1}, {"world": 2, "test": 3}, {"world": 2, "test": 6}]"#,
         r#"[{"world": 2, "test": 6}, {"world": 2, "test": 3}, {"world": 3, "test": 1}]"#,
     )
@@ -835,10 +693,7 @@ async fn sort_asc_then_desc() -> Result<()> {
 #[tokio::test]
 async fn sort_nulls_order() -> Result<()> {
     check(
-        r#"[
-            {"scan": ["test", "c"]},
-            {"sort": [{"by": "world"}, {"by": "test", "nulls": "first"}]}
-        ]"#,
+        r#"test.c | sort by world, test nulls first"#,
         r#"[{"world": 4, "test": 1}, {}, {"world": 3, "test": 1}, {"world": null, "test": 1}, {"world": 4, "test": null}]"#,
         r#"[{"world": 3, "test": 1}, {"world": 4, "test": null}, {"world": 4, "test": 1}, {}, {"world": null, "test": 1}]"#,
     )
@@ -848,10 +703,7 @@ async fn sort_nulls_order() -> Result<()> {
 #[tokio::test]
 async fn limit() -> Result<()> {
     check(
-        r#"[
-            {"scan": ["test", "c"]},
-            {"limit": 2}
-        ]"#,
+        r#"test.c | take 2"#,
         r#"[{"hello": "world"}, {"world": 1}, {"world": 2}, {"world": 3}]"#,
         r#"[{"hello": "world"}, {"world": 1}]"#,
     )
@@ -861,10 +713,7 @@ async fn limit() -> Result<()> {
 #[tokio::test]
 async fn topn() -> Result<()> {
     check(
-        r#"[
-            {"scan": ["test", "c"]},
-            {"top": [[{"by": "world"}, {"by": "test", "order": "desc"}], 2]}
-        ]"#,
+        r#"test.c | top 2 by world, test desc"#,
         r#"[{"world": 3, "test": 1}, {"world": 2, "test": 3}, {"world": 2, "test": 6}]"#,
         r#"[{"world": 2, "test": 6}, {"world": 2, "test": 3}]"#,
     )
@@ -874,11 +723,7 @@ async fn topn() -> Result<()> {
 #[tokio::test]
 async fn sort_limit() -> Result<()> {
     check(
-        r#"[
-            {"scan": ["test", "c"]},
-            {"sort": [{"by": "world"}, {"by": "test", "order": "desc"}]},
-            {"limit": 2}
-        ]"#,
+        r#"test.c | sort by world, test desc | take 2"#,
         r#"[{"world": 3, "test": 1}, {"world": 2, "test": 3}, {"world": 2, "test": 6}]"#,
         r#"[{"world": 2, "test": 6}, {"world": 2, "test": 3}]"#,
     )
@@ -888,12 +733,7 @@ async fn sort_limit() -> Result<()> {
 #[tokio::test]
 async fn sort_limit_count() -> Result<()> {
     check(
-        r#"[
-            {"scan": ["test", "c"]},
-            {"sort": [{"by": "world"}, {"by": "test", "order": "desc"}]},
-            {"limit": 2},
-            "count"
-        ]"#,
+        r#"test.c | sort by world, test desc | take 2 | count"#,
         r#"[{"world": 3, "test": 1}, {"world": 2, "test": 3}, {"world": 2, "test": 6}]"#,
         r#"[{"count": 2}]"#,
     )
@@ -903,21 +743,15 @@ async fn sort_limit_count() -> Result<()> {
 #[tokio::test]
 async fn summarize() -> Result<()> {
     check(
-        r#"[
-            {"scan": ["test", "c"]},
-            {
-                "summarize": {
-                    "aggs": {
-                        "max_x": {"max": "x"},
-                        "min_x": {"min": "x"},
-                        "sum_x": {"sum": "x"},
-                        "dcount_z": {"dcount": "z"},
-                        "c": "count"
-                    },
-                    "by": [{"id": "y"}]
-                }
-            }
-        ]"#,
+        r#"
+        test.c
+        | summarize max_x=max(x),
+                    min_x=min(x),
+                    sum_x=sum(x),
+                    dcount_z=dcount(z),
+                    c=count()
+          by y
+        "#,
         r#"[{"x": 3, "y": 3, "z": 2}, {"x": 5, "y": 6, "z": 1}, {"x": 1, "y": 3, "z": 2}, {"x": 9, "y": 6, "z": 3}]"#,
         r#"[
             {"max_x": 3, "min_x": 1, "sum_x": 4.0, "dcount_z": 1, "c": 2, "y": 3},
@@ -930,21 +764,15 @@ async fn summarize() -> Result<()> {
 #[tokio::test]
 async fn summarize_bin() -> Result<()> {
     check(
-        r#"[
-            {"scan": ["test", "c"]},
-            {
-                "summarize": {
-                    "aggs": {
-                        "max_x": {"max": "x"},
-                        "min_x": {"min": "x"},
-                        "sum_x": {"sum": "x"},
-                        "dcount_x": {"dcount": "x"},
-                        "c": "count"
-                    },
-                    "by": [{"bin": ["y", 2]}]
-                }
-            }
-        ]"#,
+        r#"
+        test.c
+        | summarize max_x=max(x),
+                    min_x=min(x),
+                    sum_x=sum(x),
+                    dcount_x=dcount(x),
+                    c=count()
+          by bin(y, 2)
+        "#,
         r#"[{"x": 3, "y": 0}, {"x": 5, "y": 1}, {"x": 1, "y": 4}, {"x": 9, "y": 5}, {"x": 5}]"#,
         r#"[
             {"max_x": 5, "min_x": 3, "sum_x": 8.0, "dcount_x": 2, "c": 2, "y": 0.0},
@@ -962,15 +790,7 @@ async fn join_inner(partitions: usize) -> Result<()> {
 
     check_multi_collection()
         .query(
-            &format!(r#"[
-                {{"scan": ["test", "left"]}},
-                {{
-                    "join": [
-                        {{"on": ["id", "id"], "partitions": {partitions}}},
-                        [{{"scan": ["test", "right"]}}]
-                    ]
-                }}
-            ]"#)
+            &format!(r#"test.left | join hint.partitions={partitions} (test.right) on id==id"#)
         )
         .input(btreemap!{
             "left"  => r#"[{"id": 1, "value": "one"}, {"id": 1, "value": "dup"}, {"id": 2, "value": "two"}, {"id": 3, "value": "three"}]"#,
@@ -991,23 +811,23 @@ async fn join_inner(partitions: usize) -> Result<()> {
 
     let ast = rx.recv().context("recv() apply dynamic filter")?;
     match ast {
-        FilterAst::In(id_box, mut actual_vec) => {
-            assert_eq!(id_box, Box::new(FilterAst::Id("id".to_string())));
+        Expr::In(id_box, mut actual_vec) => {
+            assert_eq!(id_box, Box::new(Expr::Field(field_unwrap!("id"))));
 
             let mut expected_vec = vec![
-                FilterAst::Lit(1.into()),
-                FilterAst::Lit(2.into()),
-                FilterAst::Lit(3.into()),
+                Expr::Literal(1.into()),
+                Expr::Literal(2.into()),
+                Expr::Literal(3.into()),
             ];
 
-            let compare_filter_asts = |a: &FilterAst, b: &FilterAst| -> Ordering {
+            let compare_filter_asts = |a: &Expr, b: &Expr| -> Ordering {
                 match (a, b) {
-                    (FilterAst::Lit(val_a), FilterAst::Lit(val_b)) => {
+                    (Expr::Literal(val_a), Expr::Literal(val_b)) => {
                         partial_cmp_values(val_a, val_b).unwrap_or(Ordering::Equal)
                     }
-                    _ => panic!(
-                        "Unexpected FilterAst variants in Vec during comparison: {a:?} vs {b:?}"
-                    ),
+                    _ => {
+                        panic!("Unexpected Expr variants in Vec during comparison: {a:?} vs {b:?}")
+                    }
                 }
             };
 
@@ -1017,7 +837,7 @@ async fn join_inner(partitions: usize) -> Result<()> {
             assert_eq!(actual_vec, expected_vec);
         }
         _ => {
-            panic!("Expected FilterAst::In variant, but got: {ast:?}");
+            panic!("Expected Expr::In variant, but got: {ast:?}");
         }
     }
 
@@ -1035,15 +855,7 @@ async fn join_inner(partitions: usize) -> Result<()> {
 async fn join_outer(partitions: usize) -> Result<()> {
     check_multi_collection()
         .query(
-            &format!(r#"[
-                {{"scan": ["test", "left"]}},
-                {{
-                    "join": [
-                        {{"on": ["id", "id"], "type": "outer", "partitions": {partitions}}},
-                        [{{"scan": ["test", "right"]}}]
-                    ]
-                }}
-            ]"#)
+            &format!(r#"test.left | join kind=outer hint.partitions={partitions} (test.right) on id==id"#)
         )
         .input(btreemap!{
             "left"  => r#"[{"id": 1, "value": "one"}, {"id": 1, "value": "dup"}, {"id": 2, "value": "two"}, {"id": 3, "value": "three"}]"#,
@@ -1069,15 +881,7 @@ async fn join_outer(partitions: usize) -> Result<()> {
 async fn join_left(partitions: usize) -> Result<()> {
     check_multi_collection()
         .query(
-            &format!(r#"[
-                {{"scan": ["test", "left"]}},
-                {{
-                    "join": [
-                        {{"on": ["id", "id"], "type": "left", "partitions": {partitions}}},
-                        [{{"scan": ["test", "right"]}}]
-                    ]
-                }}
-            ]"#)
+            &format!(r#"test.left | join kind=left hint.partitions={partitions} (test.right) on id==id"#)
         )
         .input(btreemap!{
             "left"  => r#"[{"id": 1, "value": "one"}, {"id": 2, "value": "two"}, {"id": 3, "value": "three"}]"#,
@@ -1100,15 +904,7 @@ async fn join_left(partitions: usize) -> Result<()> {
 async fn join_right(partitions: usize) -> Result<()> {
     check_multi_collection()
         .query(
-            &format!(r#"[
-                {{"scan": ["test", "left"]}},
-                {{
-                    "join": [
-                        {{"on": ["id", "id"], "type": "right", "partitions": {partitions}}},
-                        [{{"scan": ["test", "right"]}}]
-                    ]
-                }}
-            ]"#)
+            &format!(r#"test.left | join kind=right hint.partitions={partitions} (test.right) on id==id"#)
         )
         .input(btreemap!{
             "left"  => r#"[{"id": 1, "value": "one"}, {"id": 2, "value": "two"}, {"id": 3, "value": "three"}]"#,
@@ -1128,7 +924,7 @@ async fn join_right(partitions: usize) -> Result<()> {
 #[tokio::test]
 async fn count() -> Result<()> {
     check(
-        r#"[{"scan": ["test", "c"]}, "count"]"#,
+        r#"test.c | count"#,
         r#"[{"world": 3}, {"test": 1}, {"world": 2, "test": 3}, {"world": 2, "test": 6}]"#,
         r#"[{"count": 4}]"#,
     )
@@ -1138,7 +934,7 @@ async fn count() -> Result<()> {
 #[tokio::test]
 async fn count_on_count() -> Result<()> {
     check(
-        r#"[{"scan": ["test", "c"]}, "count", "count"]"#,
+        r#"test.c | count | count"#,
         r#"[{"world": 3}, {"test": 1}, {"world": 2, "test": 3}, {"world": 2, "test": 6}]"#,
         r#"[{"count": 1}]"#,
     )
@@ -1148,12 +944,7 @@ async fn count_on_count() -> Result<()> {
 #[tokio::test]
 async fn union() -> Result<()> {
     check_multi_collection()
-        .query(
-            r#"[
-                {"scan": ["test", "x"]},
-                {"union": [{"scan": ["test", "y"]}]}
-            ]"#
-        )
+        .query(r#"test.x | union (test.y)"#)
         .input(btreemap!{
             "x" => r#"[{"id": 1, "value": "one"}, {"id": 2, "value": "two"}, {"id": 3, "value": "three"}]"#,
             "y" => r#"[{"id": 4, "value": "four"}, {"id": 5, "value": "five"}]"#,
@@ -1174,14 +965,7 @@ async fn union() -> Result<()> {
 #[tokio::test]
 async fn filter_non_existant_field_then_limit_after_union() -> Result<()> {
     check_multi_collection()
-        .query(
-            r#"[
-                {"scan": ["test", "x"]},
-                {"union": [{"scan": ["test", "y"]}]},
-                {"filter": {"==": [{"id": "id"}, {"lit": 2}]}},
-                {"limit": 4}
-            ]"#,
-        )
+        .query(r#"test.x | union (test.y) | where id == 2 | take 4"#)
         .input(btreemap! {
             "x" => r#"[{"id": 1}, {"id": 2}, {"id": 3}]"#,
             "y" => r#"[{"xd": 1}, {"xd": 2}, {"xd": 3}]"#,
@@ -1194,21 +978,7 @@ async fn filter_non_existant_field_then_limit_after_union() -> Result<()> {
 #[tokio::test]
 async fn filter_exists_field_and_limit_after_union() -> Result<()> {
     check_multi_collection()
-        .query(
-            r#"[
-                {"scan": ["test", "x"]},
-                {"union": [{"scan": ["test", "y"]}]},
-                {
-                    "filter": {
-                        "or": [
-                            {"not": {"exists": "id"}},
-                            {"==": [{"id": "id"}, {"lit": 2}]}
-                        ]
-                    }
-                },
-                {"limit": 4}
-            ]"#,
-        )
+        .query(r#"test.x | union (test.y) | where not(exists(id)) or id == 2 | take 4"#)
         .input(btreemap! {
             "x" => r#"[{"id": 1}, {"id": 2}, {"id": 3}]"#,
             "y" => r#"[{"xd": 1}, {"xd": 2}, {"xd": 3}]"#,
@@ -1222,21 +992,15 @@ async fn filter_exists_field_and_limit_after_union() -> Result<()> {
 async fn union_summarize() -> Result<()> {
     check_multi_collection()
         .query(
-            r#"[
-                {"scan": ["test", "x"]},
-                {"union": [{"scan": ["test", "y"]}]},
-                {
-                    "summarize": {
-                        "aggs": {
-                            "max_x": {"max": "x"},
-                            "min_x": {"min": "x"},
-                            "sum_x": {"sum": "x"},
-                            "c": "count"
-                        },
-                        "by": [{"id": "y"}]
-                    }
-                }
-            ]"#,
+            r#"
+            test.x
+            | union (test.y)
+            | summarize max_x=max(x),
+                        min_x=min(x),
+                        sum_x=sum(x),
+                        c=count()
+              by y
+            "#,
         )
         .input(btreemap! {
             "x" => r#"[{"x": 3, "y": 3}, {"x": 5, "y": 6}, {"x": 1, "y": 3}, {"x": 9, "y": 6}]"#,
@@ -1255,13 +1019,7 @@ async fn union_summarize() -> Result<()> {
 #[tokio::test]
 async fn union_count() -> Result<()> {
     check_multi_collection()
-        .query(
-            r#"[
-                {"scan": ["test", "x"]},
-                {"union": [{"scan": ["test", "y"]}]},
-                "count"
-            ]"#,
-        )
+        .query(r#"test.x | union (test.y) | count"#)
         .input(btreemap! {
             "x" => r#"[{"x": 0}, {"x": 1}, {"x": 2}]"#,
             "y" => r#"[{"x": 3}, {"x": 4}, {"x": 5}, {"x": 6}]"#,

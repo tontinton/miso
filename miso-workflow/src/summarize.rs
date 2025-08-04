@@ -1,33 +1,19 @@
 use std::{borrow::Cow, cmp::Ordering, iter, mem::Discriminant};
 
-use color_eyre::{Result, eyre::eyre};
+use color_eyre::eyre::eyre;
 use hashbrown::{HashMap, HashSet};
 use miso_workflow_types::{
+    expr::Expr,
+    field::Field,
     log::{Log, LogItem, LogIter},
-    summarize::{Aggregation, GroupAst, Summarize},
+    summarize::{Aggregation, Summarize},
 };
 use serde_json::Value;
 use tracing::warn;
 
-use super::{
-    interpreter::{Val, ident},
-    partial_stream::PartialLogIter,
-    serde_json_utils::partial_cmp_values,
-    try_next,
-};
+use crate::interpreter::{LogInterpreter, Val, get_field_value, insert_field_value};
 
-struct AggGroupInterpreter<'a> {
-    log: &'a Log,
-}
-
-impl<'a> AggGroupInterpreter<'a> {
-    fn eval(&self, ast: &'a GroupAst) -> Result<Val<'a>> {
-        Ok(match ast {
-            GroupAst::Id(name) => ident(self.log, name)?,
-            GroupAst::Bin(name, by) => ident(self.log, name)?.bin(&Val::borrowed(by))?.into(),
-        })
-    }
-}
+use super::{partial_stream::PartialLogIter, serde_json_utils::partial_cmp_values, try_next};
 
 /// An on-going aggregation (including the needed state to compute the next value of the
 /// aggregation).
@@ -50,12 +36,12 @@ impl Aggregate for Count {
 }
 
 struct DCount {
-    field: String,
+    field: Field,
     seen: HashSet<Value>,
 }
 
 impl DCount {
-    fn new(field: String) -> Self {
+    fn new(field: Field) -> Self {
         Self {
             field,
             seen: HashSet::new(),
@@ -65,7 +51,7 @@ impl DCount {
 
 impl Aggregate for DCount {
     fn input(&mut self, log: &Log) {
-        let Some(value) = log.get(&self.field) else {
+        let Some(value) = get_field_value(log, &self.field) else {
             return;
         };
         self.seen.insert(value.clone());
@@ -77,19 +63,19 @@ impl Aggregate for DCount {
 }
 
 struct Sum {
-    field: String,
+    field: Field,
     value: f64,
 }
 
 impl Sum {
-    fn new(field: String) -> Self {
+    fn new(field: Field) -> Self {
         Self { field, value: 0.0 }
     }
 }
 
 impl Aggregate for Sum {
     fn input(&mut self, log: &Log) {
-        let Some(value) = log.get(&self.field) else {
+        let Some(value) = get_field_value(log, &self.field) else {
             return;
         };
         let Value::Number(v) = value else {
@@ -110,7 +96,7 @@ impl Aggregate for Sum {
 
 struct MinMax {
     /// The field in the logs to aggregate.
-    field: String,
+    field: Field,
 
     /// The current min / max value.
     value: Option<Value>,
@@ -120,7 +106,7 @@ struct MinMax {
 }
 
 impl MinMax {
-    fn new(field: String, update_order: Ordering) -> Self {
+    fn new(field: Field, update_order: Ordering) -> Self {
         Self {
             field,
             value: None,
@@ -128,18 +114,18 @@ impl MinMax {
         }
     }
 
-    fn new_min(field: String) -> Self {
+    fn new_min(field: Field) -> Self {
         Self::new(field, Ordering::Greater)
     }
 
-    fn new_max(field: String) -> Self {
+    fn new_max(field: Field) -> Self {
         Self::new(field, Ordering::Less)
     }
 }
 
 impl Aggregate for MinMax {
     fn input(&mut self, log: &Log) {
-        let Some(value) = log.get(&self.field) else {
+        let Some(value) = get_field_value(log, &self.field) else {
             return;
         };
 
@@ -175,13 +161,13 @@ fn create_aggregate(aggregation: Aggregation) -> Box<dyn Aggregate> {
 /// Executes summarize without grouping, only aggregations.
 pub struct SummarizeAllIter {
     input: LogIter,
-    output_fields: Vec<String>,
+    output_fields: Vec<Field>,
     aggregates: Vec<Box<dyn Aggregate>>,
     done: bool,
 }
 
 impl SummarizeAllIter {
-    fn new(input: LogIter, output_fields: Vec<String>, aggregations: Vec<Aggregation>) -> Self {
+    fn new(input: LogIter, output_fields: Vec<Field>, aggregations: Vec<Aggregation>) -> Self {
         let aggregates: Vec<Box<dyn Aggregate>> =
             aggregations.into_iter().map(create_aggregate).collect();
         Self {
@@ -217,13 +203,8 @@ impl Iterator for SummarizeAllIter {
 impl PartialLogIter for SummarizeAllIter {
     fn get_partial(&self) -> LogIter {
         let mut log = Log::new();
-        for (output_field, aggregate) in self
-            .output_fields
-            .clone()
-            .into_iter()
-            .zip(self.aggregates.iter())
-        {
-            log.insert(output_field, aggregate.value());
+        for (output_field, aggregate) in self.output_fields.iter().zip(self.aggregates.iter()) {
+            insert_field_value(&mut log, output_field, aggregate.value());
         }
         Box::new(iter::once(LogItem::Log(log)))
     }
@@ -234,8 +215,8 @@ type GroupAggregates = HashMap<Vec<Value>, Vec<Box<dyn Aggregate>>>;
 /// Executes summarize with some aggregations.
 pub struct SummarizeGroupByIter {
     input: LogIter,
-    group_by: Vec<GroupAst>,
-    output_fields: Vec<String>,
+    group_by: Vec<Expr>,
+    output_fields: Vec<Field>,
     aggregations: Vec<Aggregation>,
     tracked_types: Vec<Option<Discriminant<Value>>>,
 
@@ -252,8 +233,8 @@ pub struct SummarizeGroupByIter {
 impl SummarizeGroupByIter {
     fn new(
         input: LogIter,
-        group_by: Vec<GroupAst>,
-        output_fields: Vec<String>,
+        group_by: Vec<Expr>,
+        output_fields: Vec<Field>,
         aggregations: Vec<Aggregation>,
     ) -> Self {
         let tracked_types = vec![None; group_by.len()];
@@ -278,12 +259,22 @@ impl PartialLogIter for SummarizeGroupByIter {
             let mut log = Log::new();
 
             for (ast, value) in self.group_by.iter().zip(group_keys.clone()) {
-                log.insert(ast.field().to_string(), value);
+                let field = match ast {
+                    Expr::Field(field) => field,
+                    Expr::Bin(lhs, _) => {
+                        if let Expr::Field(field) = &**lhs {
+                            field
+                        } else {
+                            continue;
+                        }
+                    }
+                    _ => continue,
+                };
+                insert_field_value(&mut log, field, value);
             }
 
-            for (output_field, aggregate) in self.output_fields.clone().into_iter().zip(aggregates)
-            {
-                log.insert(output_field, aggregate.value());
+            for (output_field, aggregate) in self.output_fields.iter().zip(aggregates) {
+                insert_field_value(&mut log, output_field, aggregate.value());
             }
 
             logs.push(log);
@@ -298,11 +289,11 @@ impl Iterator for SummarizeGroupByIter {
 
     fn next(&mut self) -> Option<Self::Item> {
         'next_log: while let Some(log) = try_next!(self.input) {
-            let interpreter = AggGroupInterpreter { log: &log };
+            let interpreter = LogInterpreter { log: &log };
             let mut group_keys = Vec::with_capacity(self.group_by.len());
 
-            for (tracked_type, ast) in self.tracked_types.iter_mut().zip(&self.group_by) {
-                let value_cow = match interpreter.eval(ast) {
+            for (tracked_type, expr) in self.tracked_types.iter_mut().zip(&self.group_by) {
+                let value_cow = match interpreter.eval(expr) {
                     Ok(Val(None)) => Cow::Owned(Value::Null),
                     Ok(v) => v.0.unwrap(),
                     Err(e) => {
@@ -321,7 +312,7 @@ impl Iterator for SummarizeGroupByIter {
                     if *t != value_type {
                         return Some(LogItem::Err(eyre!(
                             "cannot summarize over differing types (key '{}'): {:?} != {:?}",
-                            ast,
+                            expr,
                             *t,
                             value_type
                         )));
@@ -359,7 +350,7 @@ impl Iterator for SummarizeGroupByIter {
 }
 
 pub fn create_summarize_iter(input: LogIter, config: Summarize) -> Box<dyn PartialLogIter> {
-    let (output_fields, aggregations): (Vec<String>, Vec<Aggregation>) =
+    let (output_fields, aggregations): (Vec<Field>, Vec<Aggregation>) =
         config.aggs.into_iter().unzip();
 
     if config.by.is_empty() {

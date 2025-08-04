@@ -8,7 +8,8 @@ use std::{any::Any, collections::BTreeMap};
 
 use axum::async_trait;
 use color_eyre::eyre::Result;
-use miso_workflow_types::{filter::FilterAst, log::LogTryStream, sort::Sort, summarize::Summarize};
+use miso_workflow_types::expr::Expr;
+use miso_workflow_types::{log::LogTryStream, sort::Sort, summarize::Summarize};
 use parking_lot::Mutex;
 use thiserror::Error;
 use tokio::time::sleep;
@@ -138,11 +139,7 @@ pub trait Connector: Debug + Send + Sync {
     /// None means it can't predicate pushdown the filter AST provided.
     /// Called multiple times, which means that every time you predicate pushdown
     /// an expression you need to query them all with an AND, or the connector's equivalent.
-    fn apply_filter(
-        &self,
-        _ast: &FilterAst,
-        _handle: &dyn QueryHandle,
-    ) -> Option<Box<dyn QueryHandle>> {
+    fn apply_filter(&self, _ast: &Expr, _handle: &dyn QueryHandle) -> Option<Box<dyn QueryHandle>> {
         None
     }
 

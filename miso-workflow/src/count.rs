@@ -21,10 +21,10 @@ fn count_to_log_item(count: u64) -> LogItem {
 }
 
 fn log_to_count(mut log: Log) -> Option<u64> {
-    if let Some(value) = log.remove(COUNT_LOG_FIELD_NAME) {
-        if let Some(count) = value.as_u64() {
-            return Some(count);
-        }
+    if let Some(value) = log.remove(COUNT_LOG_FIELD_NAME)
+        && let Some(count) = value.as_u64()
+    {
+        return Some(count);
     }
     None
 }

@@ -1,9 +1,19 @@
+mod log_interpreter;
 mod string_ops;
+
+pub use log_interpreter::LogInterpreter;
+
+#[cfg(test)]
+mod tests;
 
 use std::{borrow::Cow, cmp::Ordering};
 
 use color_eyre::eyre::{OptionExt, Result, bail, eyre};
-use miso_workflow_types::{CastType, log::Log};
+use miso_workflow_types::{
+    expr::CastType,
+    field::{Field, FieldAccess},
+    log::Log,
+};
 use serde_json::{Number, Value};
 
 use super::serde_json_utils::{get_value_kind, partial_cmp_values, value_to_bool};
@@ -113,19 +123,19 @@ impl From<Option<Value>> for Val<'_> {
 }
 
 impl<'a> Val<'a> {
-    pub fn not_exist() -> Val<'a> {
+    fn not_exist() -> Val<'a> {
         Val(None)
     }
 
-    pub fn owned(value: Value) -> Val<'a> {
+    fn owned(value: Value) -> Val<'a> {
         Val(Some(Cow::Owned(value)))
     }
 
-    pub fn borrowed(value: &'a Value) -> Val<'a> {
+    fn borrowed(value: &'a Value) -> Val<'a> {
         Val(Some(Cow::Borrowed(value)))
     }
 
-    pub fn bool(value: bool) -> Val<'a> {
+    fn bool(value: bool) -> Val<'a> {
         Val(Some(Cow::Owned(Value::Bool(value))))
     }
 
@@ -136,31 +146,31 @@ impl<'a> Val<'a> {
         value_to_bool(cow.as_ref())
     }
 
-    pub fn eq(&self, other: &Val) -> Result<Option<bool>> {
+    fn eq(&self, other: &Val) -> Result<Option<bool>> {
         impl_cmp!(self, other, |o| o == Ordering::Equal, "==")
     }
 
-    pub fn ne(&self, other: &Val) -> Result<Option<bool>> {
+    fn ne(&self, other: &Val) -> Result<Option<bool>> {
         impl_cmp!(self, other, |o| o != Ordering::Equal, "!=")
     }
 
-    pub fn gt(&self, other: &Val) -> Result<Option<bool>> {
+    fn gt(&self, other: &Val) -> Result<Option<bool>> {
         impl_cmp!(self, other, |o| o == Ordering::Greater, ">")
     }
 
-    pub fn gte(&self, other: &Val) -> Result<Option<bool>> {
+    fn gte(&self, other: &Val) -> Result<Option<bool>> {
         impl_cmp!(self, other, |o| o >= Ordering::Equal, ">=")
     }
 
-    pub fn lt(&self, other: &Val) -> Result<Option<bool>> {
+    fn lt(&self, other: &Val) -> Result<Option<bool>> {
         impl_cmp!(self, other, |o| o == Ordering::Less, "<")
     }
 
-    pub fn lte(&self, other: &Val) -> Result<Option<bool>> {
+    fn lte(&self, other: &Val) -> Result<Option<bool>> {
         impl_cmp!(self, other, |o| o <= Ordering::Equal, "<=")
     }
 
-    pub fn is_in(&self, others: &[Val]) -> Result<Option<bool>> {
+    fn is_in(&self, others: &[Val]) -> Result<Option<bool>> {
         for other in others {
             if matches!(self.eq(other)?, Some(true)) {
                 return Ok(Some(true));
@@ -169,11 +179,11 @@ impl<'a> Val<'a> {
         Ok(Some(false))
     }
 
-    pub fn contains(&self, other: &Val) -> Result<Option<bool>> {
+    fn contains(&self, other: &Val) -> Result<Option<bool>> {
         impl_two_strs_fn!(self, other, |x: &str, y: &str| x.contains(y), "contains")
     }
 
-    pub fn starts_with(&self, other: &Val) -> Result<Option<bool>> {
+    fn starts_with(&self, other: &Val) -> Result<Option<bool>> {
         impl_two_strs_fn!(
             self,
             other,
@@ -182,19 +192,19 @@ impl<'a> Val<'a> {
         )
     }
 
-    pub fn ends_with(&self, other: &Val) -> Result<Option<bool>> {
+    fn ends_with(&self, other: &Val) -> Result<Option<bool>> {
         impl_two_strs_fn!(self, other, |x: &str, y: &str| x.ends_with(y), "ends_with")
     }
 
-    pub fn has(&self, other: &Val) -> Result<Option<bool>> {
+    fn has(&self, other: &Val) -> Result<Option<bool>> {
         impl_two_strs_fn!(self, other, string_ops::has, "has")
     }
 
-    pub fn has_cs(&self, other: &Val) -> Result<Option<bool>> {
+    fn has_cs(&self, other: &Val) -> Result<Option<bool>> {
         impl_two_strs_fn!(self, other, string_ops::has_cs, "has_cs")
     }
 
-    pub fn add(&self, other: &Val) -> Result<Option<Value>> {
+    fn add(&self, other: &Val) -> Result<Option<Value>> {
         let lhs = val!(self);
         let rhs = val!(other);
         if let (Value::String(x), Value::String(y)) = (lhs, rhs) {
@@ -203,25 +213,25 @@ impl<'a> Val<'a> {
         impl_op!(lhs, rhs, |x, y| x + y, "+")
     }
 
-    pub fn sub(&self, other: &Val) -> Result<Option<Value>> {
+    fn sub(&self, other: &Val) -> Result<Option<Value>> {
         impl_op!(val!(self), val!(other), |x, y| x - y, "-")
     }
 
-    pub fn mul(&self, other: &Val) -> Result<Option<Value>> {
+    fn mul(&self, other: &Val) -> Result<Option<Value>> {
         impl_op!(val!(self), val!(other), |x, y| x * y, "*")
     }
 
-    pub fn div(&self, other: &Val) -> Result<Option<Value>> {
+    fn div(&self, other: &Val) -> Result<Option<Value>> {
         let rhs = val!(other);
-        if let Value::Number(n) = rhs {
-            if n.as_f64() == Some(0.0) {
-                bail!("division by zero");
-            }
+        if let Value::Number(n) = rhs
+            && n.as_f64() == Some(0.0)
+        {
+            bail!("division by zero");
         }
         impl_op!(val!(self), rhs, |x, y| x / y, "/")
     }
 
-    pub fn cast(self, ty: CastType) -> Result<Val<'a>> {
+    fn cast(self, ty: CastType) -> Result<Val<'a>> {
         let Some(cow) = self.0 else {
             return Ok(Val::not_exist());
         };
@@ -277,7 +287,7 @@ impl<'a> Val<'a> {
         Ok(Val::owned(casted_value))
     }
 
-    pub fn bin(&self, by: &Val) -> Result<Option<Value>> {
+    fn bin(&self, by: &Val) -> Result<Option<Value>> {
         let self_val = val!(self);
         let by_val = val!(by);
 
@@ -307,38 +317,71 @@ impl<'a> Val<'a> {
     }
 }
 
-fn follow_key<'a>(obj: &'a Log, key: &str) -> Result<Option<&'a Value>> {
-    let Some(arr_start) = key.find('[') else {
-        return Ok(obj.get(key));
-    };
-
-    if !key.ends_with(']') {
-        bail!("invalid array indexing syntax (doesn't end with ']'): {key}");
+fn follow_key<'a>(obj: &'a Log, key: &FieldAccess) -> Option<&'a Value> {
+    let mut val = obj.get(&key.name)?;
+    for &idx in &key.arr_indices {
+        val = val.as_array()?.get(idx)?;
     }
-
-    let idx_str = &key[arr_start + 1..key.len() - 1];
-    let idx: usize = idx_str
-        .parse()
-        .map_err(|_| eyre!("invalid array indexing syntax (index not positive number): {key}"))?;
-
-    let key_name = &key[..arr_start];
-    Ok(obj
-        .get(key_name)
-        .and_then(|v| v.as_array())
-        .and_then(|arr| arr.get(idx)))
+    Some(val)
 }
 
-pub fn ident<'a>(log: &'a Log, name: &str) -> Result<Val<'a>> {
-    let split: Vec<_> = name.split('.').collect();
+fn ident<'a>(log: &'a Log, field: &Field) -> Val<'a> {
+    get_field_value(log, field).map_or_else(Val::not_exist, Val::borrowed)
+}
 
+pub fn get_field_value<'a>(log: &'a Log, field: &Field) -> Option<&'a Value> {
     let mut obj = log;
-    for key in &split[..split.len() - 1] {
-        obj = match follow_key(obj, key)? {
+    for key in &field[..field.len() - 1] {
+        obj = match follow_key(obj, key) {
             Some(Value::Object(map)) => map,
-            _ => return Ok(Val::not_exist()),
+            _ => return None,
         };
     }
 
-    let last = split.last().unwrap();
-    Ok(follow_key(obj, last)?.map_or_else(Val::not_exist, Val::borrowed))
+    let last = field.last().unwrap();
+    follow_key(obj, last)
+}
+
+pub fn insert_field_value(log: &mut Log, field: &Field, value: Value) {
+    fn insert_part<'a>(current: &'a mut Value, keys: &[FieldAccess]) -> &'a mut Value {
+        if keys.is_empty() {
+            return current;
+        }
+
+        if !current.is_object() {
+            *current = Value::Object(serde_json::Map::new());
+        }
+        let map = current.as_object_mut().unwrap();
+        let key = &keys[0];
+        let entry = map.entry(key.name.clone()).or_insert_with(|| {
+            if !key.arr_indices.is_empty() {
+                Value::Array(vec![])
+            } else {
+                Value::Object(serde_json::Map::new())
+            }
+        });
+
+        let mut current_value = entry;
+        for &idx in &key.arr_indices {
+            if !current_value.is_array() {
+                *current_value = Value::Array(vec![]);
+            }
+            let arr = current_value.as_array_mut().unwrap();
+            while arr.len() <= idx {
+                arr.push(Value::Null);
+            }
+            current_value = &mut arr[idx];
+        }
+
+        insert_part(current_value, &keys[1..])
+    }
+
+    if field.is_empty() {
+        return;
+    }
+    let mut root = Value::Object(std::mem::take(log));
+    *insert_part(&mut root, field) = value;
+    if let Value::Object(final_map) = root {
+        *log = final_map;
+    }
 }

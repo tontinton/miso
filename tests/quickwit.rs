@@ -14,6 +14,7 @@ use miso_connectors::{
     quickwit::{QuickwitConfig, QuickwitConnector},
     Connector, ConnectorState,
 };
+use miso_kql::parse;
 use miso_optimizations::Optimizer;
 use miso_server::http_server::{to_workflow_steps, ConnectorsMap};
 use miso_workflow::{sortable_value::SortableValue, Workflow};
@@ -324,7 +325,7 @@ async fn predicate_pushdown_same_results(
     let steps = to_workflow_steps(
         &connectors,
         &BTreeMap::new(),
-        serde_json::from_str(query).context("parse query steps from json")?,
+        parse(query).expect("parse KQL"),
     )
     .await
     .expect("to workflow steps");
@@ -332,8 +333,7 @@ async fn predicate_pushdown_same_results(
     let expected_after_optimizations_steps = to_workflow_steps(
         &connectors,
         &BTreeMap::new(),
-        serde_json::from_str(query_after_optimizations)
-            .context("parse expected query steps from json")?,
+        parse(query_after_optimizations).expect("parse expected KQL"),
     )
     .await
     .expect("to expected workflow steps");
@@ -423,199 +423,111 @@ async fn predicate_pushdown_same_results(
 }
 
 #[test_case(
-    r#"[
-        {"scan": ["test", "stack"]},
-        {"sort": [{"by": "creationDate"}]},
-        {"limit": 3}
-    ]"#,
-    r#"[{"scan": ["test", "stack"]}]"#,
+    r#"test.stack | sort by creationDate | take 3"#,
+    r#"test.stack"#,
     3;
     "top_n"
 )]
 #[test_case(
-    r#"[
-        {"scan": ["test", "stack"]},
-        {"filter": {"==": [{"id": "acceptedAnswerId"}, {"lit": 12446}]}}
-    ]"#,
-    r#"[{"scan": ["test", "stack"]}]"#,
+    r#"test.stack | where acceptedAnswerId == 12446"#,
+    r#"test.stack"#,
     1;
     "filter_eq"
 )]
 #[test_case(
-    r#"[
-        {"scan": ["test", "stack"]},
-        {"filter": {"has_cs": [{"id": "body"}, {"lit": "VB.NET"}]}}
-    ]"#,
-    r#"[{"scan": ["test", "stack"]}]"#,
+    r#"test.stack | where body has_cs "VB.NET""#,
+    r#"test.stack"#,
     1;
     "filter_has_cs"
 )]
 #[test_case(
-    r#"[
-        {"scan": ["test", "stack"]},
-        {"filter": {"in": [{"id": "acceptedAnswerId"}, [{"lit": 12446}, {"lit": 31}]]}}
-    ]"#,
-    r#"[{"scan": ["test", "stack"]}]"#,
+    r#"test.stack | where acceptedAnswerId in (12446, 31)"#,
+    r#"test.stack"#,
     2;
     "filter_in"
 )]
 #[test_case(
-    r#"[
-        {"scan": ["test", "stack"]},
-        {
-            "filter": {
-                "and": [{
-                    "==": [{"id": "questionId"}, {"lit": 11}]
-                }, {
-                    "exists": "answerId"
-                }]
-            }
-        }
-    ]"#,
-    r#"[{"scan": ["test", "stack"]}]"#,
+    r#"test.stack | where questionId == 11 and exists(answerId)"#,
+    r#"test.stack"#,
     1;
     "filter_eq_and_exists"
 )]
 #[test_case(
-    r#"[
-        {"scan": ["test", "stack"]},
-        {
-          "summarize": {
-            "aggs": {
-              "minQuestionId": {"min": "questionId"},
-              "maxQuestionId": {"max": "questionId"},
-              "sumQuestionId": {"sum": "questionId"},
-              "count": "count"
-            },
-            "by": [{"id": "user"}]
-          }
-        }
-    ]"#,
-    r#"[{"scan": ["test", "stack"]}]"#,
+    r#"
+    test.stack
+    | summarize minQuestionId=min(questionId),
+                maxQuestionId=max(questionId),
+                sumQuestionId=sum(questionId),
+                c=count()
+      by user
+    "#,
+    r#"test.stack"#,
     5;
     "summarize_min_max_count"
 )]
 #[test_case(
-    r#"[
-        {"scan": ["test", "stack"]},
-        {
-          "summarize": {
-            "aggs": {
-              "minQuestionId": {"min": "questionId"},
-              "maxQuestionId": {"max": "questionId"},
-              "sumQuestionId": {"sum": "questionId"},
-              "count": "count"
-            },
-            "by": [{"bin": ["answerId", 5]}]
-          }
-        }
-    ]"#,
-    r#"[{"scan": ["test", "stack"]}]"#,
+    r#"
+    test.stack
+    | summarize minQuestionId=min(questionId),
+                maxQuestionId=max(questionId),
+                sumQuestionId=sum(questionId),
+                c=count()
+      by bin(answerId, 5)
+    "#,
+    r#"test.stack"#,
     2;
     "summarize_min_max_count_by_bin"
 )]
 #[test_case(
-    r#"[
-        {"scan": ["test", "stack"]},
-        {
-          "summarize": {
-            "aggs": {},
-            "by": [{"id": "user"}]
-          }
-        }
-    ]"#,
-    r#"[{"scan": ["test", "stack"]}]"#,
+    r#"test.stack | summarize by user"#,
+    r#"test.stack"#,
     5;
     "summarize_distinct"
 )]
 #[test_case(
-    r#"[
-        {"scan": ["test", "stack"]},
-        {"distinct": ["user"]}
-    ]"#,
-    r#"[{"scan": ["test", "stack"]}]"#,
+    r#"test.stack | distinct user"#,
+    r#"test.stack"#,
     5;
     "distinct"
 )]
 #[test_case(
-    r#"[
-        {"scan": ["test", "stack"]},
-        {
-          "summarize": {
-            "aggs": {"minQuestionId": {"min": "questionId"}},
-            "by": [{"id": "user"}]
-          }
-        },
-        {"top": [[{"by": "minQuestionId"}], 3]}
-    ]"#,
-    r#"[
-        {"scan": ["test", "stack"]},
-        {"top": [[{"by": "minQuestionId"}], 3]}
-    ]"#,
+    r#"test.stack | summarize minQuestionId=min(questionId) by user | top 3 by minQuestionId"#,
+    r#"test.stack | top 3 by minQuestionId"#,
     3;
     "summarize_then_topn"
 )]
 #[test_case(
-    r#"[
-        {"scan": ["test", "stack"]},
-        {"top": [[{"by": "questionId"}], 5]},
-        {
-          "summarize": {
-            "aggs": {"minQuestionId": {"min": "questionId"}},
-            "by": [{"id": "user"}]
-          }
-        }
-    ]"#,
-    r#"[
-        {"scan": ["test", "stack"]},
-        {
-          "summarize": {
-            "aggs": {"minQuestionId": {"min": "questionId"}},
-            "by": [{"id": "user"}]
-          }
-        }
-    ]"#,
+    r#"test.stack | top 5 by questionId | summarize minQuestionId=min(questionId) by user"#,
+    r#"test.stack | summarize minQuestionId=min(questionId) by user"#,
     3;
     "topn_then_summarize"
 )]
 #[test_case(
-    r#"[
-        {"scan": ["test", "stack"]},
-        "count"
-    ]"#,
-    r#"[{"scan": ["test", "stack"]}]"#,
+    r#"test.stack | count"#,
+    r#"test.stack"#,
     1;
     "count"
 )]
 #[test_case(
-    r#"[
-        {"scan": ["test", "stack"]},
-        {"union": [{"scan": ["test", "stack_mirror"]}]}
-    ]"#,
-    r#"[{"scan": ["test", "stack"]}]"#,
+    r#"test.stack | union (test.stack_mirror)"#,
+    r#"test.stack"#,
     20;
     "union"
 )]
 #[test_case(
-    r#"[
-        {"scan": ["test", "stack"]},
-        {"union": [{"scan": ["test", "hdfs"]}]}
-    ]"#,
-    r#"[
-        {"scan": ["test", "stack"]},
-        {"union": [{"scan": ["test", "hdfs"]}]}
-    ]"#,
+    r#"test.stack | union (test.hdfs)"#,
+    r#"test.stack | union (test.hdfs)"#,
     20;
     "union_not_same_timestamp_field"
 )]
 #[test_case(
-    r#"[
-        {"scan": ["test", "stack"]},
-        {"union": [{"scan": ["test", "stack_mirror"]}]},
-        {"filter": {"<": [{"id": "acceptedAnswerId"}, {"lit": 100}]}},
-        {"top": [[{"by": "acceptedAnswerId"}], 1]}
-    ]"#,
-    r#"[{"scan": ["test", "stack"]}]"#,
+    r#"
+    test.stack
+    | union (test.stack_mirror)
+    | where acceptedAnswerId < 100
+    | top 1 by acceptedAnswerId
+    "#,
+    r#"test.stack"#,
     1;
     "union_filter_topn"
 )]

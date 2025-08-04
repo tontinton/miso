@@ -1,14 +1,30 @@
-use collection_macros::btreemap;
+use std::str::FromStr;
 
 use miso_workflow::{Workflow, WorkflowStep as S};
 use miso_workflow_types::{
-    filter::FilterAst,
-    project::{ProjectAst, ProjectField},
+    expr::Expr,
+    field::Field,
+    field_unwrap,
+    project::ProjectField,
     sort::{NullsOrder, Sort, SortOrder},
-    summarize::{Aggregation, GroupAst, Summarize},
+    summarize::{Aggregation, Summarize},
 };
 
 use super::Optimizer;
+
+macro_rules! hashmap {
+    ( $($x:expr => $y:expr),* ) => ({
+        use hashbrown::HashMap;
+        let mut temp_map = HashMap::new();
+        $(
+            temp_map.insert($x, $y);
+        )*
+        temp_map
+    });
+    ( $($x:expr => $y:expr,)* ) => (
+        hashmap!{$($x => $y),*}
+    );
+}
 
 fn check(optimizer: Optimizer, input: Vec<S>, expected: Vec<S>) {
     let result = optimizer.optimize(input);
@@ -28,7 +44,7 @@ fn smoke() {
 fn sort_limit_into_topn() {
     let sort1 = vec![];
     let sort2 = vec![Sort {
-        by: "a".to_string(),
+        by: field_unwrap!("a"),
         order: SortOrder::Asc,
         nulls: NullsOrder::Last,
     }];
@@ -76,13 +92,13 @@ fn topn_limit_into_topn() {
 fn filter_before_sort() {
     let sort1 = S::Sort(vec![]);
     let sort2 = S::Sort(vec![Sort {
-        by: "a".to_string(),
+        by: field_unwrap!("a"),
         order: SortOrder::Asc,
         nulls: NullsOrder::Last,
     }]);
-    let filter1 = S::Filter(FilterAst::Eq(
-        Box::new(FilterAst::Id("a".to_string())),
-        Box::new(FilterAst::Lit(serde_json::Value::String("b".to_string()))),
+    let filter1 = S::Filter(Expr::Eq(
+        Box::new(Expr::Field(field_unwrap!("a"))),
+        Box::new(Expr::Literal(serde_json::Value::String("b".to_string()))),
     ));
 
     check_default(
@@ -93,18 +109,18 @@ fn filter_before_sort() {
 
 #[test]
 fn merge_filters() {
-    let ast1 = FilterAst::Eq(
-        Box::new(FilterAst::Id("a".to_string())),
-        Box::new(FilterAst::Lit(serde_json::Value::String("b".to_string()))),
+    let ast1 = Expr::Eq(
+        Box::new(Expr::Field(field_unwrap!("a"))),
+        Box::new(Expr::Literal(serde_json::Value::String("b".to_string()))),
     );
-    let ast2 = FilterAst::Ne(
-        Box::new(FilterAst::Id("c".to_string())),
-        Box::new(FilterAst::Lit(serde_json::Value::String("d".to_string()))),
+    let ast2 = Expr::Ne(
+        Box::new(Expr::Field(field_unwrap!("c"))),
+        Box::new(Expr::Literal(serde_json::Value::String("d".to_string()))),
     );
 
     check_default(
         vec![S::Filter(ast1.clone()), S::Filter(ast2.clone())],
-        vec![S::Filter(FilterAst::And(vec![ast1, ast2]))],
+        vec![S::Filter(Expr::And(Box::new(ast1), Box::new(ast2)))],
     );
 }
 
@@ -132,9 +148,9 @@ fn dont_remove_sorts_before_limit_before_count() {
 
 #[test]
 fn filter_into_union() {
-    let filter = S::Filter(FilterAst::Eq(
-        Box::new(FilterAst::Id("a".to_string())),
-        Box::new(FilterAst::Lit(serde_json::Value::String("b".to_string()))),
+    let filter = S::Filter(Expr::Eq(
+        Box::new(Expr::Field(field_unwrap!("a"))),
+        Box::new(Expr::Literal(serde_json::Value::String("b".to_string()))),
     ));
 
     check_default(
@@ -146,8 +162,8 @@ fn filter_into_union() {
 #[test]
 fn project_into_union() {
     let project = S::Project(vec![ProjectField {
-        from: ProjectAst::Id("a".to_string()),
-        to: "b".to_string(),
+        from: Expr::Field(field_unwrap!("a")),
+        to: field_unwrap!("b"),
     }]);
 
     check_default(
@@ -159,8 +175,8 @@ fn project_into_union() {
 #[test]
 fn extend_into_union() {
     let extend = S::Extend(vec![ProjectField {
-        from: ProjectAst::Id("a".to_string()),
-        to: "b".to_string(),
+        from: Expr::Field(field_unwrap!("a")),
+        to: field_unwrap!("b"),
     }]);
 
     check_default(
@@ -185,7 +201,7 @@ fn limit_into_union() {
 #[test]
 fn topn_into_union() {
     let sorts = vec![Sort {
-        by: "a".to_string(),
+        by: field_unwrap!("a"),
         order: SortOrder::Asc,
         nulls: NullsOrder::Last,
     }];
@@ -203,31 +219,34 @@ fn topn_into_union() {
 #[test]
 fn summarize_into_union() {
     let original = S::Summarize(Summarize {
-        aggs: btreemap! {
-            "c".to_string() => Aggregation::Count,
-            "s".to_string() => Aggregation::Sum("y".to_string()),
-            "d".to_string() => Aggregation::DCount("x".to_string()),
-            "dd".to_string() => Aggregation::DCount("z".to_string()),
+        aggs: hashmap! {
+            field_unwrap!("c") => Aggregation::Count,
+            field_unwrap!("s") => Aggregation::Sum(field_unwrap!("y")),
+            field_unwrap!("d") => Aggregation::DCount(field_unwrap!("x")),
+            field_unwrap!("dd") => Aggregation::DCount(field_unwrap!("z")),
         },
-        by: vec![GroupAst::Id("x".to_string())],
+        by: vec![Expr::Field(field_unwrap!("x"))],
     });
 
     let partial = S::Summarize(Summarize {
-        aggs: btreemap! {
-            "c".to_string() => Aggregation::Count,
-            "s".to_string() => Aggregation::Sum("y".to_string()),
+        aggs: hashmap! {
+            field_unwrap!("c") => Aggregation::Count,
+            field_unwrap!("s") => Aggregation::Sum(field_unwrap!("y")),
         },
-        by: vec![GroupAst::Id("x".to_string()), GroupAst::Id("z".to_string())],
+        by: vec![
+            Expr::Field(field_unwrap!("x")),
+            Expr::Field(field_unwrap!("z")),
+        ],
     });
 
     let post = S::MuxSummarize(Summarize {
-        aggs: btreemap! {
-            "c".to_string() => Aggregation::Sum("c".to_string()),
-            "s".to_string() => Aggregation::Sum("s".to_string()),
-            "d".to_string() => Aggregation::DCount("x".to_string()),
-            "dd".to_string() => Aggregation::DCount("z".to_string()),
+        aggs: hashmap! {
+            field_unwrap!("c") => Aggregation::Sum(field_unwrap!("c")),
+            field_unwrap!("s") => Aggregation::Sum(field_unwrap!("s")),
+            field_unwrap!("d") => Aggregation::DCount(field_unwrap!("x")),
+            field_unwrap!("dd") => Aggregation::DCount(field_unwrap!("z")),
         },
-        by: vec![GroupAst::Id("x".to_string())],
+        by: vec![Expr::Field(field_unwrap!("x"))],
     });
 
     check_default(
@@ -242,9 +261,9 @@ fn summarize_into_union() {
 
 #[test]
 fn reorder_filter_before_sort() {
-    let filter = S::Filter(FilterAst::Eq(
-        Box::new(FilterAst::Id("a".to_string())),
-        Box::new(FilterAst::Lit(serde_json::Value::String("b".to_string()))),
+    let filter = S::Filter(Expr::Eq(
+        Box::new(Expr::Field(field_unwrap!("a"))),
+        Box::new(Expr::Literal(serde_json::Value::String("b".to_string()))),
     ));
     check_default(
         vec![S::Sort(vec![]), S::Sort(vec![]), filter.clone()],
@@ -254,9 +273,9 @@ fn reorder_filter_before_sort() {
 
 #[test]
 fn reorder_filter_before_mux() {
-    let filter = S::Filter(FilterAst::Eq(
-        Box::new(FilterAst::Id("a".to_string())),
-        Box::new(FilterAst::Lit(serde_json::Value::String("b".to_string()))),
+    let filter = S::Filter(Expr::Eq(
+        Box::new(Expr::Field(field_unwrap!("a"))),
+        Box::new(Expr::Literal(serde_json::Value::String("b".to_string()))),
     ));
     check_default(vec![S::MuxCount, filter.clone()], vec![filter, S::MuxCount]);
 }

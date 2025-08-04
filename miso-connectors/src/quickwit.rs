@@ -1,6 +1,6 @@
 use std::{
     any::Any,
-    collections::{BTreeMap, HashMap},
+    collections::HashMap,
     fmt,
     sync::{Arc, Weak},
     time::{Duration, Instant},
@@ -18,10 +18,10 @@ use miso_common::{
     shutdown_future::ShutdownFuture,
 };
 use miso_workflow_types::{
-    filter::FilterAst,
+    expr::Expr,
     log::{Log, LogTryStream},
     sort::Sort,
-    summarize::{Aggregation, GroupAst, Summarize},
+    summarize::{Aggregation, Summarize},
 };
 use parking_lot::RwLock;
 use reqwest::{Client, RequestBuilder, Response};
@@ -321,7 +321,7 @@ struct QuickwitIndex {
     timestamp_field: Option<String>,
 }
 
-type QuickwitIndexes = BTreeMap<String, QuickwitIndex>;
+type QuickwitIndexes = HashMap<String, QuickwitIndex>;
 
 #[derive(Debug)]
 pub struct QuickwitConnector {
@@ -359,56 +359,55 @@ impl<'de> Deserialize<'de> for QuickwitConnector {
     }
 }
 
-fn filter_ast_to_query(ast: &FilterAst) -> Option<Value> {
-    Some(match ast {
-        FilterAst::Or(filters) => {
+fn compile_filter_ast(expr: &Expr) -> Option<Value> {
+    Some(match expr {
+        Expr::Or(left, right) => {
             json!({
                 "bool": {
-                    "should": filters.iter()
-                        .map(filter_ast_to_query)
+                    "should": vec![left, right]
+                        .into_iter()
+                        .map(|x| compile_filter_ast(x))
                         .collect::<Option<Vec<_>>>()?,
                 }
             })
         }
-        FilterAst::And(filters) => {
+        Expr::And(left, right) => {
             json!({
                 "bool": {
-                    "must": filters.iter()
-                        .map(filter_ast_to_query)
+                    "must": vec![left, right]
+                        .into_iter()
+                        .map(|x| compile_filter_ast(x))
                         .collect::<Option<Vec<_>>>()?,
                 }
             })
         }
-        FilterAst::Not(filter) => {
+        Expr::Not(expr) => {
             json!({
                 "bool": {
-                    "must_not": filter_ast_to_query(filter)?,
+                    "must_not": compile_filter_ast(expr)?,
                 }
             })
         }
-        FilterAst::Exists(field) => {
-            if field.find('[').is_some() {
-                return None;
-            }
+        Expr::Exists(field) if !field.has_array_access() => {
             json!({
                 "exists": {
                     "field": field,
                 }
             })
         }
-        FilterAst::In(lhs, rhs) => {
-            let FilterAst::Id(field) = &**lhs else {
+        Expr::In(lhs, rhs) => {
+            let Expr::Field(field) = &**lhs else {
                 return None;
             };
-            if field.find('[').is_some() {
+            if field.has_array_access() {
                 return None;
             }
 
             let values = rhs
                 .iter()
                 .map(|x| match x {
-                    FilterAst::Lit(Value::String(v)) => Some(v.clone()),
-                    FilterAst::Lit(value) => Some(value.to_string()),
+                    Expr::Literal(Value::String(v)) => Some(v.clone()),
+                    Expr::Literal(value) => Some(value.to_string()),
                     _ => None,
                 })
                 .collect::<Option<Vec<_>>>()?;
@@ -419,11 +418,11 @@ fn filter_ast_to_query(ast: &FilterAst) -> Option<Value> {
                 }
             })
         }
-        FilterAst::StartsWith(lhs, rhs) => {
-            let (FilterAst::Id(field), FilterAst::Lit(prefix)) = (&**lhs, &**rhs) else {
+        Expr::StartsWith(lhs, rhs) => {
+            let (Expr::Field(field), Expr::Literal(prefix)) = (&**lhs, &**rhs) else {
                 return None;
             };
-            if field.find('[').is_some() {
+            if field.has_array_access() {
                 return None;
             }
             json!({
@@ -438,11 +437,11 @@ fn filter_ast_to_query(ast: &FilterAst) -> Option<Value> {
                 }
             })
         }
-        FilterAst::HasCs(lhs, rhs) => {
-            let (FilterAst::Id(field), FilterAst::Lit(phrase)) = (&**lhs, &**rhs) else {
+        Expr::HasCs(lhs, rhs) => {
+            let (Expr::Field(field), Expr::Literal(phrase)) = (&**lhs, &**rhs) else {
                 return None;
             };
-            if field.find('[').is_some() {
+            if field.has_array_access() {
                 return None;
             }
             json!({
@@ -455,11 +454,11 @@ fn filter_ast_to_query(ast: &FilterAst) -> Option<Value> {
                 }
             })
         }
-        FilterAst::Eq(lhs, rhs) => {
-            let (FilterAst::Id(field), FilterAst::Lit(value)) = (&**lhs, &**rhs) else {
+        Expr::Eq(lhs, rhs) => {
+            let (Expr::Field(field), Expr::Literal(value)) = (&**lhs, &**rhs) else {
                 return None;
             };
-            if field.find('[').is_some() {
+            if field.has_array_access() {
                 return None;
             }
             json!({
@@ -474,11 +473,11 @@ fn filter_ast_to_query(ast: &FilterAst) -> Option<Value> {
                 }
             })
         }
-        FilterAst::Ne(lhs, rhs) => {
-            let (FilterAst::Id(field), FilterAst::Lit(value)) = (&**lhs, &**rhs) else {
+        Expr::Ne(lhs, rhs) => {
+            let (Expr::Field(field), Expr::Literal(value)) = (&**lhs, &**rhs) else {
                 return None;
             };
-            if field.find('[').is_some() {
+            if field.has_array_access() {
                 return None;
             }
             json!({
@@ -495,11 +494,11 @@ fn filter_ast_to_query(ast: &FilterAst) -> Option<Value> {
                 }
             })
         }
-        FilterAst::Gt(lhs, rhs) => {
-            let (FilterAst::Id(field), FilterAst::Lit(value)) = (&**lhs, &**rhs) else {
+        Expr::Gt(lhs, rhs) => {
+            let (Expr::Field(field), Expr::Literal(value)) = (&**lhs, &**rhs) else {
                 return None;
             };
-            if field.find('[').is_some() {
+            if field.has_array_access() {
                 return None;
             }
             json!({
@@ -514,11 +513,11 @@ fn filter_ast_to_query(ast: &FilterAst) -> Option<Value> {
                 }
             })
         }
-        FilterAst::Gte(lhs, rhs) => {
-            let (FilterAst::Id(field), FilterAst::Lit(value)) = (&**lhs, &**rhs) else {
+        Expr::Gte(lhs, rhs) => {
+            let (Expr::Field(field), Expr::Literal(value)) = (&**lhs, &**rhs) else {
                 return None;
             };
-            if field.find('[').is_some() {
+            if field.has_array_access() {
                 return None;
             }
             json!({
@@ -533,11 +532,11 @@ fn filter_ast_to_query(ast: &FilterAst) -> Option<Value> {
                 }
             })
         }
-        FilterAst::Lt(lhs, rhs) => {
-            let (FilterAst::Id(field), FilterAst::Lit(value)) = (&**lhs, &**rhs) else {
+        Expr::Lt(lhs, rhs) => {
+            let (Expr::Field(field), Expr::Literal(value)) = (&**lhs, &**rhs) else {
                 return None;
             };
-            if field.find('[').is_some() {
+            if field.has_array_access() {
                 return None;
             }
             json!({
@@ -552,11 +551,11 @@ fn filter_ast_to_query(ast: &FilterAst) -> Option<Value> {
                 }
             })
         }
-        FilterAst::Lte(lhs, rhs) => {
-            let (FilterAst::Id(field), FilterAst::Lit(value)) = (&**lhs, &**rhs) else {
+        Expr::Lte(lhs, rhs) => {
+            let (Expr::Field(field), Expr::Literal(value)) = (&**lhs, &**rhs) else {
                 return None;
             };
-            if field.find('[').is_some() {
+            if field.has_array_access() {
                 return None;
             }
             json!({
@@ -734,7 +733,7 @@ async fn refresh_indexes_at_interval(
 
 impl QuickwitConnector {
     pub fn new(config: QuickwitConfig) -> QuickwitConnector {
-        let indexes = Arc::new(RwLock::new(BTreeMap::new()));
+        let indexes = Arc::new(RwLock::new(HashMap::new()));
         let interval_task = ShutdownFuture::new(
             refresh_indexes_at_interval(config.clone(), Arc::downgrade(&indexes)),
             "Quickwit indexes refresher",
@@ -961,7 +960,7 @@ impl Connector for QuickwitConnector {
         collections.dedup();
         let collections = collections.join(",");
 
-        let mut query_map = BTreeMap::new();
+        let mut query_map = HashMap::new();
 
         if !handle.queries.is_empty() {
             query_map.insert(
@@ -1014,10 +1013,10 @@ impl Connector for QuickwitConnector {
             return Ok(QueryResponse::Count(result));
         }
 
-        if let Some(limit) = limit {
-            if limit == 0 {
-                return Ok(QueryResponse::Logs(Box::pin(stream::empty())));
-            }
+        if let Some(limit) = limit
+            && limit == 0
+        {
+            return Ok(QueryResponse::Logs(Box::pin(stream::empty())));
         }
 
         if is_aggregation_query {
@@ -1049,25 +1048,21 @@ impl Connector for QuickwitConnector {
         ))
     }
 
-    fn apply_filter(
-        &self,
-        ast: &FilterAst,
-        handle: &dyn QueryHandle,
-    ) -> Option<Box<dyn QueryHandle>> {
+    fn apply_filter(&self, ast: &Expr, handle: &dyn QueryHandle) -> Option<Box<dyn QueryHandle>> {
         let handle = downcast_unwrap!(handle, QuickwitHandle);
         if handle.sorts.is_some() || !handle.group_by.is_empty() {
             // Cannot filter over top-n / group by in Quickwit.
             return None;
         }
-        Some(Box::new(handle.with_filter(filter_ast_to_query(ast)?)))
+        Some(Box::new(handle.with_filter(compile_filter_ast(ast)?)))
     }
 
     fn apply_limit(&self, mut max: u32, handle: &dyn QueryHandle) -> Option<Box<dyn QueryHandle>> {
         let handle = downcast_unwrap!(handle, QuickwitHandle);
-        if let Some(limit) = handle.limit {
-            if limit < max {
-                max = limit;
-            }
+        if let Some(limit) = handle.limit
+            && limit < max
+        {
+            max = limit;
         }
         Some(Box::new(handle.with_limit(max)))
     }
@@ -1091,18 +1086,19 @@ impl Connector for QuickwitConnector {
             return None;
         }
 
-        if let Some(limit) = handle.limit {
-            if limit < max {
-                max = limit;
-            }
+        if let Some(limit) = handle.limit
+            && limit < max
+        {
+            max = limit;
         }
 
         let sorts = Value::Array(
             sorts
                 .iter()
                 .map(|sort| {
+                    let sort_by_str = sort.by.to_string();
                     json!({
-                        &sort.by: {
+                        sort_by_str: {
                             "order": &sort.order,
                             "nulls": &sort.nulls,
                         }
@@ -1139,7 +1135,7 @@ impl Connector for QuickwitConnector {
         }
 
         let mut count_fields = Vec::new();
-        let mut inner_aggs = BTreeMap::new();
+        let mut inner_aggs = HashMap::new();
 
         for (output_field, agg) in &config.aggs {
             let value = match agg {
@@ -1166,7 +1162,7 @@ impl Connector for QuickwitConnector {
                 }
                 Aggregation::Count => {
                     // Count is always returned in doc_count.
-                    count_fields.push(output_field.clone());
+                    count_fields.push(output_field.to_string());
                     continue;
                 }
 
@@ -1180,10 +1176,10 @@ impl Connector for QuickwitConnector {
         let mut aggs = json!({});
 
         let mut current_agg = &mut aggs;
-        for (i, ast) in config.by.iter().enumerate() {
+        for (i, expr) in config.by.iter().enumerate() {
             let name = format!("{AGGREGATION_RESULTS_NAME}_{i}");
-            let nested_agg = match ast {
-                GroupAst::Id(field) => json!({
+            let nested_agg = match expr {
+                Expr::Field(field) => json!({
                         &name: {
                             "terms": {
                                 "field": field,
@@ -1191,14 +1187,24 @@ impl Connector for QuickwitConnector {
                             }
                         }
                 }),
-                GroupAst::Bin(field, value) => json!({
-                        &name: {
-                            "histogram": {
-                                "field": field,
-                                "interval": value,
+                Expr::Bin(lhs, rhs) => {
+                    let Expr::Field(field) = &**lhs else {
+                        return None;
+                    };
+                    let Expr::Literal(value) = &**rhs else {
+                        return None;
+                    };
+
+                    json!({
+                            &name: {
+                                "histogram": {
+                                    "field": field,
+                                    "interval": value,
+                                }
                             }
-                        }
-                }),
+                    })
+                }
+                _ => return None,
             };
             current_agg["aggs"] = nested_agg;
             current_agg = current_agg.get_mut("aggs").unwrap().get_mut(&name).unwrap();
@@ -1211,8 +1217,16 @@ impl Connector for QuickwitConnector {
         let group_by = config
             .by
             .iter()
-            .map(|ast| ast.field().to_string())
-            .collect();
+            .map(|expr| match expr {
+                Expr::Field(field) => Some(field.to_string()),
+                Expr::Bin(lhs, _) => match &**lhs {
+                    Expr::Field(field) => Some(field.to_string()),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect::<Option<Vec<_>>>()?;
+
         Some(Box::new(handle.with_summarize(
             aggs,
             group_by,

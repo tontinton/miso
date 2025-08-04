@@ -1,12 +1,16 @@
 [package]
-name = "miso-workflow-types"
+name = "miso-kql"
 version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+chumsky.workspace = true
 color-eyre.workspace = true
-futures-util.workspace = true
 hashbrown.workspace = true
+logos.workspace = true
+miso-workflow-types.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-thiserror.workspace = true
+
+[dev-dependencies]
+test-case.workspace = true

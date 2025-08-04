@@ -29,6 +29,7 @@ axum.workspace = true
 bon.workspace = true
 collection_macros.workspace = true
 ctor.workspace = true
+miso-kql.workspace = true
 miso-optimizations.workspace = true
 miso-server.workspace = true
 miso-workflow.workspace = true
