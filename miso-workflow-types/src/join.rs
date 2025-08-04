@@ -2,6 +2,8 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
+use crate::field::Field;
+
 #[derive(Debug, Serialize, Deserialize, Default, Clone, Copy, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum JoinType {
@@ -29,7 +31,7 @@ fn default_partitions() -> usize {
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Join {
-    pub on: (String, String),
+    pub on: (Field, Field),
 
     #[serde(default, rename = "type")]
     pub type_: JoinType,

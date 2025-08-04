@@ -2,6 +2,8 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
+use crate::field::Field;
+
 #[derive(Debug, Serialize, Deserialize, Default, PartialEq, Clone)]
 #[serde(rename_all = "snake_case")]
 pub enum SortOrder {
@@ -20,7 +22,7 @@ pub enum NullsOrder {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Sort {
-    pub by: String,
+    pub by: Field,
 
     #[serde(default)]
     pub order: SortOrder,

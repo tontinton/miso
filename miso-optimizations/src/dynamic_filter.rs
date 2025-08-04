@@ -46,12 +46,18 @@ impl Optimization for DynamicFilter {
             &[]
         };
 
-        let left_dcount =
-            calculate_max_distinct_count(left_join_field, left_scan, left_steps_after_scan)
-                .unwrap_or(self.max_distinct_values);
-        let right_dcount =
-            calculate_max_distinct_count(right_join_field, right_scan, right_steps_after_scan)
-                .unwrap_or(self.max_distinct_values);
+        let left_dcount = calculate_max_distinct_count(
+            left_join_field.to_string(),
+            left_scan,
+            left_steps_after_scan,
+        )
+        .unwrap_or(self.max_distinct_values);
+        let right_dcount = calculate_max_distinct_count(
+            right_join_field.to_string(),
+            right_scan,
+            right_steps_after_scan,
+        )
+        .unwrap_or(self.max_distinct_values);
 
         if left_dcount >= self.max_distinct_values && right_dcount >= self.max_distinct_values {
             return None;
@@ -87,7 +93,7 @@ impl Optimization for DynamicFilter {
 }
 
 fn calculate_max_distinct_count(
-    join_field: &str,
+    join_field: String,
     scan: &Scan,
     steps_after_scan: &[WorkflowStep],
 ) -> Option<u32> {
@@ -109,7 +115,7 @@ fn calculate_max_distinct_count(
                     return None;
                 }
                 prev_dcount = dcount.take();
-                fields = summarize.by.iter().map(|x| x.field()).collect();
+                fields = summarize.by.iter().map(|x| x.to_string()).collect();
             }
 
             WorkflowStep::Sort(..) | WorkflowStep::Filter(..) => {}

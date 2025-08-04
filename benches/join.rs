@@ -1,6 +1,10 @@
+use std::str::FromStr;
+
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use miso_workflow::join::join_iter;
 use miso_workflow_types::{
+    field::Field,
+    field_unwrap,
     join::{Join, JoinType},
     log::Log,
 };
@@ -48,13 +52,14 @@ fn run_join(config: Join, iter: impl Iterator<Item = (bool, Log)>) -> usize {
 
 fn bench_join_various_sizes(c: &mut Criterion) {
     let mut group = c.benchmark_group("join_streams_sizes");
+    let field = field_unwrap!(JOIN_KEY);
     for size in [100, 1000, 10000].iter() {
         group.bench_with_input(BenchmarkId::from_parameter(size), size, |b, &size| {
             b.iter(|| {
                 let iter = create_test_stream(size, size, JOIN_KEY);
                 let config = Join {
                     type_: JoinType::Inner,
-                    on: (JOIN_KEY.to_string(), JOIN_KEY.to_string()),
+                    on: (field.clone(), field.clone()),
                     ..Default::default()
                 };
                 run_join(config, iter)
@@ -66,6 +71,7 @@ fn bench_join_various_sizes(c: &mut Criterion) {
 
 fn bench_join_different_ratios(c: &mut Criterion) {
     let mut group = c.benchmark_group("join_streams_ratios");
+    let field = field_unwrap!(JOIN_KEY);
     let base_size = 1000;
     for ratio in [1, 5, 10].iter() {
         group.bench_with_input(BenchmarkId::from_parameter(ratio), ratio, |b, &ratio| {
@@ -73,7 +79,7 @@ fn bench_join_different_ratios(c: &mut Criterion) {
                 let iter = create_test_stream(base_size, base_size * ratio, JOIN_KEY);
                 let config = Join {
                     type_: JoinType::Inner,
-                    on: (JOIN_KEY.to_string(), JOIN_KEY.to_string()),
+                    on: (field.clone(), field.clone()),
                     ..Default::default()
                 };
                 run_join(config, iter)
@@ -85,6 +91,7 @@ fn bench_join_different_ratios(c: &mut Criterion) {
 
 fn bench_join_types(c: &mut Criterion) {
     let mut group = c.benchmark_group("join_streams_types");
+    let field = field_unwrap!(JOIN_KEY);
     let join_types = [
         JoinType::Inner,
         JoinType::Outer,
@@ -101,7 +108,7 @@ fn bench_join_types(c: &mut Criterion) {
                     let iter = create_test_stream(1000, 1000, JOIN_KEY);
                     let config = Join {
                         type_: *join_type,
-                        on: (JOIN_KEY.to_string(), JOIN_KEY.to_string()),
+                        on: (field.clone(), field.clone()),
                         ..Default::default()
                     };
                     run_join(config, iter)

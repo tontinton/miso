@@ -9,7 +9,7 @@ use futures_util::{
 };
 use kinded::Kinded;
 use miso_workflow_types::{
-    filter::FilterAst,
+    expr::Expr,
     join::{Join, JoinType},
     log::{Log, LogItem, LogIter, LogStream, LogTryStream},
     project::ProjectField,
@@ -70,7 +70,7 @@ pub enum WorkflowStep {
     Scan(Scan),
 
     /// Filter some records.
-    Filter(FilterAst),
+    Filter(Expr),
 
     /// Project to select only some of the fields, and optionally rename some.
     Project(Vec<ProjectField>),
@@ -202,7 +202,7 @@ impl WorkflowStep {
                 async_tasks.extend(inner_async_tasks);
                 rxs_to_iter(rxs)
             }
-            WorkflowStep::Filter(ast) => Box::new(FilterIter::new(rx.into_iter(), ast)),
+            WorkflowStep::Filter(expr) => Box::new(FilterIter::new(rx.into_iter(), expr)),
             WorkflowStep::Project(fields) => {
                 Box::new(ProjectIter::new_project(rx.into_iter(), fields))
             }

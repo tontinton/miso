@@ -1,0 +1,634 @@
+use std::str::FromStr;
+use test_case::test_case;
+
+use miso_workflow_types::{
+    expr::{CastType, Expr},
+    field::Field,
+    field_unwrap,
+    join::JoinType,
+    query::QueryStep,
+    sort::{NullsOrder, SortOrder},
+    summarize::Aggregation,
+};
+use serde_json::Value;
+
+use crate::parse;
+
+macro_rules! parse_unwrap {
+    ($expr:expr) => {
+        parse($expr).unwrap_or_else(|e| panic!("failed to parse query {:?}: {:?}", $expr, e))
+    };
+}
+
+#[test]
+fn test_simple_scan() {
+    let query = "connector.table";
+    let result = parse_unwrap!(query);
+
+    assert_eq!(result.len(), 1);
+    match &result[0] {
+        QueryStep::Scan(connector, table) => {
+            assert_eq!(connector, "connector");
+            assert_eq!(table, "table");
+        }
+        _ => panic!("Expected Scan step"),
+    }
+}
+
+#[test]
+fn test_scan_with_filter() {
+    let query = "connector.table | where field1 == \"value\"";
+    let result = parse_unwrap!(query);
+
+    assert_eq!(result.len(), 2);
+
+    match &result[0] {
+        QueryStep::Scan(connector, table) => {
+            assert_eq!(connector, "connector");
+            assert_eq!(table, "table");
+        }
+        _ => panic!("Expected Scan step"),
+    }
+
+    match &result[1] {
+        QueryStep::Filter(expr) => match expr {
+            Expr::Eq(left, right) => {
+                assert!(matches!(**left, Expr::Field(_)));
+                assert!(matches!(**right, Expr::Literal(Value::String(_))));
+            }
+            _ => panic!("Expected equality expression"),
+        },
+        _ => panic!("Expected Filter step"),
+    }
+}
+
+#[test_case("connector.table | where field1 > 10", "Gt")]
+#[test_case("connector.table | where field1 < 10", "Lt")]
+#[test_case("connector.table | where field1 >= 10", "Gte")]
+#[test_case("connector.table | where field1 <= 10", "Lte")]
+#[test_case("connector.table | where field1 != 10", "Ne")]
+fn test_filter_with_different_operators(query: &str, op_name: &str) {
+    let result = parse_unwrap!(query);
+    assert_eq!(result.len(), 2);
+
+    match &result[1] {
+        QueryStep::Filter(expr) => match expr {
+            Expr::Gt(_, _) if op_name == "Gt" => (),
+            Expr::Lt(_, _) if op_name == "Lt" => (),
+            Expr::Gte(_, _) if op_name == "Gte" => (),
+            Expr::Lte(_, _) if op_name == "Lte" => (),
+            Expr::Ne(_, _) if op_name == "Ne" => (),
+            _ => panic!("Expected {} expression for query: {}", op_name, query),
+        },
+        _ => panic!("Expected Filter step for query: {}", query),
+    }
+}
+
+#[test_case("connector.table | where field1 contains \"test\"", "contains")]
+#[test_case("connector.table | where field1 startswith \"test\"", "startswith")]
+#[test_case("connector.table | where field1 endswith \"test\"", "endswith")]
+#[test_case("connector.table | where field1 has \"test\"", "has")]
+#[test_case("connector.table | where field1 has_cs \"test\"", "has_cs")]
+fn test_filter_with_text_operations(query: &str, op_name: &str) {
+    let result = parse_unwrap!(query);
+    assert_eq!(result.len(), 2);
+
+    match &result[1] {
+        QueryStep::Filter(expr) => match expr {
+            Expr::Contains(_, _) if op_name == "contains" => (),
+            Expr::StartsWith(_, _) if op_name == "startswith" => (),
+            Expr::EndsWith(_, _) if op_name == "endswith" => (),
+            Expr::Has(_, _) if op_name == "has" => (),
+            Expr::HasCs(_, _) if op_name == "has_cs" => (),
+            _ => panic!("Expected {} expression for query: {}", op_name, query),
+        },
+        _ => panic!("Expected Filter step for query: {}", query),
+    }
+}
+
+#[test]
+fn test_filter_with_logical_operations() {
+    let query = "connector.table | where field1 == \"value\" and field2 > 10";
+    let result = parse_unwrap!(query);
+
+    match &result[1] {
+        QueryStep::Filter(expr) => match expr {
+            Expr::And(left, right) => {
+                assert!(matches!(**left, Expr::Eq(_, _)));
+                assert!(matches!(**right, Expr::Gt(_, _)));
+            }
+            _ => panic!("Expected And expression"),
+        },
+        _ => panic!("Expected Filter step"),
+    }
+
+    let query = "connector.table | where field1 == \"value\" or field2 > 10";
+    let result = parse_unwrap!(query);
+
+    match &result[1] {
+        QueryStep::Filter(expr) => match expr {
+            Expr::Or(left, right) => {
+                assert!(matches!(**left, Expr::Eq(_, _)));
+                assert!(matches!(**right, Expr::Gt(_, _)));
+            }
+            _ => panic!("Expected Or expression"),
+        },
+        _ => panic!("Expected Filter step"),
+    }
+}
+
+#[test]
+fn test_filter_with_in_expression() {
+    let query = "connector.table | where field1 in (\"a\", \"b\", \"c\")";
+    let result = parse_unwrap!(query);
+
+    match &result[1] {
+        QueryStep::Filter(expr) => match expr {
+            Expr::In(field_expr, values) => {
+                assert!(matches!(**field_expr, Expr::Field(_)));
+                assert_eq!(values.len(), 3);
+            }
+            _ => panic!("Expected In expression"),
+        },
+        _ => panic!("Expected Filter step"),
+    }
+}
+
+#[test]
+fn test_filter_with_exists() {
+    let query = "connector.table | where exists(field1)";
+    let result = parse_unwrap!(query);
+
+    match &result[1] {
+        QueryStep::Filter(expr) => match expr {
+            Expr::Exists(_) => (),
+            _ => panic!("Expected Exists expression"),
+        },
+        _ => panic!("Expected Filter step"),
+    }
+}
+
+#[test]
+fn test_filter_with_not() {
+    let query = "connector.table | where not(field1 == \"value\")";
+    let result = parse_unwrap!(query);
+
+    match &result[1] {
+        QueryStep::Filter(expr) => match expr {
+            Expr::Not(inner) => {
+                assert!(matches!(**inner, Expr::Eq(_, _)));
+            }
+            _ => panic!("Expected Not expression"),
+        },
+        _ => panic!("Expected Filter step"),
+    }
+}
+
+#[test_case(
+    "connector.table | where tostring(field1) == \"test\"",
+    CastType::String
+)]
+#[test_case("connector.table | where toint(field1) == 42", CastType::Int)]
+#[test_case("connector.table | where tolong(field1) == 42", CastType::Int)]
+#[test_case("connector.table | where toreal(field1) == 3.14", CastType::Float)]
+#[test_case("connector.table | where todecimal(field1) == 3.14", CastType::Float)]
+#[test_case("connector.table | where tobool(field1) == true", CastType::Bool)]
+fn test_filter_with_cast_operations(query: &str, expected_cast_type: CastType) {
+    let result = parse_unwrap!(query);
+
+    match &result[1] {
+        QueryStep::Filter(expr) => match expr {
+            Expr::Eq(left, _) => match &**left {
+                Expr::Cast(cast_type, _) => {
+                    assert_eq!(*cast_type, expected_cast_type);
+                }
+                _ => panic!("Expected Cast expression in left side"),
+            },
+            _ => panic!("Expected Eq expression"),
+        },
+        _ => panic!("Expected Filter step"),
+    }
+}
+
+#[test]
+fn test_filter_with_bin_operation() {
+    let query = "connector.table | where bin(field1, 10) == 5";
+    let result = parse_unwrap!(query);
+
+    match &result[1] {
+        QueryStep::Filter(expr) => match expr {
+            Expr::Eq(left, _) => match &**left {
+                Expr::Bin(_, _) => (),
+                _ => panic!("Expected Bin expression"),
+            },
+            _ => panic!("Expected Eq expression"),
+        },
+        _ => panic!("Expected Filter step"),
+    }
+}
+
+#[test]
+fn test_project() {
+    let query = "connector.table | project field1, field2 = field3 + 1";
+    let result = parse_unwrap!(query);
+
+    match &result[1] {
+        QueryStep::Project(fields) => {
+            assert_eq!(fields.len(), 2);
+
+            assert_eq!(fields[0].to, field_unwrap!("field1"));
+            assert!(matches!(fields[0].from, Expr::Field(_)));
+
+            assert_eq!(fields[1].to, field_unwrap!("field2"));
+            assert!(matches!(fields[1].from, Expr::Plus(_, _)));
+        }
+        _ => panic!("Expected Project step"),
+    }
+}
+
+#[test]
+fn test_extend() {
+    let query = "connector.table | extend newfield = field1 + field2";
+    let result = parse_unwrap!(query);
+
+    match &result[1] {
+        QueryStep::Extend(fields) => {
+            assert_eq!(fields.len(), 1);
+            assert_eq!(fields[0].to, field_unwrap!("newfield"));
+            assert!(matches!(fields[0].from, Expr::Plus(_, _)));
+        }
+        _ => panic!("Expected Extend step"),
+    }
+}
+
+#[test_case("connector.table | limit 100", 100)]
+#[test_case("connector.table | take 50", 50)]
+fn test_limit(query: &str, expected_limit: u32) {
+    let result = parse_unwrap!(query);
+
+    match &result[1] {
+        QueryStep::Limit(n) => {
+            assert_eq!(*n, expected_limit);
+        }
+        _ => panic!("Expected Limit step"),
+    }
+}
+
+#[test]
+fn test_sort() {
+    let query = "connector.table | sort by field1 asc, field2 desc";
+    let result = parse_unwrap!(query);
+
+    match &result[1] {
+        QueryStep::Sort(sorts) => {
+            assert_eq!(sorts.len(), 2);
+
+            assert_eq!(sorts[0].by, field_unwrap!("field1"));
+            assert_eq!(sorts[0].order, SortOrder::Asc);
+
+            assert_eq!(sorts[1].by, field_unwrap!("field2"));
+            assert_eq!(sorts[1].order, SortOrder::Desc);
+        }
+        _ => panic!("Expected Sort step"),
+    }
+}
+
+#[test]
+fn test_sort_with_nulls() {
+    let query = "connector.table | sort by field1 asc nulls first, field2 desc nulls last";
+    let result = parse_unwrap!(query);
+
+    match &result[1] {
+        QueryStep::Sort(sorts) => {
+            assert_eq!(sorts.len(), 2);
+
+            assert_eq!(sorts[0].nulls, NullsOrder::First);
+            assert_eq!(sorts[1].nulls, NullsOrder::Last);
+        }
+        _ => panic!("Expected Sort step"),
+    }
+}
+
+#[test]
+fn test_top() {
+    let query = "connector.table | top 10 by field1 desc";
+    let result = parse_unwrap!(query);
+
+    match &result[1] {
+        QueryStep::Top(sorts, limit) => {
+            assert_eq!(*limit, 10);
+            assert_eq!(sorts.len(), 1);
+            assert_eq!(sorts[0].by, field_unwrap!("field1"));
+            assert_eq!(sorts[0].order, SortOrder::Desc);
+        }
+        _ => panic!("Expected Top step"),
+    }
+}
+
+#[test]
+fn test_summarize() {
+    let query = "connector.table | summarize cnt = count(), total = sum(field1) by field2";
+    let result = parse_unwrap!(query);
+
+    match &result[1] {
+        QueryStep::Summarize(summarize) => {
+            assert_eq!(summarize.aggs.len(), 2);
+            assert_eq!(summarize.by.len(), 1);
+
+            assert!(matches!(
+                summarize.aggs.get(&field_unwrap!("cnt")),
+                Some(Aggregation::Count)
+            ));
+            assert!(matches!(
+                summarize.aggs.get(&field_unwrap!("total")),
+                Some(Aggregation::Sum(_))
+            ));
+
+            assert!(matches!(summarize.by[0], Expr::Field(_)));
+        }
+        _ => panic!("Expected Summarize step"),
+    }
+}
+
+#[test_case("count()", "Count")]
+#[test_case("dcount(field1)", "DCount")]
+#[test_case("sum(field1)", "Sum")]
+#[test_case("min(field1)", "Min")]
+#[test_case("max(field1)", "Max")]
+fn test_summarize_aggregations(agg_expr: &str, agg_name: &str) {
+    let query = format!("connector.table | summarize result = {}", agg_expr);
+    let result = parse_unwrap!(&query);
+
+    match &result[1] {
+        QueryStep::Summarize(summarize) => {
+            let agg = summarize.aggs.get(&field_unwrap!("result")).unwrap();
+            match agg {
+                Aggregation::Count if agg_name == "Count" => (),
+                Aggregation::DCount(_) if agg_name == "DCount" => (),
+                Aggregation::Sum(_) if agg_name == "Sum" => (),
+                Aggregation::Min(_) if agg_name == "Min" => (),
+                Aggregation::Max(_) if agg_name == "Max" => (),
+                _ => panic!("Expected {} aggregation", agg_name),
+            }
+        }
+        _ => panic!("Expected Summarize step"),
+    }
+}
+
+#[test]
+fn test_distinct() {
+    let query = "connector.table | distinct field1, field2";
+    let result = parse_unwrap!(query);
+
+    match &result[1] {
+        QueryStep::Distinct(fields) => {
+            assert_eq!(fields.len(), 2);
+            assert_eq!(fields[0], field_unwrap!("field1"));
+            assert_eq!(fields[1], field_unwrap!("field2"));
+        }
+        _ => panic!("Expected Distinct step"),
+    }
+}
+
+#[test]
+fn test_count() {
+    let query = "connector.table | count";
+    let result = parse_unwrap!(query);
+
+    match &result[1] {
+        QueryStep::Count => (),
+        _ => panic!("Expected Count step"),
+    }
+}
+
+#[test]
+fn test_union() {
+    let query = "connector.table | union (other.table | where field1 > 10)";
+    let result = parse_unwrap!(query);
+
+    match &result[1] {
+        QueryStep::Union(sub_query) => {
+            assert_eq!(sub_query.len(), 2);
+            assert!(matches!(sub_query[0], QueryStep::Scan(_, _)));
+            assert!(matches!(sub_query[1], QueryStep::Filter(_)));
+        }
+        _ => panic!("Expected Union step"),
+    }
+}
+
+#[test_case("$left.field1 == $right.field2", "field1", "field2")]
+#[test_case("$right.field1 == $left.field2", "field2", "field1")]
+#[test_case("some.field", "some.field", "some.field")]
+fn test_join(join: &str, expected_left: &str, expected_right: &str) {
+    let query = format!(
+        "connector.table | join kind=inner (other.table) on {}",
+        join
+    );
+    let result = parse_unwrap!(&query);
+
+    match &result[1] {
+        QueryStep::Join(join, sub_query) => {
+            assert_eq!(join.type_, JoinType::Inner);
+            assert_eq!(join.partitions, 1);
+            assert_eq!(join.on.0, field_unwrap!(expected_left));
+            assert_eq!(join.on.1, field_unwrap!(expected_right));
+            assert_eq!(sub_query.len(), 1);
+            assert!(matches!(sub_query[0], QueryStep::Scan(_, _)));
+        }
+        _ => panic!("Expected Join step"),
+    }
+}
+
+#[test_case("inner", JoinType::Inner)]
+#[test_case("outer", JoinType::Outer)]
+#[test_case("left", JoinType::Left)]
+#[test_case("right", JoinType::Right)]
+fn test_join_types(join_type_str: &str, expected_type: JoinType) {
+    let query = format!(
+        "connector.table | join kind={} (other.table) on $left.field1 == $right.field2",
+        join_type_str
+    );
+    let result = parse_unwrap!(&query);
+
+    match &result[1] {
+        QueryStep::Join(join, _) => {
+            assert_eq!(join.type_, expected_type);
+        }
+        _ => panic!("Expected Join step"),
+    }
+}
+
+#[test]
+fn test_join_with_partitions() {
+    let query = "connector.table | join kind=inner hint.partitions=4 (other.table) on $left.field1 == $right.field2";
+    let result = parse_unwrap!(query);
+
+    match &result[1] {
+        QueryStep::Join(join, _) => {
+            assert_eq!(join.partitions, 4);
+        }
+        _ => panic!("Expected Join step"),
+    }
+}
+
+#[test]
+fn test_field_with_array_access() {
+    let query = "connector.table | where field1[0] == \"value\"";
+    let result = parse_unwrap!(query);
+
+    match &result[1] {
+        QueryStep::Filter(expr) => match expr {
+            Expr::Eq(left, _) => match &**left {
+                Expr::Field(field) => {
+                    assert_eq!(field, &field_unwrap!("field1[0]"));
+                }
+                _ => panic!("Expected Field expression"),
+            },
+            _ => panic!("Expected Eq expression"),
+        },
+        _ => panic!("Expected Filter step"),
+    }
+}
+
+#[test]
+fn test_nested_field_access() {
+    let query = "connector.table | where field1.subfield == \"value\"";
+    let result = parse_unwrap!(query);
+
+    match &result[1] {
+        QueryStep::Filter(expr) => match expr {
+            Expr::Eq(left, _) => match &**left {
+                Expr::Field(field) => {
+                    assert_eq!(field, &field_unwrap!("field1.subfield"));
+                }
+                _ => panic!("Expected Field expression"),
+            },
+            _ => panic!("Expected Eq expression"),
+        },
+        _ => panic!("Expected Filter step"),
+    }
+}
+
+#[test]
+fn test_complex_pipeline() {
+    let query = r#"
+            connector.table 
+            | where field1 > 10 and field2 contains "test"
+            | extend newfield = field1 + field2
+            | project field1, newfield, calculated = field3 * 2
+            | sort by field1 asc
+            | limit 100
+        "#;
+
+    let result = parse_unwrap!(query);
+    assert_eq!(result.len(), 6);
+
+    assert!(matches!(result[0], QueryStep::Scan(_, _)));
+    assert!(matches!(result[1], QueryStep::Filter(_)));
+    assert!(matches!(result[2], QueryStep::Extend(_)));
+    assert!(matches!(result[3], QueryStep::Project(_)));
+    assert!(matches!(result[4], QueryStep::Sort(_)));
+    assert!(matches!(result[5], QueryStep::Limit(_)));
+}
+
+#[test_case("field1 == 42", "integer")]
+#[test_case("field1 == 3.14", "float")]
+#[test_case("field1 == true", "boolean")]
+#[test_case("field1 == false", "boolean")]
+#[test_case("field1 == null", "null")]
+#[test_case("field1 == \"string\"", "string")]
+fn test_literal_values(condition: &str, literal_type: &str) {
+    let query = format!("connector.table | where {}", condition);
+    let result = parse_unwrap!(&query);
+
+    match &result[1] {
+        QueryStep::Filter(expr) => match expr {
+            Expr::Eq(_, right) => match &**right {
+                Expr::Literal(Value::Number(_))
+                    if literal_type == "integer" || literal_type == "float" =>
+                {
+                    ()
+                }
+                Expr::Literal(Value::Bool(_)) if literal_type == "boolean" => (),
+                Expr::Literal(Value::Null) if literal_type == "null" => (),
+                Expr::Literal(Value::String(_)) if literal_type == "string" => (),
+                _ => panic!("Expected {} literal", literal_type),
+            },
+            _ => panic!("Expected Eq expression"),
+        },
+        _ => panic!("Expected Filter step"),
+    }
+}
+
+#[test]
+fn test_arithmetic_expressions() {
+    let query = "connector.table | extend result = field1 + field2 * field3 - field4 / 2";
+    let result = parse_unwrap!(query);
+
+    match &result[1] {
+        QueryStep::Extend(fields) => {
+            // This tests operator precedence: should be field1 + (field2 * field3) - (field4 / 2).
+            match &fields[0].from {
+                Expr::Minus(left, right) => {
+                    assert!(matches!(**left, Expr::Plus(_, _)));
+                    assert!(matches!(**right, Expr::Div(_, _)));
+                }
+                _ => panic!("Expected minus expression at top level"),
+            }
+        }
+        _ => panic!("Expected Extend step"),
+    }
+}
+
+#[test_case("invalid syntax")]
+#[test_case("connector.table | where")]
+#[test_case("connector.table | limit -1")]
+#[test_case("connector.table | project")]
+#[test_case("connector.table | sort by")]
+fn test_error_cases(query: &str) {
+    let result = parse(query);
+    assert!(
+        result.is_err(),
+        "Expected error for query: {} ({:?})",
+        query,
+        result
+    );
+}
+
+#[test]
+fn test_keywords_as_identifiers() {
+    let query = "connector.table | where in == \"test\"";
+    let result = parse_unwrap!(query);
+
+    match &result[1] {
+        QueryStep::Filter(expr) => match expr {
+            Expr::Eq(left, _) => match &**left {
+                Expr::Field(field) => {
+                    assert_eq!(field, &field_unwrap!("in"));
+                }
+                _ => panic!("Expected Field expression"),
+            },
+            _ => panic!("Expected Eq expression"),
+        },
+        _ => panic!("Expected Filter step"),
+    }
+}
+
+#[test]
+fn test_parentheses_in_expressions() {
+    let query = "connector.table | where (field1 + field2) * field3 == 100";
+    let result = parse_unwrap!(query);
+
+    match &result[1] {
+        QueryStep::Filter(expr) => match expr {
+            Expr::Eq(left, _) => match &**left {
+                Expr::Mul(inner_left, _) => {
+                    assert!(matches!(**inner_left, Expr::Plus(_, _)));
+                }
+                _ => panic!("Expected multiplication with parenthesized addition"),
+            },
+            _ => panic!("Expected Eq expression"),
+        },
+        _ => panic!("Expected Filter step"),
+    }
+}

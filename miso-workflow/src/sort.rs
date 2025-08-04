@@ -4,6 +4,7 @@ use color_eyre::eyre::{Context, Result, bail};
 use flume::Receiver;
 use miso_common::metrics::METRICS;
 use miso_workflow_types::{
+    field::Field,
     log::{Log, LogItem, LogIter},
     sort::{NullsOrder, Sort, SortOrder},
 };
@@ -14,6 +15,7 @@ use tracing::debug;
 
 use crate::{
     cancel_iter::CancelIter,
+    interpreter::get_field_value,
     send_once::SendOnce,
     spawn_thread::{ThreadRx, spawn},
 };
@@ -27,7 +29,7 @@ const SORT_THREAD_TAG: &str = "sort";
 
 #[derive(Debug)]
 pub struct SortConfig {
-    by: Vec<String>,
+    by: Vec<Field>,
     sort_orders: Vec<SortOrder>,
     nulls_orders: Vec<NullsOrder>,
 }
@@ -59,8 +61,8 @@ pub fn cmp_logs(a: &Log, b: &Log, config: &SortConfig) -> Option<Ordering> {
         .zip(&config.sort_orders)
         .zip(&config.nulls_orders)
     {
-        let a_val = a.get(key).unwrap_or(&Value::Null);
-        let b_val = b.get(key).unwrap_or(&Value::Null);
+        let a_val = get_field_value(a, key).unwrap_or(&Value::Null);
+        let b_val = get_field_value(b, key).unwrap_or(&Value::Null);
         let mut any_null = true;
         let ordering = match (a_val, b_val, nulls_order) {
             (Value::Null, Value::Null, _) => Ordering::Equal,
@@ -92,7 +94,7 @@ pub fn cmp_logs(a: &Log, b: &Log, config: &SortConfig) -> Option<Ordering> {
     Some(Ordering::Equal)
 }
 
-fn collect_logs(by: &[String], input: impl Iterator<Item = LogItem>) -> Result<Vec<Log>> {
+fn collect_logs(by: &[Field], input: impl Iterator<Item = LogItem>) -> Result<Vec<Log>> {
     let mut tracked_types = vec![None; by.len()];
 
     let mut logs = Vec::new();
@@ -108,21 +110,21 @@ fn collect_logs(by: &[String], input: impl Iterator<Item = LogItem>) -> Result<V
         };
 
         for (tracked_type, key) in tracked_types.iter_mut().zip(by) {
-            if let Some(value) = log.get(key) {
-                if value != &Value::Null {
-                    let value_type = std::mem::discriminant(value);
-                    if let Some(t) = tracked_type {
-                        if *t != value_type {
-                            bail!(
-                                "cannot sort over differing types (key '{}'): {:?} != {:?}",
-                                key,
-                                *t,
-                                value_type
-                            );
-                        }
-                    } else {
-                        *tracked_type = Some(value_type);
+            if let Some(value) = get_field_value(&log, key)
+                && value != &Value::Null
+            {
+                let value_type = std::mem::discriminant(value);
+                if let Some(t) = tracked_type {
+                    if *t != value_type {
+                        bail!(
+                            "cannot sort over differing types (key '{}'): {:?} != {:?}",
+                            key,
+                            *t,
+                            value_type
+                        );
                     }
+                } else {
+                    *tracked_type = Some(value_type);
                 }
             }
         }

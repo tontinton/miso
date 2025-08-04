@@ -1,42 +1,19 @@
-use std::collections::BTreeMap;
 use std::fmt;
 
+use hashbrown::HashMap;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
-#[serde(rename_all = "snake_case")]
-pub enum GroupAst {
-    Id(String),
-    Bin(String, serde_json::Value),
-}
-
-impl GroupAst {
-    #[must_use]
-    pub fn field(&self) -> &str {
-        match self {
-            GroupAst::Id(field) | GroupAst::Bin(field, _) => field,
-        }
-    }
-}
-
-impl fmt::Display for GroupAst {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            GroupAst::Id(name) => write!(f, "{name}"),
-            GroupAst::Bin(name, by) => write!(f, "bin({name}, {by})"),
-        }
-    }
-}
+use crate::{expr::Expr, field::Field};
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum Aggregation {
     Count,
     #[serde(rename = "dcount")]
-    DCount(/*field=*/ String),
-    Sum(/*field=*/ String),
-    Min(/*field=*/ String),
-    Max(/*field=*/ String),
+    DCount(Field),
+    Sum(Field),
+    Min(Field),
+    Max(Field),
 }
 
 impl fmt::Display for Aggregation {
@@ -53,12 +30,12 @@ impl fmt::Display for Aggregation {
 
 impl Aggregation {
     #[must_use]
-    pub fn convert_to_mux(self, field: &str) -> Self {
+    pub fn convert_to_mux(self, field: &Field) -> Self {
         match self {
-            Aggregation::Count => Aggregation::Sum(field.to_string()),
-            Aggregation::Sum(..) => Aggregation::Sum(field.to_string()),
-            Aggregation::Min(..) => Aggregation::Min(field.to_string()),
-            Aggregation::Max(..) => Aggregation::Max(field.to_string()),
+            Aggregation::Count => Aggregation::Sum(field.clone()),
+            Aggregation::Sum(..) => Aggregation::Sum(field.clone()),
+            Aggregation::Min(..) => Aggregation::Min(field.clone()),
+            Aggregation::Max(..) => Aggregation::Max(field.clone()),
             Aggregation::DCount(field) => Aggregation::DCount(field),
         }
     }
@@ -66,8 +43,8 @@ impl Aggregation {
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct Summarize {
-    pub aggs: BTreeMap<String, Aggregation>,
-    pub by: Vec<GroupAst>,
+    pub aggs: HashMap<Field, Aggregation>,
+    pub by: Vec<Expr>,
 }
 
 impl fmt::Display for Summarize {
@@ -92,7 +69,7 @@ impl fmt::Display for Summarize {
 
 impl Summarize {
     pub fn convert_to_partial(mut self) -> Self {
-        let mut aggs = BTreeMap::new();
+        let mut aggs = HashMap::new();
         for (field, agg) in self.aggs {
             match agg {
                 Aggregation::Count
@@ -102,7 +79,7 @@ impl Summarize {
                     aggs.insert(field, agg);
                 }
                 Aggregation::DCount(field) => {
-                    let new_by = GroupAst::Id(field);
+                    let new_by = Expr::Field(field);
                     if !self.by.contains(&new_by) {
                         self.by.push(new_by);
                     }
@@ -113,7 +90,7 @@ impl Summarize {
     }
 
     pub fn convert_to_mux(self) -> Self {
-        let mut aggs = BTreeMap::new();
+        let mut aggs = HashMap::new();
         for (field, agg) in self.aggs {
             let mux = agg.convert_to_mux(&field);
             aggs.insert(field, mux);

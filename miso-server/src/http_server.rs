@@ -15,22 +15,18 @@ use axum::{
 };
 use color_eyre::{Result, eyre::Context};
 use futures_util::{Stream, TryStreamExt};
+use hashbrown::HashMap;
 use miso_common::{
     humantime_utils::deserialize_duration, metrics::METRICS, run_at_interval::run_at_interval,
     shutdown_future::ShutdownFuture,
 };
 use miso_connectors::{Connector, ConnectorError, ConnectorState, quickwit::QuickwitConnector};
+use miso_kql::{ParseError, parse};
 use miso_optimizations::Optimizer;
 use miso_workflow::{Workflow, WorkflowStep, partial_stream::PartialStream, scan::Scan};
-use miso_workflow_types::{
-    filter::FilterAst,
-    join::Join,
-    project::ProjectField,
-    sort::Sort,
-    summarize::{GroupAst, Summarize},
-};
+use miso_workflow_types::{expr::Expr, query::QueryStep, summarize::Summarize};
 use prometheus::TextEncoder;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::json;
 use tokio::{sync::RwLock, task::spawn_blocking};
 use tokio_util::sync::CancellationToken;
@@ -93,14 +89,14 @@ pub async fn to_workflow_steps(
     query_steps: Vec<QueryStep>,
 ) -> Result<Vec<WorkflowStep>, HttpError> {
     if query_steps.is_empty() {
-        return Err(HttpError::new(
+        return Err(HttpError::from_string(
             StatusCode::BAD_REQUEST,
             "empty query".to_string(),
         ));
     }
 
     let QueryStep::Scan(..) = query_steps[0] else {
-        return Err(HttpError::new(
+        return Err(HttpError::from_string(
             StatusCode::NOT_FOUND,
             "first step must be scan".to_string(),
         ));
@@ -112,14 +108,14 @@ pub async fn to_workflow_steps(
     for (i, step) in query_steps.into_iter().enumerate() {
         match step {
             QueryStep::Scan(..) if i > 0 => {
-                return Err(HttpError::new(
+                return Err(HttpError::from_string(
                     StatusCode::BAD_REQUEST,
                     "scan can only be the first step of a query".to_string(),
                 ));
             }
             QueryStep::Scan(connector_name, view) if connector_name == VIEWS_CONNECTOR_NAME => {
                 let Some(view_steps) = views.get(&view).cloned() else {
-                    return Err(HttpError::new(
+                    return Err(HttpError::from_string(
                         StatusCode::NOT_FOUND,
                         format!("view '{view}' not found"),
                     ));
@@ -129,7 +125,7 @@ pub async fn to_workflow_steps(
             }
             QueryStep::Scan(connector_name, collection) => {
                 let Some(connector_state) = connectors.get(&connector_name).cloned() else {
-                    return Err(HttpError::new(
+                    return Err(HttpError::from_string(
                         StatusCode::NOT_FOUND,
                         format!("connector '{connector_name}' not found"),
                     ));
@@ -138,7 +134,7 @@ pub async fn to_workflow_steps(
                 info!(?collection, "Checking whether collection exists");
                 if !connector_state.connector.does_collection_exist(&collection) {
                     info!(?collection, "Collection doesn't exist");
-                    return Err(HttpError::new(
+                    return Err(HttpError::from_string(
                         StatusCode::NOT_FOUND,
                         format!("collection '{collection}' not found"),
                     ));
@@ -149,13 +145,13 @@ pub async fn to_workflow_steps(
                 ));
             }
             _ if steps.is_empty() => {
-                return Err(HttpError::new(
+                return Err(HttpError::from_string(
                     StatusCode::BAD_REQUEST,
                     "first query step must be a scan".to_string(),
                 ));
             }
-            QueryStep::Filter(ast) => {
-                steps.push(WorkflowStep::Filter(ast));
+            QueryStep::Filter(expr) => {
+                steps.push(WorkflowStep::Filter(expr));
             }
             QueryStep::Project(fields) => {
                 steps.push(WorkflowStep::Project(fields));
@@ -177,8 +173,8 @@ pub async fn to_workflow_steps(
             }
             QueryStep::Distinct(by) => {
                 steps.push(WorkflowStep::Summarize(Summarize {
-                    aggs: BTreeMap::new(),
-                    by: by.into_iter().map(GroupAst::Id).collect(),
+                    aggs: HashMap::new(),
+                    by: by.into_iter().map(Expr::Field).collect(),
                 }));
             }
             QueryStep::Union(inner_steps) => {
@@ -201,30 +197,13 @@ pub async fn to_workflow_steps(
     Ok(steps)
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum QueryStep {
-    Scan(/*connector=*/ String, /*collection=*/ String),
-    Filter(FilterAst),
-    Project(Vec<ProjectField>),
-    Extend(Vec<ProjectField>),
-    Limit(u32),
-    Sort(Vec<Sort>),
-    Top(Vec<Sort>, u32),
-    Summarize(Summarize),
-    Distinct(Vec<String>),
-    Union(Vec<QueryStep>),
-    Join(Join, Vec<QueryStep>),
-    Count,
-}
-
 #[derive(Deserialize)]
 struct QueryRequest {
     /// The query id to set. If not set, the server will randomly generate an id.
     query_id: Option<Uuid>,
 
-    /// The query steps to run.
-    query: Vec<QueryStep>,
+    /// The KQL query to run.
+    query: String,
 
     /// If set, send partial results as soon as a split / union subquery finishes.
     partial_stream: Option<PartialStream>,
@@ -233,11 +212,15 @@ struct QueryRequest {
 #[derive(Debug)]
 pub struct HttpError {
     status: StatusCode,
-    message: String,
+    message: serde_json::Value,
 }
 
 impl HttpError {
-    fn new(status: StatusCode, message: String) -> HttpError {
+    fn from_string(status: StatusCode, message: String) -> HttpError {
+        Self::new(status, serde_json::Value::String(message))
+    }
+
+    fn new(status: StatusCode, message: serde_json::Value) -> HttpError {
         Self { status, message }
     }
 }
@@ -253,6 +236,12 @@ impl IntoResponse for HttpError {
         };
 
         (self.status, body).into_response()
+    }
+}
+
+impl From<Vec<ParseError>> for HttpError {
+    fn from(errors: Vec<ParseError>) -> Self {
+        HttpError::new(StatusCode::BAD_REQUEST, json!({"parse": errors}))
     }
 }
 
@@ -280,10 +269,14 @@ async fn query_stream(
 
     info!(?req.query, "Starting to run a new query");
     let workflow = {
+        let ast = spawn_blocking(move || parse(&req.query))
+            .await
+            .expect("parse thread panicked")?;
+
         let steps = to_workflow_steps(
             &state.connectors.read().await.clone(),
             &state.views.read().await.clone(),
-            req.query,
+            ast,
         )
         .await?;
 
@@ -298,7 +291,7 @@ async fn query_stream(
 
     let cancel = CancellationToken::new();
     let mut logs_stream = workflow.execute(cancel.clone()).map_err(|e| {
-        HttpError::new(
+        HttpError::from_string(
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("failed to execute workflow: {e}"),
         )
@@ -342,10 +335,14 @@ async fn explain(
     let span = span!(Level::INFO, "explain", ?query_id);
     let _enter = span.enter();
 
+    let ast = spawn_blocking(move || parse(&req.query))
+        .await
+        .expect("parse thread panicked")?;
+
     let steps = to_workflow_steps(
         &state.connectors.read().await.clone(),
         &state.views.read().await.clone(),
-        req.query,
+        ast,
     )
     .await?;
 
@@ -374,7 +371,7 @@ async fn get_connector(
 ) -> Result<Response, HttpError> {
     let guard = state.connectors.read().await;
     let connector_state = guard.get(&id).ok_or_else(|| {
-        HttpError::new(StatusCode::NOT_FOUND, format!("Connector '{id}' not found"))
+        HttpError::from_string(StatusCode::NOT_FOUND, format!("Connector '{id}' not found"))
     })?;
     let connector: &dyn Connector = &*connector_state.connector;
     Ok(Json(connector).into_response())
@@ -406,7 +403,7 @@ async fn post_connector(
     }): Json<PostConnectorBody>,
 ) -> Result<(), HttpError> {
     if id == VIEWS_CONNECTOR_NAME {
-        return Err(HttpError::new(
+        return Err(HttpError::from_string(
             StatusCode::BAD_REQUEST,
             format!("Cannot use the internally used id: {VIEWS_CONNECTOR_NAME}"),
         ));
@@ -433,7 +430,7 @@ async fn delete_connector(
     };
 
     let Some(connector_state) = removed else {
-        return Err(HttpError::new(
+        return Err(HttpError::from_string(
             StatusCode::NOT_FOUND,
             format!("Connector '{id}' not found"),
         ));
@@ -457,17 +454,21 @@ async fn get_view(
     Path(id): Path<String>,
 ) -> Result<Response, HttpError> {
     let guard = state.views.read().await;
-    let steps = guard
-        .get(&id)
-        .ok_or_else(|| HttpError::new(StatusCode::NOT_FOUND, format!("View '{id}' not found")))?;
+    let steps = guard.get(&id).ok_or_else(|| {
+        HttpError::from_string(StatusCode::NOT_FOUND, format!("View '{id}' not found"))
+    })?;
     Ok(Json(steps).into_response())
 }
 
 async fn post_view(
     State(state): State<Arc<App>>,
     Path(id): Path<String>,
-    Json(steps): Json<Vec<QueryStep>>,
+    Json(query): Json<String>,
 ) -> Result<(), HttpError> {
+    let steps = spawn_blocking(move || parse(&query))
+        .await
+        .expect("parse thread panicked")?;
+
     let mut guard = state.views.write().await;
     guard.insert(id, steps);
     Ok(())
@@ -483,7 +484,7 @@ async fn delete_view(
     };
 
     if removed.is_none() {
-        return Err(HttpError::new(
+        return Err(HttpError::from_string(
             StatusCode::NOT_FOUND,
             format!("View '{id}' not found"),
         ));
@@ -499,7 +500,7 @@ async fn metrics() -> Result<Response, HttpError> {
     encoder
         .encode_utf8(&metric_families, &mut buffer)
         .map_err(|e| {
-            HttpError::new(
+            HttpError::from_string(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 format!("failed to encode metrics: {e}"),
             )
