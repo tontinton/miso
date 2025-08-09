@@ -246,10 +246,10 @@ impl IntoResponse for HttpError {
     fn into_response(self) -> Response {
         let body = if self.status.is_server_error() {
             error!("Internal server error: {}", self.message);
-            Json(json!({"error": INTERNAL_SERVER_ERROR}))
+            Json(json!({ERROR_LOG_FIELD_NAME: INTERNAL_SERVER_ERROR}))
         } else {
             error!("User error: {}", self.message);
-            Json(json!({"error": self.message}))
+            Json(json!({ERROR_LOG_FIELD_NAME: self.message}))
         };
 
         (self.status, body).into_response()
