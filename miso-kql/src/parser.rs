@@ -1,4 +1,4 @@
-use std::fmt;
+use std::{fmt, str::FromStr};
 
 use chumsky::{
     input::{Stream, ValueInput},
@@ -18,6 +18,8 @@ use miso_workflow_types::{
 use serde::Serialize;
 
 use crate::lexer::{StringValue, Token};
+
+const ERROR_PLACEHOLDER: &str = "ERROR";
 
 macro_rules! binary_ops {
     ($prev:expr; $( $token:path => $expr:path ),* $(,)?) => {
@@ -57,7 +59,13 @@ macro_rules! agg_single_param {
             .ignore_then(
                 $field
                     .clone()
-                    .delimited_by(just(Token::LParen), just(Token::RParen)),
+                    .delimited_by(just(Token::LParen), just(Token::RParen))
+                    .recover_with(via_parser(nested_delimiters(
+                        Token::LParen,
+                        Token::RParen,
+                        [(Token::LBracket, Token::RBracket)],
+                        |_| Field::from_str(ERROR_PLACEHOLDER).expect("error field"),
+                    ))),
             )
             .map(Aggregation::$variant)
     };
@@ -221,7 +229,7 @@ where
                     e.span(),
                     "byte strings are currently not supported",
                 ));
-                "ERROR".to_string()
+                ERROR_PLACEHOLDER.to_string()
             }
         })
         .boxed();
@@ -245,7 +253,13 @@ where
             .ignore_then(
                 field
                     .clone()
-                    .delimited_by(just(Token::LParen), just(Token::RParen)),
+                    .delimited_by(just(Token::LParen), just(Token::RParen))
+                    .recover_with(via_parser(nested_delimiters(
+                        Token::LParen,
+                        Token::RParen,
+                        [(Token::LBracket, Token::RBracket)],
+                        |_| Field::from_str(ERROR_PLACEHOLDER).expect("error field"),
+                    ))),
             )
             .map(Expr::Exists)
             .boxed();
@@ -255,16 +269,33 @@ where
                 expr.clone()
                     .then_ignore(just(Token::Comma))
                     .then(expr.clone())
-                    .delimited_by(just(Token::LParen), just(Token::RParen)),
+                    .delimited_by(just(Token::LParen), just(Token::RParen))
+                    .recover_with(via_parser(nested_delimiters(
+                        Token::LParen,
+                        Token::RParen,
+                        [(Token::LBracket, Token::RBracket)],
+                        |_| {
+                            (
+                                Expr::Literal(serde_json::Value::Null),
+                                Expr::Literal(serde_json::Value::Null),
+                            )
+                        },
+                    ))),
             )
             .map(|(l, r)| Expr::Bin(Box::new(l), Box::new(r)))
             .boxed();
 
+        let expr_delimited_by_parentheses = expr
+            .clone()
+            .delimited_by(just(Token::LParen), just(Token::RParen))
+            .recover_with(via_parser(nested_delimiters(
+                Token::LParen,
+                Token::RParen,
+                [(Token::LBracket, Token::RBracket)],
+                |_| Expr::Literal(serde_json::Value::Null),
+            )));
         let not = just(Token::Not)
-            .ignore_then(
-                expr.clone()
-                    .delimited_by(just(Token::LParen), just(Token::RParen)),
-            )
+            .ignore_then(expr_delimited_by_parentheses.clone())
             .map(|expr| Expr::Not(Box::new(expr.clone())))
             .boxed();
 
@@ -274,21 +305,30 @@ where
             Token::ToReal | Token::ToDecimal => CastType::Float,
             Token::ToBool => CastType::Bool,
         }
-        .then(
-            expr.clone()
-                .delimited_by(just(Token::LParen), just(Token::RParen)),
-        )
+        .then(expr_delimited_by_parentheses.clone())
         .map(|(cast, e)| Expr::Cast(cast, Box::new(e)))
         .boxed();
 
         let atom = literal
-            .or(expr.delimited_by(just(Token::LParen), just(Token::RParen)))
+            .or(expr_delimited_by_parentheses)
             .or(bin)
             .or(not)
             .or(cast)
             .or(exists)
-            // Must be last (fields can contain tokens).
+            // Must be last (fields can contain tokens that are keywords).
             .or(field.map(Expr::Field))
+            .recover_with(skip_then_retry_until(
+                any().ignored(),
+                one_of([
+                    Token::Pipe,
+                    Token::Comma,
+                    Token::RParen,
+                    Token::RBracket,
+                    Token::And,
+                    Token::Or,
+                ])
+                .ignored(),
+            ))
             .boxed();
 
         let mul_div = binary_ops!(atom;
@@ -297,7 +337,7 @@ where
         );
 
         let add_sub = binary_ops!(mul_div;
-            Token::Plus => Expr::Plus,
+            Token::Plus  => Expr::Plus,
             Token::Minus => Expr::Minus,
         );
 
@@ -318,13 +358,25 @@ where
             Token::HasCs      => Expr::HasCs,
         );
 
-        let bin_op_expr = text_ops;
+        let bin_op_expr = text_ops
+            .recover_with(skip_until(
+                any().ignored(),
+                one_of([Token::Comma, Token::Pipe]).ignored(),
+                || Expr::Literal(serde_json::Value::Null),
+            ))
+            .boxed();
 
         let expr_list = bin_op_expr
             .clone()
             .separated_by(just(Token::Comma))
             .collect::<Vec<_>>()
             .delimited_by(just(Token::LParen), just(Token::RParen))
+            .recover_with(via_parser(nested_delimiters(
+                Token::LParen,
+                Token::RParen,
+                [(Token::LBracket, Token::RBracket)],
+                |_| vec![],
+            )))
             .boxed();
 
         let in_expr = bin_op_expr
@@ -384,23 +436,23 @@ where
 
     let project_step = just(Token::Project)
         .ignore_then(project_exprs.clone())
-        .map(QueryStep::Project);
+        .map(QueryStep::Project)
 
     let extend_step = just(Token::Extend)
         .ignore_then(project_exprs)
         .map(QueryStep::Extend);
-
-    let limit_int = select! { Token::Integer(x) => x }.validate(|x, e, emitter| {
-        if x >= 0 && x <= u32::MAX as i64 {
-            x as u32
-        } else {
-            emitter.emit(Rich::custom(
-                e.span(),
-                "limit must be a non-negative integer less than 2^32",
-            ));
-            0
-        }
-    });
+    let limit_int = select! { Token::Integer(x) => x }
+        .validate(|x, e, emitter| {
+            if x >= 0 && x <= u32::MAX as i64 {
+                x as u32
+            } else {
+                emitter.emit(Rich::custom(
+                    e.span(),
+                    "limit must be a non-negative integer less than 2^32",
+                ));
+                0
+            }
+        });
 
     let limit_step = just(Token::Limit)
         .or(just(Token::Take))
@@ -459,7 +511,10 @@ where
         .boxed();
 
     let summarize_agg_expr = field_no_arr
-        .then_ignore(just(Token::Eq))
+        .then_ignore(just(Token::Eq).recover_with(skip_then_retry_until(
+            any().ignored(),
+            one_of([Token::Comma, Token::Pipe]).ignored(),
+        )))
         .then(summarize_agg)
         .boxed();
 
@@ -505,7 +560,16 @@ where
         .ignore_then(
             query_expr
                 .clone()
-                .delimited_by(just(Token::LParen), just(Token::RParen)),
+                .delimited_by(just(Token::LParen), just(Token::RParen))
+                .recover_with(via_parser(nested_delimiters(
+                    Token::LParen,
+                    Token::RParen,
+                    [
+                        (Token::LParen, Token::RParen),
+                        (Token::LBracket, Token::RBracket),
+                    ],
+                    |_| vec![QueryStep::Count],
+                ))),
         )
         .map(QueryStep::Union)
         .boxed();
@@ -539,6 +603,10 @@ where
             },
         )
         .or(field.clone().map(|f| (f.clone(), f)))
+        .recover_with(skip_then_retry_until(
+            any().ignored(),
+            just(Token::Pipe).ignored(),
+        ))
         .boxed();
 
     let join_step = just(Token::Join)
@@ -561,7 +629,16 @@ where
                 .ignore_then(select! { Token::Integer(x) => x })
                 .or_not(),
         )
-        .then(query_expr.delimited_by(just(Token::LParen), just(Token::RParen)))
+        .then(
+            query_expr
+                .delimited_by(just(Token::LParen), just(Token::RParen))
+                .recover_with(via_parser(nested_delimiters(
+                    Token::LParen,
+                    Token::RParen,
+                    [(Token::LBracket, Token::RBracket)],
+                    |_| vec![QueryStep::Count],
+                ))),
+        )
         .then(just(Token::On).ignore_then(join_condition))
         .map(|(((kind, partitions), steps), on)| {
             QueryStep::Join(
@@ -617,6 +694,7 @@ where
                 steps.insert(0, scan);
                 steps
             })
+            .recover_with(skip_then_retry_until(any().ignored(), end()))
             .boxed()
     })
 }
