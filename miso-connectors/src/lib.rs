@@ -9,6 +9,7 @@ use std::{any::Any, collections::BTreeMap};
 use axum::async_trait;
 use color_eyre::eyre::Result;
 use miso_workflow_types::expr::Expr;
+use miso_workflow_types::project::ProjectField;
 use miso_workflow_types::{log::LogTryStream, sort::Sort, summarize::Summarize};
 use parking_lot::Mutex;
 use thiserror::Error;
@@ -140,6 +141,26 @@ pub trait Connector: Debug + Send + Sync {
     /// Called multiple times, which means that every time you predicate pushdown
     /// an expression you need to query them all with an AND, or the connector's equivalent.
     fn apply_filter(&self, _ast: &Expr, _handle: &dyn QueryHandle) -> Option<Box<dyn QueryHandle>> {
+        None
+    }
+
+    /// Returns the handle with projections (field transformations) to predicate pushdown.
+    /// None means it can't predicate pushdown the provided projections.
+    fn apply_project(
+        &self,
+        _projections: Vec<ProjectField>,
+        _handle: &dyn QueryHandle,
+    ) -> Option<Box<dyn QueryHandle>> {
+        None
+    }
+
+    /// Returns the handle with extend projections to predicate pushdown.
+    /// None means it can't predicate pushdown the provided projections.
+    fn apply_extend(
+        &self,
+        _projections: Vec<ProjectField>,
+        _handle: &dyn QueryHandle,
+    ) -> Option<Box<dyn QueryHandle>> {
         None
     }
 
