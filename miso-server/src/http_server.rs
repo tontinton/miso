@@ -299,7 +299,7 @@ async fn query_stream(
 
     Ok(Sse::new(stream! {
         let _cancel_on_drop = scopeguard::guard(cancel, |cancel| {
-            debug!("Cancelling query");
+            info!("Cancelling query");
             cancel.cancel();
         });
 
