@@ -211,6 +211,7 @@ where
             rest.insert(0, first);
             Field::new(rest)
         })
+        .labelled("field")
         .boxed()
 }
 
@@ -232,6 +233,7 @@ where
                 ERROR_PLACEHOLDER.to_string()
             }
         })
+        .labelled("string literal")
         .boxed();
 
         let literal = select! {
@@ -245,6 +247,7 @@ where
             Token::Null => Expr::Literal(serde_json::Value::Null),
         }
         .or(string_literal.map(|x| Expr::Literal(serde_json::Value::String(x))))
+        .labelled("literal")
         .boxed();
 
         let field = field_parser(true);
@@ -262,6 +265,7 @@ where
                     ))),
             )
             .map(Expr::Exists)
+            .labelled("exists")
             .boxed();
 
         let bin = just(Token::Bin)
@@ -283,6 +287,7 @@ where
                     ))),
             )
             .map(|(l, r)| Expr::Bin(Box::new(l), Box::new(r)))
+            .labelled("bin")
             .boxed();
 
         let expr_delimited_by_parentheses = expr
@@ -293,10 +298,13 @@ where
                 Token::RParen,
                 [(Token::LBracket, Token::RBracket)],
                 |_| Expr::Literal(serde_json::Value::Null),
-            )));
+            )))
+            .labelled("parentheses over an expression");
+
         let not = just(Token::Not)
             .ignore_then(expr_delimited_by_parentheses.clone())
             .map(|expr| Expr::Not(Box::new(expr.clone())))
+            .labelled("not")
             .boxed();
 
         let cast = select! {
@@ -307,6 +315,7 @@ where
         }
         .then(expr_delimited_by_parentheses.clone())
         .map(|(cast, e)| Expr::Cast(cast, Box::new(e)))
+        .labelled("cast")
         .boxed();
 
         let atom = literal
@@ -393,6 +402,7 @@ where
             .foldl(just(Token::And).ignore_then(in_expr).repeated(), |l, r| {
                 Expr::And(Box::new(l), Box::new(r))
             })
+            .labelled("and")
             .boxed();
 
         and_expr
@@ -400,6 +410,7 @@ where
             .foldl(just(Token::Or).ignore_then(and_expr).repeated(), |l, r| {
                 Expr::Or(Box::new(l), Box::new(r))
             })
+            .labelled("or")
             .boxed()
     })
 }
@@ -410,7 +421,7 @@ fn query_step_parser<'a, I>(
 where
     I: ValueInput<'a, Token = Token, Span = SimpleSpan>,
 {
-    let expr = expr_parser();
+    let expr = expr_parser().labelled("expression");
     let field_no_arr = field_parser(false);
     let field = field_parser(true);
 
@@ -427,6 +438,7 @@ where
             from: from.unwrap_or_else(|| Expr::Field(to.clone())),
             to,
         })
+        .labelled("project expression")
         .boxed();
 
     let project_exprs = project_expr
@@ -437,10 +449,14 @@ where
     let project_step = just(Token::Project)
         .ignore_then(project_exprs.clone())
         .map(QueryStep::Project)
+        .labelled("project")
+        .boxed();
 
     let extend_step = just(Token::Extend)
         .ignore_then(project_exprs)
-        .map(QueryStep::Extend);
+        .map(QueryStep::Extend)
+        .labelled("extend");
+
     let limit_int = select! { Token::Integer(x) => x }
         .validate(|x, e, emitter| {
             if x >= 0 && x <= u32::MAX as i64 {
@@ -452,12 +468,14 @@ where
                 ));
                 0
             }
-        });
+        })
+        .labelled("limit value");
 
     let limit_step = just(Token::Limit)
         .or(just(Token::Take))
         .ignore_then(limit_int)
         .map(QueryStep::Limit)
+        .labelled("limit")
         .boxed();
 
     let sort_expr = field
@@ -482,6 +500,7 @@ where
             order: order.unwrap_or_default(),
             nulls: nulls.unwrap_or_default(),
         })
+        .labelled("sort expression")
         .boxed();
 
     let sort_exprs = sort_expr
@@ -494,6 +513,7 @@ where
         .ignore_then(just(Token::By))
         .ignore_then(sort_exprs.clone())
         .map(QueryStep::Sort)
+        .labelled("sort")
         .boxed();
 
     let top_step = just(Token::Top)
@@ -501,6 +521,7 @@ where
         .then_ignore(just(Token::By))
         .then(sort_exprs)
         .map(|(limit, sorts)| QueryStep::Top(sorts, limit))
+        .labelled("top")
         .boxed();
 
     let summarize_agg = agg_zero_param!(Count => Count)
@@ -508,6 +529,7 @@ where
         .or(agg_single_param!(field; Sum => Sum))
         .or(agg_single_param!(field; Min => Min))
         .or(agg_single_param!(field; Max => Max))
+        .labelled("summarize aggregation")
         .boxed();
 
     let summarize_agg_expr = field_no_arr
@@ -516,6 +538,7 @@ where
             one_of([Token::Comma, Token::Pipe]).ignored(),
         )))
         .then(summarize_agg)
+        .labelled("summarize aggregation expression")
         .boxed();
 
     let summarize_agg_exprs = summarize_agg_expr
@@ -544,6 +567,7 @@ where
                 by: by.unwrap_or_default(),
             })
         })
+        .labelled("summarize")
         .boxed();
 
     let distinct_step = just(Token::Distinct)
@@ -554,6 +578,7 @@ where
                 .collect::<Vec<_>>(),
         )
         .map(QueryStep::Distinct)
+        .labelled("distinct")
         .boxed();
 
     let union_step = just(Token::Union)
@@ -572,6 +597,7 @@ where
                 ))),
         )
         .map(QueryStep::Union)
+        .labelled("union")
         .boxed();
 
     let join_prefixed_field = just(Token::Dollar)
@@ -607,6 +633,7 @@ where
             any().ignored(),
             just(Token::Pipe).ignored(),
         ))
+        .labelled("join on condition")
         .boxed();
 
     let join_step = just(Token::Join)
@@ -650,9 +677,10 @@ where
                 steps,
             )
         })
+        .labelled("join")
         .boxed();
 
-    let count_step = just(Token::Count).to(QueryStep::Count);
+    let count_step = just(Token::Count).to(QueryStep::Count).labelled("count");
 
     filter_step
         .or(project_step)
@@ -680,6 +708,7 @@ where
             .then_ignore(just(Token::Dot))
             .then(ident)
             .map(|(connector, collection)| QueryStep::Scan(connector, collection))
+            .labelled("scan")
             .boxed();
 
         let pipeline = query_step_parser(query_expr)
@@ -695,6 +724,7 @@ where
                 steps
             })
             .recover_with(skip_then_retry_until(any().ignored(), end()))
+            .labelled("query")
             .boxed()
     })
 }
