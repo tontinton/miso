@@ -12,6 +12,7 @@ use push_filter_into_scan::PushFilterIntoScan;
 use push_limit_into_limit::PushLimitIntoLimit;
 use push_limit_into_scan::PushLimitIntoScan;
 use push_limit_into_topn::PushLimitIntoTopN;
+use push_project_or_extend_into_scan::PushProjectOrExtendIntoScan;
 use push_steps_into_union::PushStepsIntoUnion;
 use push_summarize_into_scan::PushSummarizeIntoScan;
 use push_topn_into_scan::PushTopNIntoScan;
@@ -31,6 +32,7 @@ mod push_filter_into_scan;
 mod push_limit_into_limit;
 mod push_limit_into_scan;
 mod push_limit_into_topn;
+mod push_project_or_extend_into_scan;
 mod push_steps_into_union;
 mod push_summarize_into_scan;
 mod push_topn_into_scan;
@@ -104,6 +106,8 @@ impl Optimizer {
             ],
             // Predicate pushdowns + optimizations that help predicate pushdowns.
             vec![
+                // Project & Extend.
+                opt!(PushProjectOrExtendIntoScan),
                 // Filter.
                 opt!(ReorderFilterBeforeSort),
                 opt!(PushFilterIntoScan),
