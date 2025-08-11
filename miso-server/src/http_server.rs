@@ -264,7 +264,7 @@ async fn query_stream(
 
     let query_id = req.query_id.unwrap_or_else(Uuid::now_v7);
 
-    let span = span!(Level::INFO, "query", ?query_id);
+    let span = span!(Level::INFO, "query", ?query_id, ?req.query);
     let _enter = span.enter();
 
     info!(?req.query, "Starting to run a new query");
