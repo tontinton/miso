@@ -632,3 +632,70 @@ fn test_parentheses_in_expressions() {
         _ => panic!("Expected Filter step"),
     }
 }
+
+#[test_case(
+    "connector.table1 | join (connector.table2 | where) on $left. == $right.field2 | project field1",
+    3;
+    "malformed join subquery and condition"
+)]
+#[test_case(
+    "connector.table | summarize count() = count(), invalid_agg =, sum_field = sum(field1) by field2",
+    2;
+    "malformed aggregation expressions"
+)]
+#[test_case(
+    "connector.table | where field1 ++ field2 ** field3 -- field4 == 1",
+    3;
+    "invalid operators"
+)]
+// TODO:
+// #[test_case(
+//     "connector.table | where | project | limit invalid | sort by field1",
+//     3;
+//     "multiple malformed query steps"
+// )]
+// #[test_case(
+//     "connector.table | where field1 == && field2 == 42 || field3 == \"test\"",
+//     1;
+//     "malformed expression with missing operand"
+// )]
+// #[test_case(
+//     "connector.table | where exists( | project field1, field2 | where tostring(field3 == 5",
+//     2;
+//     "malformed function calls"
+// )]
+// #[test_case(
+//     "connector.table | project field1 = field2 +, invalid_field =, field3 = field4 * 2",
+//     2;
+//     "mixed valid and invalid project expressions"
+// )]
+// #[test_case(
+//     "connector.table | where ((field1 + field2) * (field3 +)) && field4 == 1",
+//     1;
+//     "malformed nested parentheses"
+// )]
+// #[test_case(
+//     "connector.table | invalid_step syntax | where | project = | limit abc | sort by | count",
+//     3;
+//     "completely malformed pipeline"
+// )]
+// #[test_case(
+//     "connector.table | where field1 in (1, 2, invalid +, 4, broken syntax, 6)",
+//     2;
+//     "malformed expressions in list"
+// )]
+fn test_error_recovery_collects_multiple_errors(query: &str, expected_num_errors: usize) {
+    let result = parse(query);
+    dbg!(&result);
+
+    assert!(result.is_err());
+    let errors = result.unwrap_err();
+    assert_eq!(
+        expected_num_errors,
+        errors.len(),
+        "Expected {} errors, got {}. Errors: {:?}",
+        expected_num_errors,
+        errors.len(),
+        errors
+    );
+}
