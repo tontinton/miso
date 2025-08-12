@@ -290,7 +290,6 @@ impl WorkflowStep {
     fn can_partial_passthrough(&self) -> bool {
         match self {
             Self::Scan(..)
-            | Self::Project(..)
             | Self::Join(..)
             | Self::Summarize(..)
             | Self::MuxSummarize(..)
@@ -299,6 +298,7 @@ impl WorkflowStep {
             | Self::Sort(..) => false,
 
             Self::Filter(..)
+            | Self::Project(..)
             | Self::Extend(..)
             | Self::Limit(..)
             | Self::MuxLimit(..)
