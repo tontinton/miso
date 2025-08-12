@@ -277,5 +277,8 @@ fn reorder_filter_before_mux() {
         Box::new(Expr::Field(field_unwrap!("a"))),
         Box::new(Expr::Literal(serde_json::Value::String("b".to_string()))),
     ));
-    check_default(vec![S::MuxCount, filter.clone()], vec![filter, S::MuxCount]);
+    check_default(
+        vec![S::MuxLimit(1), filter.clone()],
+        vec![filter, S::MuxLimit(1)],
+    );
 }

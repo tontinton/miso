@@ -11,7 +11,7 @@ pub struct ReorderStepsBeforeMux;
 
 impl Optimization for ReorderStepsBeforeMux {
     fn pattern(&self) -> Pattern {
-        pattern!([MuxCount MuxLimit MuxTopN] [Filter Extend])
+        pattern!([MuxLimit MuxTopN] [Filter Extend])
     }
 
     fn apply(&self, steps: &[WorkflowStep], _groups: &[Group]) -> Option<Vec<WorkflowStep>> {
