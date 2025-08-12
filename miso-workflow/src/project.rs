@@ -4,11 +4,10 @@ use miso_workflow_types::{
 };
 use tracing::warn;
 
-use crate::interpreter::insert_field_value;
-
-use super::{
-    interpreter::{LogInterpreter, Val},
-    try_next_with_partial_passthrough,
+use crate::{
+    interpreter::{LogInterpreter, Val, insert_field_value},
+    log_utils::PartialStreamItem,
+    try_next_with_partial_stream,
 };
 
 pub struct ProjectIter {
@@ -33,13 +32,8 @@ impl ProjectIter {
             extend: true,
         }
     }
-}
 
-impl Iterator for ProjectIter {
-    type Item = LogItem;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let mut log = try_next_with_partial_passthrough!(self.input)?;
+    fn eval(&self, mut log: Log) -> Log {
         let mut output = Log::new();
 
         {
@@ -66,6 +60,20 @@ impl Iterator for ProjectIter {
             log = output;
         }
 
-        Some(LogItem::Log(log))
+        log
+    }
+}
+
+impl Iterator for ProjectIter {
+    type Item = LogItem;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        Some(match try_next_with_partial_stream!(self.input)? {
+            PartialStreamItem::Log(log) => LogItem::Log(self.eval(log)),
+            PartialStreamItem::PartialStreamLog(log, id) => {
+                LogItem::PartialStreamLog(self.eval(log), id)
+            }
+            PartialStreamItem::PartialStreamDone(id) => LogItem::PartialStreamDone(id),
+        })
     }
 }
