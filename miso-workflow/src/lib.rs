@@ -282,6 +282,8 @@ impl WorkflowStep {
     fn supports_partial_stream(&self) -> bool {
         matches!(
             self,
+            // Ignore MuxLimit - limit doesn't have any state to be partially streamed, it simply
+            // passes logs until reaching a limit.
             WorkflowStep::MuxSummarize(..) | WorkflowStep::MuxCount | WorkflowStep::MuxTopN(..)
         )
     }
