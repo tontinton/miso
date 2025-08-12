@@ -18,28 +18,6 @@ macro_rules! try_next {
     };
 }
 
-#[macro_export]
-macro_rules! try_next_with_partial_passthrough {
-    ($iter:expr) => {
-        match $iter.next() {
-            Some(miso_workflow_types::log::LogItem::UnionSomePipelineDone) => {
-                return Some(miso_workflow_types::log::LogItem::UnionSomePipelineDone);
-            }
-            Some(miso_workflow_types::log::LogItem::Err(e)) => {
-                return Some(miso_workflow_types::log::LogItem::Err(e))
-            }
-            Some(miso_workflow_types::log::LogItem::PartialStreamLog(log, id)) => {
-                return Some(miso_workflow_types::log::LogItem::PartialStreamLog(log, id));
-            }
-            Some(miso_workflow_types::log::LogItem::PartialStreamDone(id)) => {
-                return Some(miso_workflow_types::log::LogItem::PartialStreamDone(id));
-            }
-            Some(miso_workflow_types::log::LogItem::Log(log)) => Some(log),
-            None => None,
-        }
-    };
-}
-
 pub enum PartialStreamItem {
     Log(Log),
     PartialStreamLog(Log, usize),
