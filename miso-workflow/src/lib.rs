@@ -282,7 +282,7 @@ impl WorkflowStep {
     fn supports_partial_stream(&self) -> bool {
         matches!(
             self,
-            WorkflowStep::MuxSummarize(..) | WorkflowStep::MuxCount
+            WorkflowStep::MuxSummarize(..) | WorkflowStep::MuxCount | WorkflowStep::MuxTopN(..)
         )
     }
 
