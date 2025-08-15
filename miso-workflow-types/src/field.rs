@@ -112,6 +112,15 @@ impl Field {
         Self(access)
     }
 
+    /// Returns a new Field with the given suffix appended to the last segment's name.
+    pub fn with_suffix(self, suffix: &str) -> Self {
+        let mut new_field = self;
+        if let Some(last) = new_field.0.last_mut() {
+            last.name.push_str(suffix);
+        }
+        new_field
+    }
+
     pub fn has_array_access(&self) -> bool {
         self.0.iter().any(|x| !x.arr_indices.is_empty())
     }

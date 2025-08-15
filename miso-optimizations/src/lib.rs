@@ -7,6 +7,7 @@ use dynamic_filter::DynamicFilter;
 use merge_filters_into_and_filter::MergeFiltersIntoAndFilter;
 use mux_into_union::MuxIntoUnion;
 use pattern::{Group, Pattern};
+use project_propagation::{ProjectPropagationWithEnd, ProjectPropagationWithoutEnd};
 use push_count_into_scan::PushCountIntoScan;
 use push_filter_into_scan::PushFilterIntoScan;
 use push_limit_into_limit::PushLimitIntoLimit;
@@ -27,6 +28,7 @@ mod dynamic_filter;
 mod merge_filters_into_and_filter;
 mod mux_into_union;
 mod pattern;
+mod project_propagation;
 mod push_count_into_scan;
 mod push_filter_into_scan;
 mod push_limit_into_limit;
@@ -108,6 +110,8 @@ impl Optimizer {
             vec![
                 // Project & Extend.
                 opt!(PushProjectOrExtendIntoScan),
+                opt!(ProjectPropagationWithEnd),
+                opt!(ProjectPropagationWithoutEnd),
                 // Filter.
                 opt!(ReorderFilterBeforeSort),
                 opt!(PushFilterIntoScan),
