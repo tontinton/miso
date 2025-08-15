@@ -1,6 +1,6 @@
 use std::fmt;
 
-use miso_workflow_types::sort::Sort;
+use miso_workflow_types::{project::ProjectField, sort::Sort};
 
 use super::{Workflow, WorkflowStep};
 
@@ -84,9 +84,15 @@ impl fmt::Display for DisplayableWorkflowStep<'_> {
                 "{}Scan({}.{}){{{}}}",
                 pre, scan.connector_name, scan.collection, scan.handle
             ),
-            WorkflowStep::Filter(..) => write!(f, "{pre}Filter"),
-            WorkflowStep::Project(..) => write!(f, "{pre}Project"),
-            WorkflowStep::Extend(..) => write!(f, "{pre}Extend"),
+            WorkflowStep::Filter(expr) => write!(f, "{pre}Filter({expr})"),
+            WorkflowStep::Project(projects) => {
+                write!(f, "{pre}Project")?;
+                fmt_projects(f, projects)
+            }
+            WorkflowStep::Extend(projects) => {
+                write!(f, "{pre}Extend")?;
+                fmt_projects(f, projects)
+            }
             WorkflowStep::Limit(limit) => write!(f, "{pre}Limit({limit})"),
             WorkflowStep::MuxLimit(limit) => write!(f, "{pre}MuxLimit({limit})"),
             WorkflowStep::Sort(sorts) => {
@@ -143,22 +149,32 @@ fn fmt_sorts(f: &mut fmt::Formatter<'_>, sorts: &[Sort]) -> fmt::Result {
     write!(f, ")")
 }
 
+fn fmt_projects(f: &mut fmt::Formatter<'_>, projects: &[ProjectField]) -> fmt::Result {
+    write!(f, "(")?;
+    for (i, pf) in projects.iter().enumerate() {
+        if i > 0 {
+            write!(f, ", ")?;
+        }
+        write!(f, "{pf}")?;
+    }
+    write!(f, ")")
+}
+
 impl fmt::Display for Workflow {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        writeln!(
-            f,
-            "{}",
-            DisplayableWorkflowSteps {
-                steps: &self.steps,
-                indent: 0,
-            }
-        )
+        writeln!(f, "{}", DisplayableWorkflowSteps::new(&self.steps))
     }
 }
 
-struct DisplayableWorkflowSteps<'a> {
-    steps: &'a Vec<WorkflowStep>,
+pub struct DisplayableWorkflowSteps<'a> {
+    steps: &'a [WorkflowStep],
     indent: usize,
+}
+
+impl<'a> DisplayableWorkflowSteps<'a> {
+    pub fn new(steps: &'a [WorkflowStep]) -> Self {
+        Self { steps, indent: 0 }
+    }
 }
 
 impl fmt::Display for DisplayableWorkflowSteps<'_> {
