@@ -1,4 +1,5 @@
 pub mod expr;
+pub mod expr_subst;
 pub mod field;
 pub mod join;
 pub mod log;

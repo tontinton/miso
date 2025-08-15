@@ -1552,6 +1552,7 @@ dependencies = [
  "miso-workflow-types",
  "scopeguard",
  "serde_json",
+ "test-case",
  "tokio",
 ]
 
