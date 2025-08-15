@@ -1,7 +1,7 @@
 use std::str::FromStr;
 
 use hashbrown::HashMap;
-use miso_workflow::{Workflow, WorkflowStep as S};
+use miso_workflow::{Workflow, WorkflowStep as S, display::DisplayableWorkflowSteps};
 use miso_workflow_types::{
     expr::Expr,
     field::Field,
@@ -76,8 +76,15 @@ fn int_val(n: i32) -> serde_json::Value {
 }
 
 fn check(optimizer: Optimizer, input: Vec<S>, expected: Vec<S>) {
-    let result = optimizer.optimize(input);
-    assert_eq!(result, expected);
+    let result = optimizer.optimize(input.clone());
+    assert_eq!(
+        result,
+        expected,
+        "\nInput:\n{}\nOptimized:\n{}\n!=\nExpected:\n{}\n",
+        DisplayableWorkflowSteps::new(&input),
+        DisplayableWorkflowSteps::new(&result),
+        DisplayableWorkflowSteps::new(&expected),
+    );
 }
 
 fn check_default(input: Vec<S>, expected: Vec<S>) {

@@ -38,7 +38,7 @@ use self::{cancel_iter::CancelIter, send_once::SendOnce};
 
 mod cancel_iter;
 mod count;
-mod display;
+pub mod display;
 pub mod filter;
 pub mod interpreter;
 pub mod join;
