@@ -97,4 +97,8 @@ impl Summarize {
         }
         Self { aggs, by: self.by }
     }
+
+    pub fn is_empty(&self) -> bool {
+        self.aggs.is_empty() && self.by.is_empty()
+    }
 }

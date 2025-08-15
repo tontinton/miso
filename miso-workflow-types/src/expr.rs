@@ -1,8 +1,16 @@
 use std::fmt;
 
+use hashbrown::HashSet;
 use serde::{Deserialize, Serialize};
 
 use crate::field::Field;
+
+macro_rules! fields_binop {
+    ($l:expr, $r:expr, $out:expr) => {{
+        $l._fields($out);
+        $r._fields($out);
+    }};
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum Expr {
@@ -103,5 +111,51 @@ impl fmt::Display for Expr {
             Expr::Plus(lhs, rhs) => write!(f, "({lhs} + {rhs})"),
             Expr::Minus(lhs, rhs) => write!(f, "({lhs} - {rhs})"),
         }
+    }
+}
+
+impl Expr {
+    pub(crate) fn _fields(&self, out: &mut HashSet<Field>) {
+        match self {
+            Expr::Field(f) | Expr::Exists(f) => {
+                out.insert(f.clone());
+            }
+
+            Expr::Literal(_) => {}
+
+            Expr::Not(e) | Expr::Cast(_, e) => e._fields(out),
+
+            Expr::In(e, arr) => {
+                e._fields(out);
+                for item in arr {
+                    item._fields(out);
+                }
+            }
+
+            Expr::Bin(l, r) => fields_binop!(l, r, out),
+            Expr::Or(l, r) => fields_binop!(l, r, out),
+            Expr::And(l, r) => fields_binop!(l, r, out),
+            Expr::Contains(l, r) => fields_binop!(l, r, out),
+            Expr::StartsWith(l, r) => fields_binop!(l, r, out),
+            Expr::EndsWith(l, r) => fields_binop!(l, r, out),
+            Expr::Has(l, r) => fields_binop!(l, r, out),
+            Expr::HasCs(l, r) => fields_binop!(l, r, out),
+            Expr::Eq(l, r) => fields_binop!(l, r, out),
+            Expr::Ne(l, r) => fields_binop!(l, r, out),
+            Expr::Gt(l, r) => fields_binop!(l, r, out),
+            Expr::Gte(l, r) => fields_binop!(l, r, out),
+            Expr::Lt(l, r) => fields_binop!(l, r, out),
+            Expr::Lte(l, r) => fields_binop!(l, r, out),
+            Expr::Mul(l, r) => fields_binop!(l, r, out),
+            Expr::Div(l, r) => fields_binop!(l, r, out),
+            Expr::Plus(l, r) => fields_binop!(l, r, out),
+            Expr::Minus(l, r) => fields_binop!(l, r, out),
+        }
+    }
+
+    pub fn fields(&self) -> HashSet<Field> {
+        let mut out = HashSet::new();
+        self._fields(&mut out);
+        out
     }
 }

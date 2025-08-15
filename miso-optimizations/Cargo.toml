@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 flume.workspace = true
+hashbrown.workspace = true
 miso-common.workspace = true
 miso-workflow.workspace = true
 miso-workflow-types.workspace = true
@@ -14,3 +15,4 @@ tokio.workspace = true
 
 [dev-dependencies]
 hashbrown.workspace = true
+test-case.workspace = true
