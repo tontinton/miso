@@ -179,7 +179,7 @@ fn apply(
                 out.push(WorkflowStep::Project(new_fields));
             }
         }
-        _ => unreachable!("not in summarize pattern"),
+        _ => unreachable!("not in end pattern"),
     }
 
     Some(out)
