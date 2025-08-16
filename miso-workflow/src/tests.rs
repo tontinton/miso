@@ -657,6 +657,20 @@ async fn project_add() -> Result<()> {
 }
 
 #[tokio::test]
+async fn project_filter() -> Result<()> {
+    check(
+        r#"
+        test.c
+        | project rename=world, literal=1, test=doesnt_exist
+        | where rename == literal * 2
+        "#,
+        r#"[{"world": 2}, {"world": 1}, {"hello": "world"}]"#,
+        r#"[{"rename": 2, "literal": 1}]"#,
+    )
+    .await
+}
+
+#[tokio::test]
 async fn project_array() -> Result<()> {
     check(
         r#"test.c | project world=world[0].x[1]"#,
