@@ -630,6 +630,192 @@ fn test_parentheses_in_expressions() {
     }
 }
 
+#[test_case("datetime()"; "current_time")]
+#[test_case("now()"; "now_function")]
+#[test_case("datetime(null)"; "null_value")]
+#[test_case("datetime(\"2015-12-31\")"; "date_only")]
+#[test_case("datetime(\"2015-12-31 23:59:59\")"; "date_with_time")]
+#[test_case("datetime(\"2015-12-31 23:59:59.999\")"; "date_with_millis")]
+fn test_datetime_parsing(datetime_expr: &str) {
+    let query = format!("connector.table | where field1 == {}", datetime_expr);
+    let result = parse_unwrap!(&query);
+
+    match &result[1] {
+        QueryStep::Filter(expr) => match expr {
+            Expr::Eq(_, right) => match &**right {
+                Expr::Literal(Value::Number(_)) => {}
+                Expr::Literal(Value::Null) if datetime_expr.contains("null") => {}
+                _ => panic!("Expected datetime to parse to Number or Null literal"),
+            },
+            _ => panic!("Expected Eq expression"),
+        },
+        _ => panic!("Expected Filter step"),
+    }
+}
+
+#[test]
+fn test_datetime_current_time() {
+    let query = "connector.table | where field1 == datetime()";
+    let result = parse_unwrap!(query);
+
+    match &result[1] {
+        QueryStep::Filter(expr) => match expr {
+            Expr::Eq(_, right) => match &**right {
+                Expr::Literal(Value::Number(n)) => {
+                    let millis = n.as_i64().expect("Should be i64");
+                    // Should be a reasonable timestamp (after 2020-01-01 and before 2050-01-01).
+                    let year_2020_millis = 1577836800000i64; // 2020-01-01 00:00:00 UTC
+                    let year_2050_millis = 2524608000000i64; // 2050-01-01 00:00:00 UTC
+                    assert!(
+                        millis > year_2020_millis && millis < year_2050_millis,
+                        "Timestamp {} not in reasonable range",
+                        millis
+                    );
+                }
+                _ => panic!("datetime() should return a Number"),
+            },
+            _ => panic!("Expected Eq expression"),
+        },
+        _ => panic!("Expected Filter step"),
+    }
+}
+
+#[test]
+fn test_datetime_null() {
+    let query = "connector.table | where field1 == datetime(null)";
+    let result = parse_unwrap!(query);
+
+    match &result[1] {
+        QueryStep::Filter(expr) => match expr {
+            Expr::Eq(_, right) => match &**right {
+                Expr::Literal(Value::Null) => {}
+                _ => panic!("datetime(null) should return Null"),
+            },
+            _ => panic!("Expected Eq expression"),
+        },
+        _ => panic!("Expected Filter step"),
+    }
+}
+
+#[test_case("2015-12-31", 1451520000000i64; "date_only_2015")]
+#[test_case("2020-01-01", 1577836800000i64; "date_only_2020")]
+#[test_case("1970-01-01", 0i64; "epoch_start")]
+fn test_datetime_specific_dates(date_str: &str, expected_millis: i64) {
+    let query = format!(
+        "connector.table | where field1 == datetime(\"{}\")",
+        date_str
+    );
+    let result = parse_unwrap!(&query);
+
+    match &result[1] {
+        QueryStep::Filter(expr) => match expr {
+            Expr::Eq(_, right) => match &**right {
+                Expr::Literal(Value::Number(n)) => {
+                    let millis = n.as_i64().expect("Should be i64");
+                    assert_eq!(
+                        millis, expected_millis,
+                        "Date {} should convert to {} milliseconds, got {}",
+                        date_str, expected_millis, millis
+                    );
+                }
+                _ => panic!("datetime with string should return Number"),
+            },
+            _ => panic!("Expected Eq expression"),
+        },
+        _ => panic!("Expected Filter step"),
+    }
+}
+
+#[test]
+fn test_datetime_with_time() {
+    let query = "connector.table | where field1 == datetime(\"2020-01-01 12:30:45\")";
+    let result = parse_unwrap!(query);
+
+    match &result[1] {
+        QueryStep::Filter(expr) => match expr {
+            Expr::Eq(_, right) => match &**right {
+                Expr::Literal(Value::Number(n)) => {
+                    let millis = n.as_i64().expect("Should be i64");
+                    // 2020-01-01 00:00:00 UTC = 1577836800000
+                    // + 12 hours = 12 * 60 * 60 * 1000 = 43200000
+                    // + 30 minutes = 30 * 60 * 1000 = 1800000
+                    // + 45 seconds = 45 * 1000 = 45000
+                    let expected = 1577836800000i64 + 43200000 + 1800000 + 45000;
+                    assert_eq!(millis, expected);
+                }
+                _ => panic!("datetime with time should return Number"),
+            },
+            _ => panic!("Expected Eq expression"),
+        },
+        _ => panic!("Expected Filter step"),
+    }
+}
+
+#[test]
+fn test_datetime_with_milliseconds() {
+    let query = "connector.table | where field1 == datetime(\"2020-01-01 00:00:00.500\")";
+    let result = parse_unwrap!(query);
+
+    match &result[1] {
+        QueryStep::Filter(expr) => match expr {
+            Expr::Eq(_, right) => match &**right {
+                Expr::Literal(Value::Number(n)) => {
+                    let millis = n.as_i64().expect("Should be i64");
+                    let expected = 1577836800500i64;
+                    assert_eq!(millis, expected);
+                }
+                _ => panic!("datetime with milliseconds should return Number"),
+            },
+            _ => panic!("Expected Eq expression"),
+        },
+        _ => panic!("Expected Filter step"),
+    }
+}
+
+#[test_case("datetime(\"invalid\")"; "invalid_format")]
+#[test_case("datetime(\"2020-13-01\")"; "invalid_month")]
+#[test_case("datetime(\"2020-01-32\")"; "invalid_day")]
+#[test_case("datetime(\"2020-01-01 25:00:00\")"; "invalid_hour")]
+#[test_case("datetime(\"2020-01-01 12:60:00\")"; "invalid_minute")]
+#[test_case("datetime(\"2020-01-01 12:30:61\")"; "invalid_second")]
+fn test_datetime_invalid_formats(datetime_expr: &str) {
+    let query = format!("connector.table | where field1 == {}", datetime_expr);
+    let result = parse(&query);
+    assert!(
+        result.is_err(),
+        "Expected parse error for invalid datetime format"
+    );
+}
+
+#[test]
+fn test_datetime_in_complex_expression() {
+    let query = r#"
+            connector.table 
+            | where timestamp > datetime("2020-01-01") and timestamp < datetime()
+            | project timestamp, age = datetime() - timestamp
+        "#;
+    let result = parse_unwrap!(query);
+
+    assert_eq!(result.len(), 3);
+    assert!(matches!(result[0], QueryStep::Scan(_, _)));
+    assert!(matches!(result[1], QueryStep::Filter(_)));
+    assert!(matches!(result[2], QueryStep::Project(_)));
+
+    match &result[1] {
+        QueryStep::Filter(expr) => match expr {
+            Expr::And(left, right) => match (&**left, &**right) {
+                (Expr::Gt(_, dt1), Expr::Lt(_, dt2)) => {
+                    assert!(matches!(&**dt1, Expr::Literal(Value::Number(_))));
+                    assert!(matches!(&**dt2, Expr::Literal(Value::Number(_))));
+                }
+                _ => panic!("Expected Gt and Lt expressions with datetime literals"),
+            },
+            _ => panic!("Expected And expression"),
+        },
+        _ => panic!("Expected Filter step"),
+    }
+}
+
 #[test_case(
     "connector.table1 | join (connector.table2 | where) on $left. == $right.field2 | project field1",
     3;
