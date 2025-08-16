@@ -762,6 +762,28 @@ async fn summarize() -> Result<()> {
 }
 
 #[tokio::test]
+async fn project_summarize() -> Result<()> {
+    check(
+        r#"
+        test.c
+        | project x=a, y=b, z=c, should_not_appear=doesnt_exist
+        | summarize max_x=max(x),
+                    min_x=min(x),
+                    sum_x=sum(x),
+                    dcount_z=dcount(z),
+                    cnt=count()
+          by y
+        "#,
+        r#"[{"a": 3, "b": 3, "c": 2}, {"a": 5, "b": 6, "c": 1}, {"a": 1, "b": 3, "c": 2}, {"a": 9, "b": 6, "c": 3}]"#,
+        r#"[
+            {"max_x": 3, "min_x": 1, "sum_x": 4.0, "dcount_z": 1, "cnt": 2, "y": 3},
+            {"max_x": 9, "min_x": 5, "sum_x": 14.0, "dcount_z": 2, "cnt": 2, "y": 6}
+        ]"#,
+    )
+    .await
+}
+
+#[tokio::test]
 async fn summarize_bin() -> Result<()> {
     check(
         r#"
@@ -777,6 +799,28 @@ async fn summarize_bin() -> Result<()> {
         r#"[
             {"max_x": 5, "min_x": 3, "sum_x": 8.0, "dcount_x": 2, "c": 2, "y": 0.0},
             {"max_x": 9, "min_x": 1, "sum_x": 10.0, "dcount_x": 2, "c": 2, "y": 4.0}
+        ]"#,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn project_summarize_bin() -> Result<()> {
+    check(
+        r#"
+        test.c
+        | project x=a, y=b, should_not_appear=doesnt_exist
+        | summarize max_x=max(x),
+                    min_x=min(x),
+                    sum_x=sum(x),
+                    dcount_x=dcount(x),
+                    cnt=count()
+          by bin(y, 2)
+        "#,
+        r#"[{"a": 3, "b": 0}, {"a": 5, "b": 1}, {"a": 1, "b": 4}, {"a": 9, "b": 5}, {"a": 5}]"#,
+        r#"[
+            {"max_x": 5, "min_x": 3, "sum_x": 8.0, "dcount_x": 2, "cnt": 2, "y": 0.0},
+            {"max_x": 9, "min_x": 1, "sum_x": 10.0, "dcount_x": 2, "cnt": 2, "y": 4.0}
         ]"#,
     )
     .await
