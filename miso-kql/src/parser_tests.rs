@@ -545,13 +545,10 @@ fn test_literal_values(condition: &str, literal_type: &str) {
         QueryStep::Filter(expr) => match expr {
             Expr::Eq(_, right) => match &**right {
                 Expr::Literal(Value::Number(_))
-                    if literal_type == "integer" || literal_type == "float" =>
-                {
-                    ()
-                }
-                Expr::Literal(Value::Bool(_)) if literal_type == "boolean" => (),
-                Expr::Literal(Value::Null) if literal_type == "null" => (),
-                Expr::Literal(Value::String(_)) if literal_type == "string" => (),
+                    if literal_type == "integer" || literal_type == "float" => {}
+                Expr::Literal(Value::Bool(_)) if literal_type == "boolean" => {}
+                Expr::Literal(Value::Null) if literal_type == "null" => {}
+                Expr::Literal(Value::String(_)) if literal_type == "string" => {}
                 _ => panic!("Expected {} literal", literal_type),
             },
             _ => panic!("Expected Eq expression"),
