@@ -55,6 +55,10 @@ pub enum Token {
     Has,
     #[token("has_cs")]
     HasCs,
+    #[token("datetime")]
+    Datetime,
+    #[token("now")]
+    Now,
     #[token("tostring")]
     ToString,
     #[token("toint")]

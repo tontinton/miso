@@ -1,5 +1,6 @@
 use std::{fmt, str::FromStr};
 
+use chrono::{NaiveDate, NaiveDateTime};
 use chumsky::{
     input::{Stream, ValueInput},
     prelude::*,
@@ -129,6 +130,8 @@ where
         Token::EndsWith => "endswith".to_string(),
         Token::Has => "has".to_string(),
         Token::HasCs => "has_cs".to_string(),
+        Token::Datetime => "datetime".to_string(),
+        Token::Now => "now".to_string(),
         Token::ToString => "tostring".to_string(),
         Token::ToInt => "toint".to_string(),
         Token::ToLong => "tolong".to_string(),
@@ -215,6 +218,98 @@ where
         .boxed()
 }
 
+fn parse_datetime_to_millis(date_str: &str) -> Result<i64, String> {
+    if let Ok(dt) = NaiveDateTime::parse_from_str(date_str, "%Y-%m-%d %H:%M:%S%.3f") {
+        return Ok(dt.and_utc().timestamp_millis());
+    }
+
+    if let Ok(dt) = NaiveDateTime::parse_from_str(date_str, "%Y-%m-%d %H:%M:%S") {
+        return Ok(dt.and_utc().timestamp_millis());
+    }
+
+    if let Ok(date) = NaiveDate::parse_from_str(date_str, "%Y-%m-%d") {
+        let dt = date.and_hms_opt(0, 0, 0).unwrap();
+        return Ok(dt.and_utc().timestamp_millis());
+    }
+
+    Err("invalid datetime format".to_string())
+}
+
+fn now_expr() -> Expr {
+    let now_millis = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system time is before Unix epoch")
+        .as_millis() as i64;
+    Expr::Literal(serde_json::Value::from(now_millis))
+}
+
+fn datetime_parser<'a, I>(
+    string_literal: impl Parser<'a, I, String, extra::Err<Rich<'a, Token>>> + Clone + 'a,
+) -> impl Parser<'a, I, Expr, extra::Err<Rich<'a, Token>>> + Clone
+where
+    I: ValueInput<'a, Token = Token, Span = SimpleSpan>,
+{
+    let datetime = just(Token::Datetime)
+        .ignore_then(
+            // datetime() - current time.
+            just(Token::LParen)
+                .ignore_then(just(Token::RParen))
+                .map(|_| {
+                    now_expr()
+                })
+                .or(
+                    // datetime(null) - null value.
+                    just(Token::LParen)
+                        .ignore_then(just(Token::Null))
+                        .then_ignore(just(Token::RParen))
+                        .map(|_| Expr::Literal(serde_json::Value::Null))
+                )
+                .or(
+                    // datetime(year.month.day hour:minute:second.milliseconds)
+                    // or datetime(year.month.day).
+                    just(Token::LParen)
+                        .ignore_then(string_literal)
+                        .then_ignore(just(Token::RParen))
+                        .validate(|date_str, e, emitter| {
+                            match parse_datetime_to_millis(&date_str) {
+                                Ok(millis) => Expr::Literal(serde_json::Value::from(millis)),
+                                Err(err) => {
+                                    emitter.emit(Rich::custom(
+                                        e.span(),
+                                        format!("invalid datetime format: {}. Expected: YYYY-MM-DD [HH:MM:SS[.mmm]]", err),
+                                    ));
+                                    Expr::Literal(serde_json::Value::Null)
+                                }
+                            }
+                        })
+                        .boxed()
+                )
+                .recover_with(via_parser(nested_delimiters(
+                    Token::LParen,
+                    Token::RParen,
+                    [(Token::LBracket, Token::RBracket)],
+                    |_| Expr::Literal(serde_json::Value::Null),
+                )))
+        )
+        .labelled("datetime")
+        .boxed();
+
+    let now = just(Token::Now)
+        .ignore_then(just(Token::LParen))
+        .ignore_then(just(Token::RParen))
+        .map(|_| now_expr())
+        .recover_with(via_parser(nested_delimiters(
+            Token::LParen,
+            Token::RParen,
+            [(Token::LBracket, Token::RBracket)],
+            |_| Expr::Literal(serde_json::Value::Null),
+        )))
+        .labelled("now")
+        .boxed();
+
+    datetime.or(now).boxed()
+}
+
 fn expr_parser<'a, I>() -> impl Parser<'a, I, Expr, extra::Err<Rich<'a, Token>>> + Clone
 where
     I: ValueInput<'a, Token = Token, Span = SimpleSpan>,
@@ -235,6 +330,8 @@ where
         })
         .labelled("string literal")
         .boxed();
+
+        let datetime = datetime_parser(string_literal.clone());
 
         let literal = select! {
             Token::Integer(x) => {
@@ -324,6 +421,7 @@ where
             .or(not)
             .or(cast)
             .or(exists)
+            .or(datetime)
             // Must be last (fields can contain tokens that are keywords).
             .or(field.map(Expr::Field))
             .recover_with(skip_then_retry_until(
