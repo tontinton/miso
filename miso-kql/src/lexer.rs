@@ -5,6 +5,9 @@ use logos::Logos;
 pub enum Token {
     Error,
 
+    #[regex(r"//[^\r\n\u{2028}\u{2029}]*", logos::skip)]
+    Comment,
+
     #[token("|")]
     Pipe,
     #[token(".")]

@@ -714,3 +714,39 @@ fn test_whitespace_handling() {
     assert_eq!(lex.next(), Some(Ok(Token::Integer(0xFF))));
     assert_eq!(lex.next(), None);
 }
+
+#[test]
+fn test_comments() {
+    let mut lex = Token::lexer("// This is a comment");
+    assert_eq!(lex.next(), None);
+
+    let mut lex = Token::lexer("// Comment\nx = 5");
+    assert_eq!(lex.next(), Some(Ok(Token::Ident("x".to_string()))));
+    assert_eq!(lex.next(), Some(Ok(Token::Eq)));
+    assert_eq!(lex.next(), Some(Ok(Token::Integer(5))));
+
+    let mut lex = Token::lexer("x = 5 // This is an inline comment");
+    assert_eq!(lex.next(), Some(Ok(Token::Ident("x".to_string()))));
+    assert_eq!(lex.next(), Some(Ok(Token::Eq)));
+    assert_eq!(lex.next(), Some(Ok(Token::Integer(5))));
+    assert_eq!(lex.next(), None);
+
+    let mut lex = Token::lexer("// First comment\n// Second comment\nx = 5");
+    assert_eq!(lex.next(), Some(Ok(Token::Ident("x".to_string()))));
+    assert_eq!(lex.next(), Some(Ok(Token::Eq)));
+    assert_eq!(lex.next(), Some(Ok(Token::Integer(5))));
+
+    let mut lex = Token::lexer("// Comment with symbols: !@#$%^&*()");
+    assert_eq!(lex.next(), None);
+
+    let mut lex = Token::lexer("//");
+    assert_eq!(lex.next(), None);
+
+    let mut lex = Token::lexer("// Comment\rx = 5");
+    assert_eq!(lex.next(), Some(Ok(Token::Ident("x".to_string()))));
+
+    let mut lex = Token::lexer("x / y");
+    assert_eq!(lex.next(), Some(Ok(Token::Ident("x".to_string()))));
+    assert_eq!(lex.next(), Some(Ok(Token::Div)));
+    assert_eq!(lex.next(), Some(Ok(Token::Ident("y".to_string()))));
+}
