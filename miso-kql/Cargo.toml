@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+chrono.workspace = true
 chumsky.workspace = true
 hashbrown.workspace = true
 logos.workspace = true
