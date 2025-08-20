@@ -4,13 +4,13 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-chrono.workspace = true
 chumsky.workspace = true
 hashbrown.workspace = true
 logos.workspace = true
 miso-workflow-types.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+time.workspace = true
 
 [dev-dependencies]
 test-case.workspace = true
