@@ -7,6 +7,7 @@ pub mod project;
 pub mod query;
 pub mod sort;
 pub mod summarize;
+pub mod value;
 
 #[cfg(test)]
 mod field_tests;

@@ -10,7 +10,7 @@ macro_rules! field_unwrap {
     };
 }
 
-#[derive(Debug, Clone, Default, Hash, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct FieldAccess {
     pub name: String,
 
@@ -98,7 +98,7 @@ impl fmt::Display for FieldAccess {
     }
 }
 
-#[derive(Debug, Clone, Default, Hash, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Field(Vec<FieldAccess>);
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]

@@ -9,8 +9,8 @@ use miso_workflow_types::{
     query::QueryStep,
     sort::{NullsOrder, SortOrder},
     summarize::Aggregation,
+    value::Value,
 };
-use serde_json::Value;
 
 use crate::parse;
 
@@ -544,8 +544,8 @@ fn test_literal_values(condition: &str, literal_type: &str) {
     match &result[1] {
         QueryStep::Filter(expr) => match expr {
             Expr::Eq(_, right) => match &**right {
-                Expr::Literal(Value::Number(_))
-                    if literal_type == "integer" || literal_type == "float" => {}
+                Expr::Literal(Value::Int(_)) if literal_type == "integer" => {}
+                Expr::Literal(Value::Float(_)) if literal_type == "float" => {}
                 Expr::Literal(Value::Bool(_)) if literal_type == "boolean" => {}
                 Expr::Literal(Value::Null) if literal_type == "null" => {}
                 Expr::Literal(Value::String(_)) if literal_type == "string" => {}
@@ -643,7 +643,7 @@ fn test_datetime_parsing(datetime_expr: &str) {
     match &result[1] {
         QueryStep::Filter(expr) => match expr {
             Expr::Eq(_, right) => match &**right {
-                Expr::Literal(Value::Number(_)) => {}
+                Expr::Literal(Value::Int(_)) => {}
                 Expr::Literal(Value::Null) if datetime_expr.contains("null") => {}
                 _ => panic!("Expected datetime to parse to Number or Null literal"),
             },
@@ -661,15 +661,14 @@ fn test_datetime_current_time() {
     match &result[1] {
         QueryStep::Filter(expr) => match expr {
             Expr::Eq(_, right) => match &**right {
-                Expr::Literal(Value::Number(n)) => {
-                    let millis = n.as_i64().expect("Should be i64");
+                Expr::Literal(Value::Int(millis)) => {
                     // Should be a reasonable timestamp (after 2020-01-01 and before 2050-01-01).
                     let year_2020_millis = 1577836800000i64; // 2020-01-01 00:00:00 UTC
                     let year_2050_millis = 2524608000000i64; // 2050-01-01 00:00:00 UTC
                     assert!(
-                        millis > year_2020_millis && millis < year_2050_millis,
+                        *millis > year_2020_millis && *millis < year_2050_millis,
                         "Timestamp {} not in reasonable range",
-                        millis
+                        *millis
                     );
                 }
                 _ => panic!("datetime() should return a Number"),
@@ -710,10 +709,9 @@ fn test_datetime_specific_dates(date_str: &str, expected_millis: i64) {
     match &result[1] {
         QueryStep::Filter(expr) => match expr {
             Expr::Eq(_, right) => match &**right {
-                Expr::Literal(Value::Number(n)) => {
-                    let millis = n.as_i64().expect("Should be i64");
+                Expr::Literal(Value::Int(millis)) => {
                     assert_eq!(
-                        millis, expected_millis,
+                        *millis, expected_millis,
                         "Date {} should convert to {} milliseconds, got {}",
                         date_str, expected_millis, millis
                     );
@@ -734,14 +732,13 @@ fn test_datetime_with_time() {
     match &result[1] {
         QueryStep::Filter(expr) => match expr {
             Expr::Eq(_, right) => match &**right {
-                Expr::Literal(Value::Number(n)) => {
-                    let millis = n.as_i64().expect("Should be i64");
+                Expr::Literal(Value::Int(millis)) => {
                     // 2020-01-01 00:00:00 UTC = 1577836800000
                     // + 12 hours = 12 * 60 * 60 * 1000 = 43200000
                     // + 30 minutes = 30 * 60 * 1000 = 1800000
                     // + 45 seconds = 45 * 1000 = 45000
                     let expected = 1577836800000i64 + 43200000 + 1800000 + 45000;
-                    assert_eq!(millis, expected);
+                    assert_eq!(*millis, expected);
                 }
                 _ => panic!("datetime with time should return Number"),
             },
@@ -759,10 +756,9 @@ fn test_datetime_with_milliseconds() {
     match &result[1] {
         QueryStep::Filter(expr) => match expr {
             Expr::Eq(_, right) => match &**right {
-                Expr::Literal(Value::Number(n)) => {
-                    let millis = n.as_i64().expect("Should be i64");
+                Expr::Literal(Value::Int(millis)) => {
                     let expected = 1577836800500i64;
-                    assert_eq!(millis, expected);
+                    assert_eq!(*millis, expected);
                 }
                 _ => panic!("datetime with milliseconds should return Number"),
             },
@@ -805,8 +801,8 @@ fn test_datetime_in_complex_expression() {
         QueryStep::Filter(expr) => match expr {
             Expr::And(left, right) => match (&**left, &**right) {
                 (Expr::Gt(_, dt1), Expr::Lt(_, dt2)) => {
-                    assert!(matches!(&**dt1, Expr::Literal(Value::Number(_))));
-                    assert!(matches!(&**dt2, Expr::Literal(Value::Number(_))));
+                    assert!(matches!(&**dt1, Expr::Literal(Value::Int(_))));
+                    assert!(matches!(&**dt2, Expr::Literal(Value::Int(_))));
                 }
                 _ => panic!("Expected Gt and Lt expressions with datetime literals"),
             },

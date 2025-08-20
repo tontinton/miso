@@ -23,10 +23,8 @@ use miso_connectors::{
 use miso_kql::parse;
 use miso_optimizations::Optimizer;
 use miso_server::http_server::to_workflow_steps;
-use miso_workflow::{
-    Workflow, serde_json_utils::partial_cmp_values, sortable_value::SortableValue,
-};
-use miso_workflow_types::{expr::Expr, field::Field, field_unwrap, log::Log};
+use miso_workflow::Workflow;
+use miso_workflow_types::{expr::Expr, field::Field, field_unwrap, json, log::Log, value::Value};
 use serde::{Deserialize, Serialize};
 use test_case::test_case;
 use tokio::{task::spawn_blocking, time::sleep};
@@ -150,14 +148,11 @@ impl Connector for TestConnector {
 }
 
 fn distinct_field_values(logs: Vec<Log>) -> Vec<(String, u32)> {
-    let mut field_values: BTreeMap<String, BTreeSet<SortableValue>> = BTreeMap::new();
+    let mut field_values: BTreeMap<String, BTreeSet<Value>> = BTreeMap::new();
 
     for log in logs {
         for (key, value) in log {
-            field_values
-                .entry(key)
-                .or_default()
-                .insert(SortableValue(value));
+            field_values.entry(key).or_default().insert(value);
         }
     }
 
@@ -182,10 +177,9 @@ async fn check_multi_connectors(
     apply_filter_tx: Option<std::sync::mpsc::Sender<Expr>>,
 ) -> Result<()> {
     let expected_logs = {
-        let mut v: Vec<_> = serde_json::from_str::<Vec<serde_json::Value>>(expected)
+        let mut v: Vec<_> = serde_json::from_str::<Vec<Value>>(expected)
             .context("parse expected output logs from json")?
             .into_iter()
-            .map(SortableValue)
             .collect();
         v.sort();
         v
@@ -248,7 +242,7 @@ async fn check_multi_connectors(
 
     let mut logs = Vec::new();
     while let Some(log) = logs_stream.try_next().await.context("log stream")? {
-        logs.push(SortableValue(serde_json::Value::Object(log)));
+        logs.push(json!(log));
     }
     logs.sort();
 
@@ -267,7 +261,7 @@ async fn check_multi_connectors(
 
     let mut optimized_logs = Vec::with_capacity(logs.len());
     while let Some(log) = logs_stream.try_next().await? {
-        optimized_logs.push(SortableValue(serde_json::Value::Object(log)));
+        optimized_logs.push(json!(log));
     }
     optimized_logs.sort();
 
@@ -880,9 +874,7 @@ async fn join_inner(partitions: usize) -> Result<()> {
 
             let compare_filter_asts = |a: &Expr, b: &Expr| -> Ordering {
                 match (a, b) {
-                    (Expr::Literal(val_a), Expr::Literal(val_b)) => {
-                        partial_cmp_values(val_a, val_b).unwrap_or(Ordering::Equal)
-                    }
+                    (Expr::Literal(val_a), Expr::Literal(val_b)) => val_a.cmp(val_b),
                     _ => {
                         panic!("Unexpected Expr variants in Vec during comparison: {a:?} vs {b:?}")
                     }

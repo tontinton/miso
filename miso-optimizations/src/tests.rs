@@ -9,6 +9,7 @@ use miso_workflow_types::{
     project::ProjectField,
     sort::{NullsOrder, Sort, SortOrder},
     summarize::{Aggregation, Summarize},
+    value::Value,
 };
 use test_case::test_case;
 
@@ -55,7 +56,7 @@ fn project_field(to: &str, from: Expr) -> ProjectField {
     }
 }
 
-fn literal_project(to: &str, value: serde_json::Value) -> ProjectField {
+fn literal_project(to: &str, value: Value) -> ProjectField {
     project_field(to, Expr::Literal(value))
 }
 
@@ -67,12 +68,12 @@ fn noop_project(to: &str) -> ProjectField {
     project_field(to, Expr::Field(field(to)))
 }
 
-fn string_val(s: &str) -> serde_json::Value {
-    serde_json::Value::String(s.to_string())
+fn string_val(s: &str) -> Value {
+    Value::String(s.to_string())
 }
 
-fn int_val(n: i32) -> serde_json::Value {
-    serde_json::Value::from(n)
+fn int_val(n: i32) -> Value {
+    Value::from(n)
 }
 
 fn check(optimizer: Optimizer, input: Vec<S>, expected: Vec<S>) {
@@ -154,7 +155,7 @@ fn filter_before_sort() {
     }]);
     let filter1 = S::Filter(Expr::Eq(
         Box::new(Expr::Field(field("a"))),
-        Box::new(Expr::Literal(serde_json::Value::String("b".to_string()))),
+        Box::new(Expr::Literal(Value::String("b".to_string()))),
     ));
 
     check_default(
@@ -167,11 +168,11 @@ fn filter_before_sort() {
 fn merge_filters() {
     let ast1 = Expr::Eq(
         Box::new(Expr::Field(field("a"))),
-        Box::new(Expr::Literal(serde_json::Value::String("b".to_string()))),
+        Box::new(Expr::Literal(Value::String("b".to_string()))),
     );
     let ast2 = Expr::Ne(
         Box::new(Expr::Field(field("c"))),
-        Box::new(Expr::Literal(serde_json::Value::String("d".to_string()))),
+        Box::new(Expr::Literal(Value::String("d".to_string()))),
     );
 
     check_default(
@@ -206,7 +207,7 @@ fn dont_remove_sorts_before_limit_before_count() {
 fn filter_into_union() {
     let filter = S::Filter(Expr::Eq(
         Box::new(Expr::Field(field("a"))),
-        Box::new(Expr::Literal(serde_json::Value::String("b".to_string()))),
+        Box::new(Expr::Literal(Value::String("b".to_string()))),
     ));
 
     check_default(
@@ -316,7 +317,7 @@ fn summarize_into_union() {
 fn reorder_filter_before_sort() {
     let filter = S::Filter(Expr::Eq(
         Box::new(Expr::Field(field("a"))),
-        Box::new(Expr::Literal(serde_json::Value::String("b".to_string()))),
+        Box::new(Expr::Literal(Value::String("b".to_string()))),
     ));
     check_default(
         vec![S::Sort(vec![]), S::Sort(vec![]), filter.clone()],
@@ -328,7 +329,7 @@ fn reorder_filter_before_sort() {
 fn reorder_filter_before_mux() {
     let filter = S::Filter(Expr::Eq(
         Box::new(Expr::Field(field("a"))),
-        Box::new(Expr::Literal(serde_json::Value::String("b".to_string()))),
+        Box::new(Expr::Literal(Value::String("b".to_string()))),
     ));
     check_default(
         vec![S::MuxLimit(1), filter.clone()],

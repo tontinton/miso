@@ -8,15 +8,13 @@ mod tests;
 
 use std::{borrow::Cow, cmp::Ordering};
 
-use color_eyre::eyre::{OptionExt, Result, bail, eyre};
+use color_eyre::eyre::{Result, bail, eyre};
 use miso_workflow_types::{
     expr::CastType,
     field::{Field, FieldAccess},
     log::Log,
+    value::{Map, Value},
 };
-use serde_json::{Number, Value};
-
-use super::serde_json_utils::{get_value_kind, partial_cmp_values, value_to_bool};
 
 /// Extract the inner value as ref, propagate and return None if no value.
 macro_rules! val {
@@ -55,14 +53,7 @@ macro_rules! impl_cmp {
             (Some(lhs_cow), Some(rhs_cow)) => {
                 let lhs = lhs_cow.as_ref();
                 let rhs = rhs_cow.as_ref();
-                match partial_cmp_values(lhs, rhs) {
-                    Some(ord) => Ok(Some($cmp(ord))),
-                    _ => {
-                        let lhs_kind = get_value_kind(lhs);
-                        let rhs_kind = get_value_kind(rhs);
-                        bail!("unsupported '{}' between: {}, {}", $op, lhs_kind, rhs_kind);
-                    }
-                }
+                Ok(Some($cmp(lhs.cmp(rhs))))
             }
         }
     };
@@ -70,40 +61,65 @@ macro_rules! impl_cmp {
 
 macro_rules! impl_op {
     ($lhs:expr, $rhs:expr, $op:expr, $op_str:literal) => {{
-        let lhs = $lhs;
-        let rhs = $rhs;
+        use Value::*;
 
-        match (lhs, rhs) {
-            (Value::Number(l), Value::Number(r)) => {
-                if let (Some(l_i64), Some(r_i64)) = (l.as_i64(), r.as_i64()) {
-                    if $op_str != "/" {
-                        let result = $op(l_i64, r_i64);
-                        return Ok(Some(Value::from(result)));
-                    }
-                }
-
-                if let (Some(l_f64), Some(r_f64)) = (l.as_f64(), r.as_f64()) {
-                    let result = $op(l_f64, r_f64);
-                    match serde_json::Number::from_f64(result) {
-                        Some(num) => return Ok(Some(Value::Number(num))),
-                        None => bail!(
-                            "Result of '{}' operation is not a valid JSON number",
-                            $op_str
-                        ),
-                    }
+        match ($lhs, $rhs) {
+            (Int(l), Int(r)) if $op_str != "/" => {
+                return Ok(Some(Int($op(l, r))));
+            }
+            (UInt(l), UInt(r)) if $op_str != "/" => {
+                return Ok(Some(UInt($op(l, r))));
+            }
+            (Int(l), UInt(r)) if $op_str != "/" => {
+                if *l < 0 {
+                    return Ok(Some(Float($op(*l as f64, *r as f64))));
+                } else {
+                    return Ok(Some(UInt($op(*l as u64, *r))));
                 }
             }
-            _ => {}
-        }
+            (UInt(l), Int(r)) if $op_str != "/" => {
+                if *r < 0 {
+                    return Ok(Some(Float($op(*l as f64, *r as f64))));
+                } else {
+                    return Ok(Some(UInt($op(*l, *r as u64))));
+                }
+            }
 
-        let lhs_kind = get_value_kind(lhs);
-        let rhs_kind = get_value_kind(rhs);
-        bail!(
-            "unsupported '{}' operation between: {}, {}",
-            $op_str,
-            lhs_kind,
-            rhs_kind
-        )
+            (Int(l), Int(r)) => {
+                return Ok(Some(Float($op(*l as f64, *r as f64))));
+            }
+            (UInt(l), UInt(r)) => {
+                return Ok(Some(Float($op(*l as f64, *r as f64))));
+            }
+            (Int(l), UInt(r)) => {
+                return Ok(Some(Float($op(*l as f64, *r as f64))));
+            }
+            (UInt(l), Int(r)) => {
+                return Ok(Some(Float($op(*l as f64, *r as f64))));
+            }
+            (Float(l), Float(r)) => {
+                return Ok(Some(Float($op(*l, *r))));
+            }
+            (Float(l), Int(r)) => {
+                return Ok(Some(Float($op(*l, *r as f64))));
+            }
+            (Int(l), Float(r)) => {
+                return Ok(Some(Float($op(*l as f64, *r))));
+            }
+            (Float(l), UInt(r)) => {
+                return Ok(Some(Float($op(*l, *r as f64))));
+            }
+            (UInt(l), Float(r)) => {
+                return Ok(Some(Float($op(*l as f64, *r))));
+            }
+
+            _ => bail!(
+                "unsupported '{}' operation between: {}, {}",
+                $op_str,
+                $lhs.kind(),
+                $rhs.kind()
+            ),
+        }
     }};
 }
 
@@ -143,7 +159,7 @@ impl<'a> Val<'a> {
         let Some(cow) = &self.0 else {
             return false;
         };
-        value_to_bool(cow.as_ref())
+        cow.as_ref().to_bool()
     }
 
     fn eq(&self, other: &Val) -> Result<Option<bool>> {
@@ -223,9 +239,7 @@ impl<'a> Val<'a> {
 
     fn div(&self, other: &Val) -> Result<Option<Value>> {
         let rhs = val!(other);
-        if let Value::Number(n) = rhs
-            && n.as_f64() == Some(0.0)
-        {
+        if rhs.as_f64() == Some(0.0) {
             bail!("division by zero");
         }
         impl_op!(val!(self), rhs, |x, y| x / y, "/")
@@ -237,7 +251,7 @@ impl<'a> Val<'a> {
         };
 
         let casted_value = match ty {
-            CastType::Bool => Value::from(value_to_bool(cow.as_ref())),
+            CastType::Bool => Value::from(cow.as_ref().to_bool()),
             CastType::Float => Value::from(match cow.as_ref() {
                 Value::Null => 0.0,
                 Value::Bool(x) => {
@@ -247,26 +261,24 @@ impl<'a> Val<'a> {
                         0.0
                     }
                 }
-                Value::Number(x) => x.as_f64().ok_or_eyre("number not f64 / i64")?,
+                Value::Int(x) => *x as f64,
+                Value::UInt(x) => *x as f64,
+                Value::Float(x) => *x,
                 Value::String(x) => x
                     .parse::<f64>()
                     .map_err(|_| eyre!("cannot cast '{x}' to float"))?,
-                _ => bail!("cannot cast '{}' to float", get_value_kind(cow.as_ref())),
+                _ => bail!("cannot cast '{}' to float", cow.as_ref().kind()),
             }),
             CastType::Int => Value::from(match cow.as_ref() {
                 Value::Null => 0,
                 Value::Bool(x) => *x as i64,
-                Value::Number(x) => {
-                    if let Some(i) = x.as_i64() {
-                        i
-                    } else {
-                        x.as_f64().ok_or_eyre("number not f64 / i64")? as i64
-                    }
-                }
+                Value::Int(x) => *x,
+                Value::UInt(x) => *x as i64, // Can overflow.
+                Value::Float(x) => *x as i64,
                 Value::String(x) => x
                     .parse::<i64>()
                     .map_err(|_| eyre!("Cannot cast '{x}' to int"))?,
-                _ => bail!("cannot cast '{}' to int", get_value_kind(cow.as_ref())),
+                _ => bail!("cannot cast '{}' to int", cow.as_ref().kind()),
             }),
             CastType::String => {
                 if let Cow::Owned(Value::String(x)) = cow {
@@ -277,9 +289,11 @@ impl<'a> Val<'a> {
                 Value::from(match cow.as_ref() {
                     Value::Null => "null".to_string(),
                     Value::Bool(x) => x.to_string(),
-                    Value::Number(x) => x.to_string(),
+                    Value::Int(x) => x.to_string(),
+                    Value::UInt(x) => x.to_string(),
+                    Value::Float(x) => x.to_string(),
                     Value::String(x) => x.clone(),
-                    _ => bail!("cannot cast '{}' to string", get_value_kind(cow.as_ref())),
+                    _ => bail!("cannot cast '{}' to string", cow.as_ref().kind()),
                 })
             }
         };
@@ -291,29 +305,20 @@ impl<'a> Val<'a> {
         let self_val = val!(self);
         let by_val = val!(by);
 
-        let Value::Number(self_num) = self_val else {
+        let Some(a) = self_val.as_f64() else {
             bail!(
                 "cannot bin '{}', currently only numbers are supported",
-                get_value_kind(self_val)
+                self_val.kind()
             );
         };
-        let Value::Number(by_num) = by_val else {
+        let Some(b) = by_val.as_f64() else {
             bail!(
                 "cannot bin by '{}', currently only numbers are supported",
-                get_value_kind(by_val)
+                by_val.kind()
             );
         };
 
-        let Some(a) = self_num.as_f64() else {
-            bail!("cannot bin NaN");
-        };
-        let Some(b) = by_num.as_f64() else {
-            bail!("cannot bin by NaN");
-        };
-
-        Ok(Some(Value::Number(
-            Number::from_f64((a / b).floor() * b).unwrap(),
-        )))
+        Ok(Some(Value::from((a / b).floor() * b)))
     }
 }
 
@@ -349,7 +354,7 @@ pub fn insert_field_value(log: &mut Log, field: &Field, value: Value) {
         }
 
         if !current.is_object() {
-            *current = Value::Object(serde_json::Map::new());
+            *current = Value::Object(Map::new());
         }
         let map = current.as_object_mut().unwrap();
         let key = &keys[0];
@@ -357,7 +362,7 @@ pub fn insert_field_value(log: &mut Log, field: &Field, value: Value) {
             if !key.arr_indices.is_empty() {
                 Value::Array(vec![])
             } else {
-                Value::Object(serde_json::Map::new())
+                Value::Object(Map::new())
             }
         });
 

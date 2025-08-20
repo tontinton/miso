@@ -2,23 +2,20 @@ use std::cell::RefCell;
 
 use hashbrown::HashMap;
 
-use crate::{expr::Expr, field::Field};
+use crate::{expr::Expr, field::Field, value::Value};
 
 type RenameHook<'a> = RefCell<Box<dyn FnMut(&Field, &Field) + 'a>>;
-type LiteralHook<'a> = RefCell<Box<dyn FnMut(&Field, &serde_json::Value) + 'a>>;
+type LiteralHook<'a> = RefCell<Box<dyn FnMut(&Field, &Value) + 'a>>;
 
 pub struct SubstituteExpr<'a> {
     renames: &'a HashMap<Field, Field>,
-    literals: &'a HashMap<Field, serde_json::Value>,
+    literals: &'a HashMap<Field, Value>,
     rename_hook: Option<RenameHook<'a>>,
     literal_hook: Option<LiteralHook<'a>>,
 }
 
 impl<'a> SubstituteExpr<'a> {
-    pub fn new(
-        renames: &'a HashMap<Field, Field>,
-        literals: &'a HashMap<Field, serde_json::Value>,
-    ) -> Self {
+    pub fn new(renames: &'a HashMap<Field, Field>, literals: &'a HashMap<Field, Value>) -> Self {
         Self {
             renames,
             literals,
@@ -41,7 +38,7 @@ impl<'a> SubstituteExpr<'a> {
     /// The hook receives (original_field, literal_value).
     pub fn with_literal_hook<F>(mut self, hook: F) -> Self
     where
-        F: FnMut(&Field, &serde_json::Value) + 'a,
+        F: FnMut(&Field, &Value) + 'a,
     {
         self.literal_hook = Some(RefCell::new(Box::new(hook)));
         self
@@ -73,7 +70,7 @@ impl<'a> SubstituteExpr<'a> {
             Expr::Exists(ref f) => {
                 if self.literals.contains_key(f) {
                     // exists(literal) is always true.
-                    let v = serde_json::Value::Bool(true);
+                    let v = Value::Bool(true);
                     if let Some(ref hook) = self.literal_hook {
                         hook.borrow_mut()(f, &v);
                     }

@@ -17,7 +17,8 @@ use miso_connectors::{
 use miso_kql::parse;
 use miso_optimizations::Optimizer;
 use miso_server::http_server::{to_workflow_steps, ConnectorsMap};
-use miso_workflow::{sortable_value::SortableValue, Workflow};
+use miso_workflow::Workflow;
+use miso_workflow_types::value::Value;
 use reqwest::{header::CONTENT_TYPE, Client, Response};
 use serde::Serialize;
 use test_case::test_case;
@@ -381,7 +382,7 @@ async fn predicate_pushdown_same_results(
             item = pushdown_stream.try_next(), if !pushdown_done => {
                 match item.context("predicate pushdown workflow failure")? {
                     Some(log) => {
-                        pushdown_results.push(SortableValue(serde_json::Value::Object(log)));
+                        pushdown_results.push(Value::Object(log));
                     }
                     None => {
                         assert_eq!(
@@ -396,7 +397,7 @@ async fn predicate_pushdown_same_results(
             item = no_pushdown_stream.try_next(), if !no_pushdown_done => {
                 match item.context("non predicate pushdown workflow failure")? {
                     Some(log) => {
-                        no_pushdown_results.push(SortableValue(serde_json::Value::Object(log)));
+                        no_pushdown_results.push(Value::Object(log));
                     }
                     None => {
                         assert_eq!(

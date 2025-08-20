@@ -3,7 +3,7 @@ use std::fmt;
 use hashbrown::HashSet;
 use serde::{Deserialize, Serialize};
 
-use crate::field::Field;
+use crate::{field::Field, value::Value};
 
 macro_rules! fields_binop {
     ($l:expr, $r:expr, $out:expr) => {{
@@ -15,7 +15,7 @@ macro_rules! fields_binop {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum Expr {
     Field(Field),
-    Literal(serde_json::Value),
+    Literal(Value),
     Exists(Field),
     Cast(CastType, Box<Expr>),
 

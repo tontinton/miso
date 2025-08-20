@@ -5,9 +5,12 @@ use std::{
 
 use flume::{Receiver, RecvError, Selector, TryRecvError};
 use miso_common::humantime_utils::deserialize_duration;
-use miso_workflow_types::log::{Log, LogItem, LogIter};
+use miso_workflow_types::{
+    json,
+    log::{Log, LogItem, LogIter},
+    value::{Map, Value},
+};
 use serde::Deserialize;
-use serde_json::{Map, Value, json};
 
 use super::MISO_METADATA_FIELD_NAME;
 
@@ -34,7 +37,7 @@ pub trait PartialLogIter: Iterator<Item = LogItem> {
 }
 
 pub fn add_partial_stream_id(mut log: Log, id: usize) -> Log {
-    log.entry(MISO_METADATA_FIELD_NAME)
+    log.entry(MISO_METADATA_FIELD_NAME.to_string())
         .or_insert_with(|| Value::Object(Map::new()))
         .as_object_mut()
         .unwrap()
@@ -43,7 +46,7 @@ pub fn add_partial_stream_id(mut log: Log, id: usize) -> Log {
 }
 
 pub fn build_partial_stream_id_done_log(id: usize) -> Log {
-    let mut log = Map::with_capacity(1);
+    let mut log = Map::new();
     log.insert(
         MISO_METADATA_FIELD_NAME.to_string(),
         json!({

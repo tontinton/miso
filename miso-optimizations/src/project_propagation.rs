@@ -7,6 +7,7 @@ use miso_workflow_types::{
     project::ProjectField,
     sort::Sort,
     summarize::{Aggregation, Summarize},
+    value::Value,
 };
 
 use crate::pattern;
@@ -73,7 +74,7 @@ fn apply(
     };
 
     let mut renames: HashMap<Field, Field> = HashMap::new(); // a = b
-    let mut literals: HashMap<Field, serde_json::Value> = HashMap::new(); // c = 50
+    let mut literals: HashMap<Field, Value> = HashMap::new(); // c = 50
     let mut unhandled_projects = Vec::new();
 
     for pf in project_fields.iter().cloned() {
@@ -188,7 +189,7 @@ fn apply(
 fn rewrite_sorts(
     mut sorts: Vec<Sort>,
     renames: &HashMap<Field, Field>,
-    literals: &HashMap<Field, serde_json::Value>,
+    literals: &HashMap<Field, Value>,
 ) -> Vec<Sort> {
     sorts.retain(|sort| !literals.contains_key(&sort.by));
     for sort in &mut sorts {
@@ -202,7 +203,7 @@ fn rewrite_sorts(
 fn rewrite_project_fields(
     fields: Vec<ProjectField>,
     renames: &HashMap<Field, Field>,
-    literals: &HashMap<Field, serde_json::Value>,
+    literals: &HashMap<Field, Value>,
 ) -> Vec<ProjectField> {
     let expr_subst = SubstituteExpr::new(renames, literals);
     fields
@@ -217,7 +218,7 @@ fn rewrite_project_fields(
 fn rewrite_summarize(
     sum: Summarize,
     renames: &HashMap<Field, Field>,
-    literals: &HashMap<Field, serde_json::Value>,
+    literals: &HashMap<Field, Value>,
 ) -> Option<(Summarize, Vec<ProjectField>)> {
     let mut project_fields = Vec::new();
     let mut summarize_output_fields = HashSet::new();
@@ -257,7 +258,7 @@ fn rewrite_summarize(
                 if literals.contains_key(f) {
                     // dcount(literal) is always 1.
                     project_fields.push(ProjectField {
-                        from: Expr::Literal(serde_json::Value::from(1)),
+                        from: Expr::Literal(Value::Int(1)),
                         to: k,
                     });
                 } else if let Some(new_f) = renames.get(f) {
@@ -334,7 +335,7 @@ fn rewrite_summarize(
 
 fn renames_and_literals_to_project_fields(
     renames: HashMap<Field, Field>,
-    literals: HashMap<Field, serde_json::Value>,
+    literals: HashMap<Field, Value>,
 ) -> Vec<ProjectField> {
     let mut project_fields = Vec::with_capacity(renames.len() + literals.len());
     for (to, from) in renames {

@@ -11,10 +11,12 @@ use miso_workflow_types::{
     expr::{CastType, Expr},
     field::{Field, FieldAccess},
     join::{Join, JoinType},
+    json,
     project::ProjectField,
     query::QueryStep,
     sort::{NullsOrder, Sort, SortOrder},
     summarize::{Aggregation, Summarize},
+    value::Value,
 };
 use serde::Serialize;
 
@@ -240,7 +242,7 @@ fn now_expr() -> Expr {
         .duration_since(std::time::UNIX_EPOCH)
         .expect("system time is before Unix epoch")
         .as_millis() as i64;
-    Expr::Literal(serde_json::Value::from(now_millis))
+    Expr::Literal(json!(now_millis))
 }
 
 fn datetime_parser<'a, I>(
@@ -262,7 +264,7 @@ where
                     just(Token::LParen)
                         .ignore_then(just(Token::Null))
                         .then_ignore(just(Token::RParen))
-                        .map(|_| Expr::Literal(serde_json::Value::Null))
+                        .map(|_| Expr::Literal(Value::Null))
                 )
                 .or(
                     // datetime(year.month.day hour:minute:second.milliseconds)
@@ -272,13 +274,13 @@ where
                         .then_ignore(just(Token::RParen))
                         .validate(|date_str, e, emitter| {
                             match parse_datetime_to_millis(&date_str) {
-                                Ok(millis) => Expr::Literal(serde_json::Value::from(millis)),
+                                Ok(millis) => Expr::Literal(json!(millis)),
                                 Err(err) => {
                                     emitter.emit(Rich::custom(
                                         e.span(),
                                         format!("invalid datetime format: {}. Expected: YYYY-MM-DD [HH:MM:SS[.mmm]]", err),
                                     ));
-                                    Expr::Literal(serde_json::Value::Null)
+                                    Expr::Literal(Value::Null)
                                 }
                             }
                         })
@@ -288,7 +290,7 @@ where
                     Token::LParen,
                     Token::RParen,
                     [(Token::LBracket, Token::RBracket)],
-                    |_| Expr::Literal(serde_json::Value::Null),
+                    |_| Expr::Literal(Value::Null),
                 )))
         )
         .labelled("datetime")
@@ -302,7 +304,7 @@ where
             Token::LParen,
             Token::RParen,
             [(Token::LBracket, Token::RBracket)],
-            |_| Expr::Literal(serde_json::Value::Null),
+            |_| Expr::Literal(Value::Null),
         )))
         .labelled("now")
         .boxed();
@@ -335,15 +337,13 @@ where
 
         let literal = select! {
             Token::Integer(x) => {
-                Expr::Literal(serde_json::Value::Number(serde_json::Number::from(x)))
+                Expr::Literal(json!(x))
             },
-            Token::Float(x) => Expr::Literal(serde_json::Value::Number(
-                serde_json::Number::from_f64(x).expect("lexed as valid float"),
-            )),
-            Token::Bool(x) => Expr::Literal(serde_json::Value::Bool(x)),
-            Token::Null => Expr::Literal(serde_json::Value::Null),
+            Token::Float(x) => Expr::Literal(json!(x)),
+            Token::Bool(x) => Expr::Literal(json!(x)),
+            Token::Null => Expr::Literal(Value::Null),
         }
-        .or(string_literal.map(|x| Expr::Literal(serde_json::Value::String(x))))
+        .or(string_literal.map(|x| Expr::Literal(json!(x))))
         .labelled("literal")
         .boxed();
 
@@ -375,12 +375,7 @@ where
                         Token::LParen,
                         Token::RParen,
                         [(Token::LBracket, Token::RBracket)],
-                        |_| {
-                            (
-                                Expr::Literal(serde_json::Value::Null),
-                                Expr::Literal(serde_json::Value::Null),
-                            )
-                        },
+                        |_| (Expr::Literal(Value::Null), Expr::Literal(Value::Null)),
                     ))),
             )
             .map(|(l, r)| Expr::Bin(Box::new(l), Box::new(r)))
@@ -394,7 +389,7 @@ where
                 Token::LParen,
                 Token::RParen,
                 [(Token::LBracket, Token::RBracket)],
-                |_| Expr::Literal(serde_json::Value::Null),
+                |_| Expr::Literal(Value::Null),
             )))
             .labelled("parentheses over an expression");
 
@@ -469,7 +464,7 @@ where
             .recover_with(skip_until(
                 any().ignored(),
                 one_of([Token::Comma, Token::Pipe]).ignored(),
-                || Expr::Literal(serde_json::Value::Null),
+                || Expr::Literal(Value::Null),
             ))
             .boxed();
 
