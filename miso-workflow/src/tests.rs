@@ -471,6 +471,16 @@ async fn filter_lte() -> Result<()> {
 }
 
 #[tokio::test]
+async fn filter_gt_now() -> Result<()> {
+    check(
+        r#"test.c | where now() > datetime("1980-01-01")"#,
+        r#"[{"hello": "world"}, {"world": 2}, {"world": 1}]"#,
+        r#"[{"hello": "world"}, {"world": 2}, {"world": 1}]"#,
+    )
+    .await
+}
+
+#[tokio::test]
 async fn filter_add_sub() -> Result<()> {
     check(
         r#"test.c | where world == 3 + 2 - 4"#,
