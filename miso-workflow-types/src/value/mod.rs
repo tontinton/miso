@@ -9,6 +9,7 @@ use std::{
 };
 
 use serde::{Deserialize, Deserializer, Serialize};
+use time::OffsetDateTime;
 
 use crate::field::Field;
 
@@ -22,6 +23,7 @@ pub enum Value {
     Int(i64),
     UInt(u64),
     Float(f64),
+    Timestamp(OffsetDateTime),
     String(String),
     Array(Vec<Value>),
     Object(Map<String, Value>),
@@ -44,6 +46,7 @@ impl Hash for Value {
                     f.to_bits().hash(h);
                 }
             }
+            Value::Timestamp(x) => x.hash(h),
             Value::String(x) => x.hash(h),
             Value::Array(x) => x.hash(h),
             Value::Object(x) => x.hash(h),
@@ -60,6 +63,9 @@ impl fmt::Display for Value {
             Value::UInt(i) => write!(f, "{}", i),
             Value::Float(fl) => {
                 write!(f, "{}", fl)
+            }
+            Value::Timestamp(t) => {
+                write!(f, "\"{}\"", t)
             }
             Value::String(s) => {
                 write!(f, "\"")?;
@@ -174,6 +180,10 @@ impl Ord for Value {
             (Float(_), _) => Ordering::Less,
             (_, Float(_)) => Ordering::Greater,
 
+            (Timestamp(a), Timestamp(b)) => a.cmp(b),
+            (Timestamp(_), _) => Ordering::Less,
+            (_, Timestamp(_)) => Ordering::Greater,
+
             (String(a), String(b)) => a.cmp(b),
             (String(_), _) => Ordering::Less,
             (_, String(_)) => Ordering::Greater,
@@ -271,6 +281,12 @@ impl From<f64> for Value {
 impl From<f32> for Value {
     fn from(value: f32) -> Self {
         Value::Float(value as f64)
+    }
+}
+
+impl From<OffsetDateTime> for Value {
+    fn from(value: OffsetDateTime) -> Self {
+        Value::Timestamp(value)
     }
 }
 
@@ -418,6 +434,7 @@ impl Serialize for Value {
                     Err(serde::ser::Error::custom("NaN or Infinity not allowed"))
                 }
             }
+            Value::Timestamp(t) => serializer.serialize_str(&t.to_string()),
             Value::String(s) => serializer.serialize_str(s),
             Value::Array(arr) => arr.serialize(serializer),
             Value::Object(obj) => obj.serialize(serializer),
@@ -433,6 +450,7 @@ impl Value {
             Value::Int(_) => "integer",
             Value::UInt(_) => "integer",
             Value::Float(_) => "float",
+            Value::Timestamp(_) => "timestamp",
             Value::String(_) => "string",
             Value::Array(_) => "array",
             Value::Object(_) => "object",
@@ -446,6 +464,7 @@ impl Value {
             Value::Int(i) => *i != 0,
             Value::UInt(i) => *i != 0,
             Value::Float(f) => *f != 0.0,
+            Value::Timestamp(_) => true,
             Value::String(x) => !x.is_empty(),
             Value::Array(x) => !x.is_empty(),
             Value::Object(x) => !x.is_empty(),

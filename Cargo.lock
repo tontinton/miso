@@ -387,10 +387,8 @@ checksum = "c469d952047f47f91b68d1cba3f10d63c11d73e4636f24f08daf0278abf01c4d"
 dependencies = [
  "android-tzdata",
  "iana-time-zone",
- "js-sys",
  "num-traits",
  "serde",
- "wasm-bindgen",
  "windows-link",
 ]
 
@@ -1534,7 +1532,6 @@ dependencies = [
 name = "miso-kql"
 version = "0.1.0"
 dependencies = [
- "chrono",
  "chumsky",
  "hashbrown 0.15.3",
  "logos",
@@ -1542,6 +1539,7 @@ dependencies = [
  "serde",
  "serde_json",
  "test-case",
+ "time",
 ]
 
 [[package]]
@@ -1631,6 +1629,7 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.12",
+ "time",
 ]
 
 [[package]]

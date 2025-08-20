@@ -21,7 +21,6 @@ async-stream = "0.3.6"
 axum = { version = "0.7.7", features = ["macros"] }
 bon = "3.6.3"
 bytes = "1.10.1"
-chrono = "0.4.41"
 chumsky = "0.10.1"
 clap = { version = "4.5.20", features = ["derive"] }
 collection_macros = "0.2.0"
@@ -56,6 +55,7 @@ simd-json = "0.15.1"
 test-case = "3.3.1"
 testcontainers = { version = "0.23.3", features = ["blocking"] }
 thiserror = "2.0.12"
+time = { version = "0.3.41", features = ["macros", "parsing"] }
 tokio = { version = "1.40.0", features = ["full"] }
 tokio-retry = "0.3.0"
 tokio-test = "0.4.4"
