@@ -7,13 +7,13 @@ use miso_workflow_types::{
     field::Field,
     log::{Log, LogItem, LogIter},
     summarize::{Aggregation, Summarize},
+    value::Value,
 };
-use serde_json::Value;
 use tracing::warn;
 
 use crate::interpreter::{LogInterpreter, Val, get_field_value, insert_field_value};
 
-use super::{partial_stream::PartialLogIter, serde_json_utils::partial_cmp_values, try_next};
+use super::{partial_stream::PartialLogIter, try_next};
 
 /// An on-going aggregation (including the needed state to compute the next value of the
 /// aggregation).
@@ -78,14 +78,9 @@ impl Aggregate for Sum {
         let Some(value) = get_field_value(log, &self.field) else {
             return;
         };
-        let Value::Number(v) = value else {
+        let Some(x) = value.as_f64() else {
             return;
         };
-
-        let Some(x) = v.as_f64() else {
-            panic!("'{v}' number is not a i64 or a f64");
-        };
-
         self.value += x;
     }
 
@@ -134,10 +129,7 @@ impl Aggregate for MinMax {
             return;
         };
 
-        let Some(result) = partial_cmp_values(stored_value, value) else {
-            return;
-        };
-
+        let result = stored_value.cmp(value);
         if result == self.update_order {
             self.value = Some(value.clone());
         }

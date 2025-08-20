@@ -3,7 +3,9 @@ use std::pin::Pin;
 use color_eyre::{Report, Result};
 use futures_util::Stream;
 
-pub type Log = serde_json::Map<String, serde_json::Value>;
+use crate::value::{Map, Value};
+
+pub type Log = Map<String, Value>;
 pub type LogIter = Box<dyn Iterator<Item = LogItem>>;
 pub type LogStream = Pin<Box<dyn Stream<Item = Log> + Send>>;
 pub type LogTryStream = Pin<Box<dyn Stream<Item = Result<Log>> + Send>>;

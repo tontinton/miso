@@ -7,9 +7,9 @@ use miso_workflow_types::{
     field::Field,
     log::{Log, LogItem, LogIter},
     sort::{NullsOrder, Sort, SortOrder},
+    value::Value,
 };
 use rayon::{ThreadPool, ThreadPoolBuilder, slice::ParallelSliceMut};
-use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
 
@@ -19,8 +19,6 @@ use crate::{
     send_once::SendOnce,
     spawn_thread::{ThreadRx, spawn},
 };
-
-use super::serde_json_utils::partial_cmp_values;
 
 /// If the sorting set is smaller than this, just sort immediately without building a thread pool
 /// to sort in parallel.
@@ -54,7 +52,7 @@ impl SortConfig {
     }
 }
 
-pub fn cmp_logs(a: &Log, b: &Log, config: &SortConfig) -> Option<Ordering> {
+pub fn cmp_logs(a: &Log, b: &Log, config: &SortConfig) -> Ordering {
     for ((key, sort_order), nulls_order) in config
         .by
         .iter()
@@ -72,7 +70,7 @@ pub fn cmp_logs(a: &Log, b: &Log, config: &SortConfig) -> Option<Ordering> {
             (_, Value::Null, NullsOrder::Last) => Ordering::Less,
             _ => {
                 any_null = false;
-                partial_cmp_values(a_val, b_val)?
+                a_val.cmp(b_val)
             }
         };
 
@@ -81,17 +79,17 @@ pub fn cmp_logs(a: &Log, b: &Log, config: &SortConfig) -> Option<Ordering> {
         }
 
         if any_null {
-            return Some(ordering);
+            return ordering;
         }
 
-        return Some(if *sort_order == SortOrder::Asc {
+        return if *sort_order == SortOrder::Asc {
             ordering
         } else {
             ordering.reverse()
-        });
+        };
     }
 
-    Some(Ordering::Equal)
+    Ordering::Equal
 }
 
 fn collect_logs(by: &[Field], input: impl Iterator<Item = LogItem>) -> Result<Vec<Log>> {
@@ -172,9 +170,7 @@ pub fn sort_rx(
             let mut logs = collect_logs(&config.by, CancelIter::new(input.take(), cancel.clone()))?;
 
             let sorted = if logs.len() < PARALLEL_SORT_THREASHOLD {
-                logs.sort_unstable_by(|a, b| {
-                    cmp_logs(a, b, &config).expect("types should have been validated")
-                });
+                logs.sort_unstable_by(|a, b| cmp_logs(a, b, &config));
                 logs
             } else {
                 sort_thread_pool()?.install(move || {
@@ -184,9 +180,7 @@ pub fn sort_rx(
                     // can check for cancel between operations. What I don't like about this
                     // solution is: it seems like par_sort_unstable_by() is optimized and will be
                     // faster than a manual naive implementation.
-                    logs.par_sort_unstable_by(|a, b| {
-                        cmp_logs(a, b, &config).expect("types should have been validated")
-                    });
+                    logs.par_sort_unstable_by(|a, b| cmp_logs(a, b, &config));
                     logs
                 })
             };

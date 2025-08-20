@@ -19,14 +19,15 @@ use miso_common::{
 };
 use miso_workflow_types::{
     expr::Expr,
+    json,
     log::{Log, LogTryStream},
     sort::Sort,
     summarize::{Aggregation, Summarize},
+    value::{Map, Value},
 };
 use parking_lot::RwLock;
 use reqwest::{Client, RequestBuilder, Response};
 use serde::{Deserialize, Serialize, Serializer, ser::SerializeMap};
-use serde_json::{Value, json, to_string};
 use tracing::{debug, error, info, instrument};
 
 use super::{Connector, ConnectorError, QueryHandle, QueryResponse, Split, downcast_unwrap};
@@ -960,7 +961,7 @@ impl Connector for QuickwitConnector {
         collections.dedup();
         let collections = collections.join(",");
 
-        let mut query_map = HashMap::new();
+        let mut query_map = Map::new();
 
         if !handle.queries.is_empty() {
             query_map.insert(
@@ -1002,7 +1003,7 @@ impl Connector for QuickwitConnector {
             ?limit,
             "Quickwit search '{}': {}",
             collections,
-            to_string(&query)?
+            serde_json::to_string(&query)?
         );
 
         if handle.count {
@@ -1096,11 +1097,10 @@ impl Connector for QuickwitConnector {
             sorts
                 .iter()
                 .map(|sort| {
-                    let sort_by_str = sort.by.to_string();
                     json!({
-                        sort_by_str: {
-                            "order": &sort.order,
-                            "nulls": &sort.nulls,
+                        &sort.by: {
+                            "order": sort.order.to_string(),
+                            "nulls": sort.nulls.to_string(),
                         }
                     })
                 })
@@ -1135,31 +1135,13 @@ impl Connector for QuickwitConnector {
         }
 
         let mut count_fields = Vec::new();
-        let mut inner_aggs = HashMap::new();
+        let mut inner_aggs = Map::new();
 
         for (output_field, agg) in &config.aggs {
             let value = match agg {
-                Aggregation::Min(agg_field) => {
-                    json!({
-                        "min": {
-                            "field": agg_field,
-                        }
-                    })
-                }
-                Aggregation::Max(agg_field) => {
-                    json!({
-                        "max": {
-                            "field": agg_field,
-                        }
-                    })
-                }
-                Aggregation::Sum(agg_field) => {
-                    json!({
-                        "sum": {
-                            "field": agg_field,
-                        }
-                    })
-                }
+                Aggregation::Min(agg_field) => json!({ "min": { "field": agg_field } }),
+                Aggregation::Max(agg_field) => json!({ "max": { "field": agg_field } }),
+                Aggregation::Sum(agg_field) => json!({ "sum": { "field": agg_field } }),
                 Aggregation::Count => {
                     // Count is always returned in doc_count.
                     count_fields.push(output_field.to_string());
@@ -1170,22 +1152,21 @@ impl Connector for QuickwitConnector {
                 Aggregation::DCount(..) => return None,
             };
 
-            inner_aggs.insert(output_field, value);
+            inner_aggs.insert(output_field.to_string(), value);
         }
 
-        let mut aggs = json!({});
-
+        let mut aggs = Map::new();
         let mut current_agg = &mut aggs;
+
         for (i, expr) in config.by.iter().enumerate() {
             let name = format!("{AGGREGATION_RESULTS_NAME}_{i}");
-            let nested_agg = match expr {
+
+            let bucket_def = match expr {
                 Expr::Field(field) => json!({
-                        &name: {
-                            "terms": {
-                                "field": field,
-                                "size": MAX_NUM_GROUPS,
-                            }
-                        }
+                    "terms": {
+                        "field": field,
+                        "size": MAX_NUM_GROUPS,
+                    }
                 }),
                 Expr::Bin(lhs, rhs) => {
                     let Expr::Field(field) = &**lhs else {
@@ -1194,25 +1175,37 @@ impl Connector for QuickwitConnector {
                     let Expr::Literal(value) = &**rhs else {
                         return None;
                     };
-
                     json!({
-                            &name: {
-                                "histogram": {
-                                    "field": field,
-                                    "interval": value,
-                                }
-                            }
+                        "histogram": {
+                            "field": field,
+                            "interval": value.clone(),
+                        }
                     })
                 }
                 _ => return None,
             };
-            current_agg["aggs"] = nested_agg;
-            current_agg = current_agg.get_mut("aggs").unwrap().get_mut(&name).unwrap();
+
+            current_agg.insert(name.clone(), bucket_def);
+
+            if let Some(Value::Object(bucket)) = current_agg.get_mut(&name) {
+                bucket.insert("aggs".to_string(), json!({}));
+                if let Some(Value::Object(next)) = bucket.get_mut("aggs") {
+                    current_agg = next;
+                } else {
+                    return None;
+                }
+            } else {
+                return None;
+            }
         }
 
         if !inner_aggs.is_empty() {
-            current_agg["aggs"] = json!(inner_aggs);
+            for (k, v) in inner_aggs {
+                current_agg.insert(k, v);
+            }
         }
+
+        dbg!(&aggs);
 
         let group_by = config
             .by
@@ -1228,7 +1221,7 @@ impl Connector for QuickwitConnector {
             .collect::<Option<Vec<_>>>()?;
 
         Some(Box::new(handle.with_summarize(
-            aggs,
+            json!({"aggs": aggs}),
             group_by,
             count_fields,
         )))

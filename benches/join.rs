@@ -7,8 +7,8 @@ use miso_workflow_types::{
     field_unwrap,
     join::{Join, JoinType},
     log::Log,
+    value::Value,
 };
-use serde_json::Value;
 
 const JOIN_KEY: &str = "join_key";
 

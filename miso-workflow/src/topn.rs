@@ -25,10 +25,7 @@ struct SortableLog(Log);
 
 impl Ord for SortableLog {
     fn cmp(&self, other: &Self) -> Ordering {
-        SORT_CONFIG
-            .with(|tls| cmp_logs(&self.0, &other.0, tls.0))
-            // On wrong type, provide the opposite to get the log out of the heap.
-            .unwrap_or(Ordering::Greater)
+        SORT_CONFIG.with(|tls| cmp_logs(&self.0, &other.0, tls.0))
     }
 }
 

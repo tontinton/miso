@@ -1,8 +1,10 @@
 use std::iter;
 
 use hashbrown::HashMap;
-use miso_workflow_types::log::{Log, LogItem, LogIter};
-use serde_json::Value;
+use miso_workflow_types::{
+    log::{Log, LogItem, LogIter},
+    value::Value,
+};
 
 use super::{
     log_utils::PartialStreamItem, partial_stream::PartialLogIter, try_next_with_partial_stream,

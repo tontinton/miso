@@ -10,8 +10,8 @@ use miso_workflow_types::{
     field::Field,
     join::{Join, JoinType},
     log::{Log, LogItem, LogIter},
+    value::{Entry, Value},
 };
-use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
 
@@ -39,7 +39,7 @@ macro_rules! send_ret_on_err {
 fn merge_left_with_right(join_value: &Value, mut left: Log, right: Log) -> Log {
     for (key, value) in right {
         match left.entry(key) {
-            serde_json::map::Entry::Occupied(entry) => {
+            Entry::Occupied(entry) => {
                 if join_value == entry.get() {
                     // Keep existing value.
                     continue;
@@ -59,7 +59,7 @@ fn merge_left_with_right(join_value: &Value, mut left: Log, right: Log) -> Log {
                 left.insert(left_key, existing_value);
                 left.insert(right_key, value);
             }
-            serde_json::map::Entry::Vacant(entry) => {
+            Entry::Vacant(entry) => {
                 entry.insert(value);
             }
         }
