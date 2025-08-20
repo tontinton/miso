@@ -1,5 +1,4 @@
 use std::str::FromStr;
-use test_case::test_case;
 
 use miso_workflow_types::{
     expr::{CastType, Expr},
@@ -11,6 +10,8 @@ use miso_workflow_types::{
     summarize::Aggregation,
     value::Value,
 };
+use test_case::test_case;
+use time::{Duration, OffsetDateTime, UtcOffset};
 
 use crate::parse;
 
@@ -18,6 +19,12 @@ macro_rules! parse_unwrap {
     ($expr:expr) => {
         parse($expr).unwrap_or_else(|e| panic!("failed to parse query {:?}: {:?}", $expr, e))
     };
+}
+
+fn secs_to_dt(ms: i64) -> OffsetDateTime {
+    OffsetDateTime::from_unix_timestamp(ms)
+        .unwrap()
+        .to_offset(UtcOffset::UTC)
 }
 
 #[test]
@@ -632,10 +639,14 @@ fn test_parentheses_in_expressions() {
 
 #[test_case("datetime()"; "current_time")]
 #[test_case("now()"; "now_function")]
-#[test_case("datetime(null)"; "null_value")]
 #[test_case("datetime(\"2015-12-31\")"; "date_only")]
 #[test_case("datetime(\"2015-12-31 23:59:59\")"; "date_with_time")]
 #[test_case("datetime(\"2015-12-31 23:59:59.999\")"; "date_with_millis")]
+#[test_case("datetime(\"2015-12-31T23:59:59Z\")"; "iso8601_utc")]
+#[test_case("datetime(\"2015-12-31T23:59:59+02:00\")"; "iso8601_with_offset")]
+#[test_case("datetime(\"2015-12-31T23:59:59.999Z\")"; "iso8601_with_millis")]
+#[test_case("datetime(\"Thu, 31 Dec 2015 23:59:59 GMT\")"; "rfc2822")]
+#[test_case("datetime(\"2015-12-31T23:59:59.999+00:00\")"; "rfc3339")]
 fn test_datetime_parsing(datetime_expr: &str) {
     let query = format!("connector.table | where field1 == {}", datetime_expr);
     let result = parse_unwrap!(&query);
@@ -643,9 +654,8 @@ fn test_datetime_parsing(datetime_expr: &str) {
     match &result[1] {
         QueryStep::Filter(expr) => match expr {
             Expr::Eq(_, right) => match &**right {
-                Expr::Literal(Value::Int(_)) => {}
-                Expr::Literal(Value::Null) if datetime_expr.contains("null") => {}
-                _ => panic!("Expected datetime to parse to Number or Null literal"),
+                Expr::Literal(Value::Timestamp(_)) => {}
+                _ => panic!("Expected datetime to parse to Timestamp"),
             },
             _ => panic!("Expected Eq expression"),
         },
@@ -661,14 +671,14 @@ fn test_datetime_current_time() {
     match &result[1] {
         QueryStep::Filter(expr) => match expr {
             Expr::Eq(_, right) => match &**right {
-                Expr::Literal(Value::Int(millis)) => {
+                Expr::Literal(Value::Timestamp(dt)) => {
                     // Should be a reasonable timestamp (after 2020-01-01 and before 2050-01-01).
-                    let year_2020_millis = 1577836800000i64; // 2020-01-01 00:00:00 UTC
-                    let year_2050_millis = 2524608000000i64; // 2050-01-01 00:00:00 UTC
+                    let year_2020 = secs_to_dt(1577836800); // 2020-01-01 00:00:00 UTC
+                    let year_2050 = secs_to_dt(2524608000); // 2050-01-01 00:00:00 UTC
                     assert!(
-                        *millis > year_2020_millis && *millis < year_2050_millis,
+                        dt > &year_2020 && dt < &year_2050,
                         "Timestamp {} not in reasonable range",
-                        *millis
+                        dt
                     );
                 }
                 _ => panic!("datetime() should return a Number"),
@@ -696,10 +706,10 @@ fn test_datetime_null() {
     }
 }
 
-#[test_case("2015-12-31", 1451520000000i64; "date_only_2015")]
-#[test_case("2020-01-01", 1577836800000i64; "date_only_2020")]
-#[test_case("1970-01-01", 0i64; "epoch_start")]
-fn test_datetime_specific_dates(date_str: &str, expected_millis: i64) {
+#[test_case("2015-12-31", secs_to_dt(1451520000); "date_only_2015")]
+#[test_case("2020-01-01", secs_to_dt(1577836800); "date_only_2020")]
+#[test_case("1970-01-01", secs_to_dt(0); "epoch_start")]
+fn test_datetime_specific_dates(date_str: &str, expected_dt: OffsetDateTime) {
     let query = format!(
         "connector.table | where field1 == datetime(\"{}\")",
         date_str
@@ -709,11 +719,11 @@ fn test_datetime_specific_dates(date_str: &str, expected_millis: i64) {
     match &result[1] {
         QueryStep::Filter(expr) => match expr {
             Expr::Eq(_, right) => match &**right {
-                Expr::Literal(Value::Int(millis)) => {
+                Expr::Literal(Value::Timestamp(dt)) => {
                     assert_eq!(
-                        *millis, expected_millis,
-                        "Date {} should convert to {} milliseconds, got {}",
-                        date_str, expected_millis, millis
+                        dt, &expected_dt,
+                        "Date {} should convert to {}, got {}",
+                        date_str, dt, expected_dt
                     );
                 }
                 _ => panic!("datetime with string should return Number"),
@@ -732,13 +742,13 @@ fn test_datetime_with_time() {
     match &result[1] {
         QueryStep::Filter(expr) => match expr {
             Expr::Eq(_, right) => match &**right {
-                Expr::Literal(Value::Int(millis)) => {
-                    // 2020-01-01 00:00:00 UTC = 1577836800000
-                    // + 12 hours = 12 * 60 * 60 * 1000 = 43200000
-                    // + 30 minutes = 30 * 60 * 1000 = 1800000
-                    // + 45 seconds = 45 * 1000 = 45000
-                    let expected = 1577836800000i64 + 43200000 + 1800000 + 45000;
-                    assert_eq!(*millis, expected);
+                Expr::Literal(Value::Timestamp(dt)) => {
+                    // 2020-01-01 00:00:00 UTC = 1577836800
+                    // + 12 hours = 12 * 60 * 60 = 43200
+                    // + 30 minutes = 30 * 60 = 1800
+                    // + 45 seconds
+                    let expected = 1577836800 + 43200 + 1800 + 45;
+                    assert_eq!(dt, &secs_to_dt(expected));
                 }
                 _ => panic!("datetime with time should return Number"),
             },
@@ -756,9 +766,10 @@ fn test_datetime_with_milliseconds() {
     match &result[1] {
         QueryStep::Filter(expr) => match expr {
             Expr::Eq(_, right) => match &**right {
-                Expr::Literal(Value::Int(millis)) => {
-                    let expected = 1577836800500i64;
-                    assert_eq!(*millis, expected);
+                Expr::Literal(Value::Timestamp(dt)) => {
+                    let expected =
+                        secs_to_dt(1577836800).saturating_add(Duration::milliseconds(500));
+                    assert_eq!(dt, &expected);
                 }
                 _ => panic!("datetime with milliseconds should return Number"),
             },
@@ -801,8 +812,8 @@ fn test_datetime_in_complex_expression() {
         QueryStep::Filter(expr) => match expr {
             Expr::And(left, right) => match (&**left, &**right) {
                 (Expr::Gt(_, dt1), Expr::Lt(_, dt2)) => {
-                    assert!(matches!(&**dt1, Expr::Literal(Value::Int(_))));
-                    assert!(matches!(&**dt2, Expr::Literal(Value::Int(_))));
+                    assert!(matches!(&**dt1, Expr::Literal(Value::Timestamp(_))));
+                    assert!(matches!(&**dt2, Expr::Literal(Value::Timestamp(_))));
                 }
                 _ => panic!("Expected Gt and Lt expressions with datetime literals"),
             },
