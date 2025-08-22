@@ -161,9 +161,10 @@ fn test_filter_with_in_expression() {
     }
 }
 
-#[test]
-fn test_filter_with_exists() {
-    let query = "connector.table | where exists(field1)";
+#[test_case("field1"; "regular field")]
+#[test_case("@timestamp"; "special field")]
+fn test_filter_with_exists(field: &str) {
+    let query = &format!("connector.table | where exists({field})");
     let result = parse_unwrap!(query);
 
     match &result[1] {

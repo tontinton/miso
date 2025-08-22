@@ -34,6 +34,8 @@ pub enum Token {
     Plus,
     #[token("-")]
     Minus,
+    #[token("@")]
+    At,
 
     #[token("or")]
     Or,
