@@ -1,8 +1,9 @@
+mod expr_substitude;
+
 use hashbrown::{HashMap, HashSet};
 use miso_workflow::WorkflowStep;
 use miso_workflow_types::{
     expr::Expr,
-    expr_subst::SubstituteExpr,
     field::Field,
     project::ProjectField,
     sort::Sort,
@@ -10,9 +11,9 @@ use miso_workflow_types::{
     value::Value,
 };
 
-use crate::pattern;
-
-use super::{Group, Optimization, Pattern};
+use crate::{
+    Group, Optimization, Pattern, pattern, project_propagation::expr_substitude::ExprSubstitute,
+};
 
 /// Propagate renames and literal assignments into later steps, to move the project step
 /// later if possible (and make it run on less logs).
@@ -105,7 +106,7 @@ fn apply(
     }
 
     {
-        let expr_subst = SubstituteExpr::new(&renames, &literals);
+        let expr_subst = ExprSubstitute::new(&renames, &literals);
 
         let (middle_start, middle_end) = middle_group;
         for step in steps[middle_start..middle_end].iter().cloned() {
@@ -205,7 +206,7 @@ fn rewrite_project_fields(
     renames: &HashMap<Field, Field>,
     literals: &HashMap<Field, Value>,
 ) -> Vec<ProjectField> {
-    let expr_subst = SubstituteExpr::new(renames, literals);
+    let expr_subst = ExprSubstitute::new(renames, literals);
     fields
         .into_iter()
         .map(|pf| ProjectField {
@@ -224,11 +225,11 @@ fn rewrite_summarize(
     let mut summarize_output_fields = HashSet::new();
 
     let new_by = {
-        let expr_subst = SubstituteExpr::new(renames, literals)
+        let expr_subst = ExprSubstitute::new(renames, literals)
             .with_literal_hook(|f, v| {
                 project_fields.push(ProjectField {
                     from: Expr::Literal(v.clone()),
-                    to: f.clone(),
+                    to: f,
                 });
             })
             .with_rename_hook(|_, from| {
