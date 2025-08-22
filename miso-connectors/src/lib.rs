@@ -8,9 +8,10 @@ use std::{any::Any, collections::BTreeMap};
 
 use axum::async_trait;
 use color_eyre::eyre::Result;
-use miso_workflow_types::expr::Expr;
-use miso_workflow_types::project::ProjectField;
-use miso_workflow_types::{log::LogTryStream, sort::Sort, summarize::Summarize};
+use hashbrown::HashMap;
+use miso_workflow_types::{
+    expr::Expr, log::LogTryStream, project::ProjectField, sort::Sort, summarize::Summarize,
+};
 use parking_lot::Mutex;
 use thiserror::Error;
 use tokio::time::sleep;
@@ -116,10 +117,21 @@ pub trait QueryHandle: Any + Debug + fmt::Display + Send + Sync {
     fn as_any(&self) -> &dyn Any;
 }
 
+#[derive(Debug, Default, Clone)]
+pub struct Collection {
+    /// Field replacements (for the top level field, not inner field accesses).
+    /// Examples: @timestamp -> event_time, @metadata.info -> _metadata.info.
+    pub field_replacements: HashMap<String, String>,
+}
+
 #[async_trait]
 #[typetag::serde(tag = "type")]
 pub trait Connector: Debug + Send + Sync {
-    fn does_collection_exist(&self, collection: &str) -> bool;
+    fn does_collection_exist(&self, collection: &str) -> bool {
+        self.get_collection(collection).is_some()
+    }
+
+    fn get_collection(&self, collection: &str) -> Option<Collection>;
 
     fn get_handle(&self) -> Box<dyn QueryHandle>;
 

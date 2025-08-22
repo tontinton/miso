@@ -1,5 +1,6 @@
 use std::{fmt, ops::Deref, str::FromStr};
 
+use hashbrown::HashMap;
 use serde::{Deserialize, Deserializer, Serialize};
 
 #[macro_export]
@@ -119,6 +120,20 @@ impl Field {
             last.name.push_str(suffix);
         }
         new_field
+    }
+
+    /// Example ({"@toplevel": "object"}): @toplevel.inner -> object.inner.
+    pub fn replace_top_level_access(mut self, replacements: &HashMap<String, String>) -> Self {
+        if self.0.is_empty() {
+            return self;
+        }
+
+        let top_level = &mut self.0[0];
+        if let Some(to) = replacements.get(&top_level.name) {
+            top_level.name = to.to_string();
+        }
+
+        self
     }
 
     pub fn has_array_access(&self) -> bool {

@@ -1,6 +1,5 @@
 use std::{
     any::Any,
-    collections::HashMap,
     fmt,
     sync::{Arc, Weak},
     time::{Duration, Instant},
@@ -11,6 +10,7 @@ use axum::async_trait;
 use bytes::BytesMut;
 use color_eyre::eyre::{Context, Result, bail, eyre};
 use futures_util::stream;
+use hashbrown::HashMap;
 use miso_common::{
     humantime_utils::{deserialize_duration, serialize_duration},
     metrics::METRICS,
@@ -29,6 +29,8 @@ use parking_lot::RwLock;
 use reqwest::{Client, RequestBuilder, Response};
 use serde::{Deserialize, Serialize, Serializer, ser::SerializeMap};
 use tracing::{debug, error, info, instrument};
+
+use crate::Collection;
 
 use super::{Connector, ConnectorError, QueryHandle, QueryResponse, Split, downcast_unwrap};
 
@@ -921,8 +923,17 @@ impl QuickwitConnector {
 #[async_trait]
 #[typetag::serde(name = "quickwit")]
 impl Connector for QuickwitConnector {
-    fn does_collection_exist(&self, collection: &str) -> bool {
-        self.indexes.read().contains_key(collection)
+    #[instrument(skip(self), name = "Quickwit get collection")]
+    fn get_collection(&self, collection: &str) -> Option<Collection> {
+        let guard = self.indexes.read();
+        let index = guard.get(collection)?;
+
+        let mut field_replacements = HashMap::new();
+        if let Some(timestamp_field) = &index.timestamp_field {
+            field_replacements.insert("@timestamp".to_string(), timestamp_field.clone());
+        }
+
+        Some(Collection { field_replacements })
     }
 
     fn get_splits(&self) -> Vec<Box<dyn Split>> {

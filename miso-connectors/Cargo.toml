@@ -9,6 +9,7 @@ axum.workspace = true
 bytes.workspace = true
 color-eyre.workspace = true
 futures-util.workspace = true
+hashbrown.workspace = true
 humantime.workspace = true
 miso-common.workspace = true
 miso-workflow-types.workspace = true

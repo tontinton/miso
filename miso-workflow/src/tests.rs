@@ -17,7 +17,7 @@ use color_eyre::{
 use ctor::ctor;
 use futures_util::{StreamExt, TryStreamExt, stream};
 use miso_connectors::{
-    Connector, ConnectorState, QueryHandle, QueryResponse, Split,
+    Collection, Connector, ConnectorState, QueryHandle, QueryResponse, Split,
     stats::{CollectionStats, ConnectorStats, FieldStats},
 };
 use miso_kql::parse;
@@ -90,8 +90,10 @@ impl TestConnector {
 #[async_trait]
 #[typetag::serde]
 impl Connector for TestConnector {
-    fn does_collection_exist(&self, collection: &str) -> bool {
-        self.collections.contains_key(collection)
+    fn get_collection(&self, collection: &str) -> Option<Collection> {
+        self.collections
+            .contains_key(collection)
+            .then_some(Collection::default())
     }
 
     fn get_handle(&self) -> Box<dyn QueryHandle> {
