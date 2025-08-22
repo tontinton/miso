@@ -4,6 +4,12 @@ use hashbrown::HashMap;
 
 use crate::{expr::Expr, field::Field, value::Value};
 
+macro_rules! subst_binop {
+    ($binop:expr, $self:expr, $l:expr, $r:expr) => {
+        $binop(Box::new($self.subst(*$l)), Box::new($self.subst(*$r)))
+    };
+}
+
 type RenameHook<'a> = RefCell<Box<dyn FnMut(&Field, &Field) + 'a>>;
 type LiteralHook<'a> = RefCell<Box<dyn FnMut(&Field, &Value) + 'a>>;
 
@@ -93,30 +99,24 @@ impl<'a> SubstituteExpr<'a> {
                 arr.into_iter().map(|a| self.subst(a)).collect(),
             ),
 
-            Expr::Bin(l, r) => Expr::Bin(Box::new(self.subst(*l)), Box::new(self.subst(*r))),
-            Expr::Or(l, r) => Expr::Or(Box::new(self.subst(*l)), Box::new(self.subst(*r))),
-            Expr::And(l, r) => Expr::And(Box::new(self.subst(*l)), Box::new(self.subst(*r))),
-            Expr::Contains(l, r) => {
-                Expr::Contains(Box::new(self.subst(*l)), Box::new(self.subst(*r)))
-            }
-            Expr::StartsWith(l, r) => {
-                Expr::StartsWith(Box::new(self.subst(*l)), Box::new(self.subst(*r)))
-            }
-            Expr::EndsWith(l, r) => {
-                Expr::EndsWith(Box::new(self.subst(*l)), Box::new(self.subst(*r)))
-            }
-            Expr::Has(l, r) => Expr::Has(Box::new(self.subst(*l)), Box::new(self.subst(*r))),
-            Expr::HasCs(l, r) => Expr::HasCs(Box::new(self.subst(*l)), Box::new(self.subst(*r))),
-            Expr::Eq(l, r) => Expr::Eq(Box::new(self.subst(*l)), Box::new(self.subst(*r))),
-            Expr::Ne(l, r) => Expr::Ne(Box::new(self.subst(*l)), Box::new(self.subst(*r))),
-            Expr::Gt(l, r) => Expr::Gt(Box::new(self.subst(*l)), Box::new(self.subst(*r))),
-            Expr::Gte(l, r) => Expr::Gte(Box::new(self.subst(*l)), Box::new(self.subst(*r))),
-            Expr::Lt(l, r) => Expr::Lt(Box::new(self.subst(*l)), Box::new(self.subst(*r))),
-            Expr::Lte(l, r) => Expr::Lte(Box::new(self.subst(*l)), Box::new(self.subst(*r))),
-            Expr::Mul(l, r) => Expr::Mul(Box::new(self.subst(*l)), Box::new(self.subst(*r))),
-            Expr::Div(l, r) => Expr::Div(Box::new(self.subst(*l)), Box::new(self.subst(*r))),
-            Expr::Plus(l, r) => Expr::Plus(Box::new(self.subst(*l)), Box::new(self.subst(*r))),
-            Expr::Minus(l, r) => Expr::Minus(Box::new(self.subst(*l)), Box::new(self.subst(*r))),
+            Expr::Bin(l, r) => subst_binop!(Expr::Bin, self, l, r),
+            Expr::Or(l, r) => subst_binop!(Expr::Or, self, l, r),
+            Expr::And(l, r) => subst_binop!(Expr::And, self, l, r),
+            Expr::Contains(l, r) => subst_binop!(Expr::Contains, self, l, r),
+            Expr::StartsWith(l, r) => subst_binop!(Expr::StartsWith, self, l, r),
+            Expr::EndsWith(l, r) => subst_binop!(Expr::EndsWith, self, l, r),
+            Expr::Has(l, r) => subst_binop!(Expr::Has, self, l, r),
+            Expr::HasCs(l, r) => subst_binop!(Expr::HasCs, self, l, r),
+            Expr::Eq(l, r) => subst_binop!(Expr::Eq, self, l, r),
+            Expr::Ne(l, r) => subst_binop!(Expr::Ne, self, l, r),
+            Expr::Gt(l, r) => subst_binop!(Expr::Gt, self, l, r),
+            Expr::Gte(l, r) => subst_binop!(Expr::Gte, self, l, r),
+            Expr::Lt(l, r) => subst_binop!(Expr::Lt, self, l, r),
+            Expr::Lte(l, r) => subst_binop!(Expr::Lte, self, l, r),
+            Expr::Mul(l, r) => subst_binop!(Expr::Mul, self, l, r),
+            Expr::Div(l, r) => subst_binop!(Expr::Div, self, l, r),
+            Expr::Plus(l, r) => subst_binop!(Expr::Plus, self, l, r),
+            Expr::Minus(l, r) => subst_binop!(Expr::Minus, self, l, r),
         }
     }
 }
