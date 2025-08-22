@@ -189,10 +189,20 @@ fn field_parser<'a, I>(
 where
     I: ValueInput<'a, Token = Token, Span = SimpleSpan>,
 {
-    let ident = ident_parser();
+    let top_level = just(Token::At)
+        .or_not()
+        .then(ident_parser())
+        .map(|(at, name)| {
+            if at.is_some() {
+                format!("@{name}")
+            } else {
+                name
+            }
+        })
+        .boxed();
 
     let single_field = if allow_array {
-        ident
+        top_level
             .then(
                 just(Token::LBracket)
                     .ignore_then(select! {
@@ -205,7 +215,7 @@ where
             .map(|(name, arr_indices)| FieldAccess::new(name, arr_indices))
             .boxed()
     } else {
-        ident.map(|name| FieldAccess::new(name, vec![])).boxed()
+        top_level.map(|name| FieldAccess::new(name, vec![])).boxed()
     };
 
     let first = single_field.clone();
