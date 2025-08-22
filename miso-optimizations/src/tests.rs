@@ -1,6 +1,7 @@
 use std::str::FromStr;
 
 use hashbrown::HashMap;
+use miso_common::hashmap;
 use miso_workflow::{Workflow, WorkflowStep as S, display::DisplayableWorkflowSteps};
 use miso_workflow_types::{
     expr::Expr,
@@ -14,20 +15,6 @@ use miso_workflow_types::{
 use test_case::test_case;
 
 use super::Optimizer;
-
-macro_rules! hashmap {
-    ( $($x:expr => $y:expr),* ) => ({
-        use hashbrown::HashMap;
-        let mut temp_map = HashMap::new();
-        $(
-            temp_map.insert($x, $y);
-        )*
-        temp_map
-    });
-    ( $($x:expr => $y:expr,)* ) => (
-        hashmap!{$($x => $y),*}
-    );
-}
 
 fn field(name: &str) -> Field {
     field_unwrap!(name)
