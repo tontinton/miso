@@ -1470,6 +1470,7 @@ dependencies = [
  "collection_macros",
  "color-eyre",
  "criterion",
+ "ctor",
  "flume",
  "futures-util",
  "mimalloc",
