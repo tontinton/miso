@@ -55,7 +55,7 @@ simd-json = "0.15.1"
 test-case = "3.3.1"
 testcontainers = { version = "0.23.3", features = ["blocking"] }
 thiserror = "2.0.12"
-time = { version = "0.3.41", features = ["macros", "parsing"] }
+time = { version = "0.3.41", features = ["formatting", "macros", "parsing"] }
 tokio = { version = "1.40.0", features = ["full"] }
 tokio-retry = "0.3.0"
 tokio-test = "0.4.4"

@@ -8,7 +8,7 @@ use std::{
 use async_stream::try_stream;
 use axum::async_trait;
 use bytes::BytesMut;
-use color_eyre::eyre::{Context, Result, bail, eyre};
+use color_eyre::eyre::{Context, OptionExt, Result, bail, eyre};
 use futures_util::stream;
 use hashbrown::HashMap;
 use miso_common::{
@@ -25,20 +25,27 @@ use miso_workflow_types::{
     summarize::{Aggregation, Summarize},
     value::{Map, Value},
 };
+use once_cell::sync::Lazy;
 use parking_lot::RwLock;
 use reqwest::{Client, RequestBuilder, Response};
 use serde::{Deserialize, Serialize, Serializer, ser::SerializeMap};
+use time::{OffsetDateTime, format_description};
 use tracing::{debug, error, info, instrument};
 
 use crate::Collection;
 
 use super::{Connector, ConnectorError, QueryHandle, QueryResponse, Split, downcast_unwrap};
 
-static AGGREGATION_RESULTS_NAME: &str = "summarize";
+const AGGREGATION_RESULTS_NAME: &str = "summarize";
 
 /// Quickwit doesn't yet support pagination over aggregation queries.
 /// This will be the max amount of groups we pull from it (taken from quickwit's code).
 const MAX_NUM_GROUPS: usize = 65000;
+
+static DATETIME_FORMAT: Lazy<Vec<format_description::FormatItem<'static>>> = Lazy::new(|| {
+    format_description::parse("[year]-[month]-[day] [hour]:[minute]:[second].[subsecond digits:3]")
+        .expect("quickwit datetime format to compile")
+});
 
 macro_rules! increment_and_ret_on_limit {
     ($counter:expr, $limit:expr) => {
@@ -362,6 +369,19 @@ impl<'de> Deserialize<'de> for QuickwitConnector {
     }
 }
 
+fn format_datetime(dt: &OffsetDateTime) -> String {
+    dt.format(&DATETIME_FORMAT)
+        .expect("format quickwit datetime from an already parsed miso datetime")
+}
+
+fn format_value(value: &Value) -> String {
+    if let Value::Timestamp(dt) = value {
+        format_datetime(dt)
+    } else {
+        value.to_string()
+    }
+}
+
 fn compile_filter_ast(expr: &Expr) -> Option<Value> {
     Some(match expr {
         Expr::Or(left, right) => {
@@ -409,8 +429,7 @@ fn compile_filter_ast(expr: &Expr) -> Option<Value> {
             let values = rhs
                 .iter()
                 .map(|x| match x {
-                    Expr::Literal(Value::String(v)) => Some(v.clone()),
-                    Expr::Literal(value) => Some(value.to_string()),
+                    Expr::Literal(value) => Some(format_value(value)),
                     _ => None,
                 })
                 .collect::<Option<Vec<_>>>()?;
@@ -431,11 +450,7 @@ fn compile_filter_ast(expr: &Expr) -> Option<Value> {
             json!({
                 "match_phrase_prefix": {
                     field: {
-                        "query": if let Value::String(v) = prefix {
-                            v.clone()
-                        } else {
-                            prefix.to_string()
-                        },
+                        "query": format_value(prefix),
                     }
                 }
             })
@@ -449,11 +464,7 @@ fn compile_filter_ast(expr: &Expr) -> Option<Value> {
             }
             json!({
                 "match_phrase": {
-                    field: if let Value::String(v) = phrase {
-                        v.clone()
-                    } else {
-                        phrase.to_string()
-                    }
+                    field: format_value(phrase),
                 }
             })
         }
@@ -467,11 +478,7 @@ fn compile_filter_ast(expr: &Expr) -> Option<Value> {
             json!({
                 "term": {
                     field: {
-                        "value": if let Value::String(v) = value {
-                            v.clone()
-                        } else {
-                            value.to_string()
-                        },
+                        "value": format_value(value),
                     }
                 }
             })
@@ -487,11 +494,7 @@ fn compile_filter_ast(expr: &Expr) -> Option<Value> {
                 "bool": {
                     "must_not": {
                         "term": {
-                            field: if let Value::String(v) = value {
-                                v.clone()
-                            } else {
-                                value.to_string()
-                            },
+                            field: format_value(value),
                         }
                     }
                 }
@@ -507,11 +510,7 @@ fn compile_filter_ast(expr: &Expr) -> Option<Value> {
             json!({
                 "range": {
                     field: {
-                        "gt": if let Value::String(v) = value {
-                            v.clone()
-                        } else {
-                            value.to_string()
-                        },
+                        "gt": format_value(value),
                     }
                 }
             })
@@ -526,11 +525,7 @@ fn compile_filter_ast(expr: &Expr) -> Option<Value> {
             json!({
                 "range": {
                     field: {
-                        "gte": if let Value::String(v) = value {
-                            v.clone()
-                        } else {
-                            value.to_string()
-                        },
+                        "gte": format_value(value),
                     }
                 }
             })
@@ -545,11 +540,7 @@ fn compile_filter_ast(expr: &Expr) -> Option<Value> {
             json!({
                 "range": {
                     field: {
-                        "lt": if let Value::String(v) = value {
-                            v.clone()
-                        } else {
-                            value.to_string()
-                        },
+                        "lt": format_value(value),
                     }
                 }
             })
@@ -564,11 +555,7 @@ fn compile_filter_ast(expr: &Expr) -> Option<Value> {
             json!({
                 "range": {
                     field: {
-                        "lte": if let Value::String(v) = value {
-                            v.clone()
-                        } else {
-                            value.to_string()
-                        },
+                        "lte": format_value(value),
                     }
                 }
             })
@@ -750,6 +737,16 @@ impl QuickwitConnector {
         }
     }
 
+    fn transform_log(mut log: Log, timestamp_field: &Option<String>) -> Result<Log> {
+        if let Some(timestamp_field) = timestamp_field
+            && let Some(value) = log.get_mut(timestamp_field)
+        {
+            Self::string_value_to_datetime(value)?;
+        }
+        Ok(log)
+    }
+
+    #[allow(clippy::too_many_arguments)]
     async fn query_search(
         client: Client,
         url: String,
@@ -758,6 +755,7 @@ impl QuickwitConnector {
         scroll_timeout: Duration,
         scroll_size: u16,
         limit: Option<u32>,
+        timestamp_field: Option<String>,
     ) -> Result<LogTryStream> {
         let start = Instant::now();
 
@@ -775,7 +773,7 @@ impl QuickwitConnector {
             let mut streamed = 0;
 
             for log in logs {
-                yield log;
+                yield Self::transform_log(log, &timestamp_field)?;
                 increment_and_ret_on_limit!(streamed, limit);
             }
 
@@ -785,11 +783,31 @@ impl QuickwitConnector {
                     return;
                 }
                 for log in logs {
-                    yield log;
+                    yield Self::transform_log(log, &timestamp_field)?;
                     increment_and_ret_on_limit!(streamed, limit);
                 }
             }
         }))
+    }
+
+    fn string_value_to_datetime(value: &mut Value) -> Result<()> {
+        if let Value::String(s) = &value {
+            let dt = OffsetDateTime::parse(s, &time::format_description::well_known::Rfc3339)
+                .context("parse quickwit datetime response")?;
+            *value = Value::from(dt)
+        }
+        Ok(())
+    }
+
+    fn transform_value(
+        key: &str,
+        mut value: Value,
+        timestamp_field: &Option<String>,
+    ) -> Result<Value> {
+        if timestamp_field.as_deref() == Some(key) {
+            Self::string_value_to_datetime(&mut value)?;
+        }
+        Ok(value)
     }
 
     fn parse_last_bucket(
@@ -797,13 +815,18 @@ impl QuickwitConnector {
         doc_count: u64,
         group_by: &[String],
         count_fields: &[String],
+        timestamp_field: &Option<String>,
         keys_stack: &[Value],
         logs: &mut Vec<Log>,
     ) -> Result<()> {
         let mut log = Log::new();
 
         for (key, value) in group_by.iter().zip(keys_stack.iter()) {
-            log.insert(key.clone(), value.clone());
+            log.insert(
+                key.clone(),
+                Self::transform_value(key, value.clone(), timestamp_field)
+                    .context("aggregation transform result")?,
+            );
         }
         for key in count_fields {
             log.insert(key.clone(), Value::from(doc_count));
@@ -826,6 +849,7 @@ impl QuickwitConnector {
         index: usize,
         group_by: &[String],
         count_fields: &[String],
+        timestamp_field: &Option<String>,
         keys_stack: &mut Vec<Value>,
         logs: &mut Vec<Log>,
     ) -> Result<()> {
@@ -842,6 +866,7 @@ impl QuickwitConnector {
                     bucket.doc_count,
                     group_by,
                     count_fields,
+                    timestamp_field,
                     keys_stack,
                     logs,
                 )?;
@@ -857,6 +882,7 @@ impl QuickwitConnector {
                     index + 1,
                     group_by,
                     count_fields,
+                    timestamp_field,
                     keys_stack,
                     logs,
                 )?;
@@ -868,6 +894,7 @@ impl QuickwitConnector {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn query_aggregation(
         client: Client,
         url: String,
@@ -876,6 +903,7 @@ impl QuickwitConnector {
         limit: Option<u32>,
         group_by: Vec<String>,
         count_fields: Vec<String>,
+        timestamp_field: Option<String>,
     ) -> Result<LogTryStream> {
         let mut response = search_aggregation(&client, &url, &index, query)
             .await
@@ -890,6 +918,7 @@ impl QuickwitConnector {
                 1,
                 &group_by,
                 &count_fields,
+                &timestamp_field,
                 &mut Vec::new(),
                 &mut logs,
             )
@@ -900,6 +929,7 @@ impl QuickwitConnector {
                 response.hits.total.value,
                 &[],
                 &count_fields,
+                &timestamp_field,
                 &[],
                 &mut logs,
             )
@@ -964,6 +994,14 @@ impl Connector for QuickwitConnector {
         let scroll_size = limit.map_or(self.config.scroll_size, |l| {
             l.min(self.config.scroll_size as u32) as u16
         });
+
+        let timestamp_field = self
+            .indexes
+            .read()
+            .get(collection)
+            .ok_or_eyre("collection not found")?
+            .timestamp_field
+            .clone();
 
         let mut collections = Vec::with_capacity(1 + handle.collections.len());
         collections.push(collection);
@@ -1041,6 +1079,7 @@ impl Connector for QuickwitConnector {
                     limit,
                     handle.group_by.clone(),
                     handle.count_fields.clone(),
+                    timestamp_field,
                 )
                 .await?,
             ));
@@ -1055,6 +1094,7 @@ impl Connector for QuickwitConnector {
                 scroll_timeout,
                 scroll_size,
                 limit,
+                timestamp_field,
             )
             .await?,
         ))
