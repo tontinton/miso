@@ -24,7 +24,15 @@ use miso_connectors::{Connector, ConnectorError, ConnectorState, quickwit::Quick
 use miso_kql::{ParseError, parse};
 use miso_optimizations::Optimizer;
 use miso_workflow::{Workflow, WorkflowStep, partial_stream::PartialStream, scan::Scan};
-use miso_workflow_types::{expr::Expr, query::QueryStep, summarize::Summarize};
+use miso_workflow_types::{
+    expr::Expr,
+    expr_visitor::ExprTransformer,
+    field::Field,
+    project::ProjectField,
+    query::QueryStep,
+    sort::Sort,
+    summarize::{Aggregation, Summarize},
+};
 use prometheus::TextEncoder;
 use serde::Deserialize;
 use serde_json::json;
@@ -82,6 +90,76 @@ async fn collect_tokio_metrics() {
     .await;
 }
 
+#[derive(Default)]
+struct ExprFieldReplacer {
+    replacements: HashMap<String, String>,
+}
+
+impl ExprFieldReplacer {
+    fn replace(&self, field: Field) -> Field {
+        field.replace_top_level_access(&self.replacements)
+    }
+}
+
+impl ExprTransformer for ExprFieldReplacer {
+    fn transform_field(&self, field: Field) -> Expr {
+        Expr::Field(self.replace(field))
+    }
+
+    fn transform_exists(&self, field: Field) -> Expr {
+        Expr::Exists(self.replace(field))
+    }
+}
+
+impl ExprFieldReplacer {
+    fn transform_project(&self, fields: Vec<ProjectField>) -> Vec<ProjectField> {
+        fields
+            .into_iter()
+            .map(|pf| ProjectField {
+                from: self.transform(pf.from),
+                to: self.replace(pf.to),
+            })
+            .collect()
+    }
+
+    fn transform_sort(&self, sorts: Vec<Sort>) -> Vec<Sort> {
+        sorts
+            .into_iter()
+            .map(|sort| Sort {
+                by: self.replace(sort.by),
+                order: sort.order,
+                nulls: sort.nulls,
+            })
+            .collect()
+    }
+
+    fn transform_summarize(&self, summarize: Summarize) -> Summarize {
+        Summarize {
+            aggs: summarize
+                .aggs
+                .into_iter()
+                .map(|(out_f, agg)| {
+                    (
+                        self.replace(out_f),
+                        match agg {
+                            Aggregation::Count => Aggregation::Count,
+                            Aggregation::Sum(f) => Aggregation::Sum(self.replace(f)),
+                            Aggregation::Min(f) => Aggregation::Min(self.replace(f)),
+                            Aggregation::Max(f) => Aggregation::Max(self.replace(f)),
+                            Aggregation::DCount(f) => Aggregation::DCount(self.replace(f)),
+                        },
+                    )
+                })
+                .collect(),
+            by: summarize
+                .by
+                .into_iter()
+                .map(|e| self.transform(e))
+                .collect(),
+        }
+    }
+}
+
 #[async_recursion]
 pub async fn to_workflow_steps(
     connectors: &ConnectorsMap,
@@ -104,6 +182,7 @@ pub async fn to_workflow_steps(
 
     let num_steps = query_steps.len();
     let mut steps = Vec::with_capacity(num_steps);
+    let mut transformer = ExprFieldReplacer::default();
 
     for (i, step) in query_steps.into_iter().enumerate() {
         match step {
@@ -123,7 +202,7 @@ pub async fn to_workflow_steps(
 
                 steps.extend(to_workflow_steps(connectors, views, view_steps).await?);
             }
-            QueryStep::Scan(connector_name, collection) => {
+            QueryStep::Scan(connector_name, collection_name) => {
                 let Some(connector_state) = connectors.get(&connector_name).cloned() else {
                     return Err(HttpError::from_string(
                         StatusCode::NOT_FOUND,
@@ -131,17 +210,23 @@ pub async fn to_workflow_steps(
                     ));
                 };
 
-                info!(?collection, "Checking whether collection exists");
-                if !connector_state.connector.does_collection_exist(&collection) {
-                    info!(?collection, "Collection doesn't exist");
+                info!(?collection_name, "Getting collection info");
+                let Some(collection) = connector_state.connector.get_collection(&collection_name)
+                else {
+                    info!(?collection_name, "Collection doesn't exist");
                     return Err(HttpError::from_string(
                         StatusCode::NOT_FOUND,
-                        format!("collection '{collection}' not found"),
+                        format!("collection '{collection_name}' not found"),
                     ));
-                }
+                };
+
+                transformer = ExprFieldReplacer {
+                    replacements: collection.field_replacements,
+                };
 
                 steps.push(WorkflowStep::Scan(
-                    Scan::from_connector_state(connector_state, connector_name, collection).await,
+                    Scan::from_connector_state(connector_state, connector_name, collection_name)
+                        .await,
                 ));
             }
             _ if steps.is_empty() => {
@@ -151,31 +236,35 @@ pub async fn to_workflow_steps(
                 ));
             }
             QueryStep::Filter(expr) => {
-                steps.push(WorkflowStep::Filter(expr));
+                steps.push(WorkflowStep::Filter(transformer.transform(expr)));
             }
             QueryStep::Project(fields) => {
-                steps.push(WorkflowStep::Project(fields));
+                steps.push(WorkflowStep::Project(transformer.transform_project(fields)));
             }
             QueryStep::Extend(fields) => {
-                steps.push(WorkflowStep::Extend(fields));
+                steps.push(WorkflowStep::Extend(transformer.transform_project(fields)));
             }
             QueryStep::Limit(max) => {
                 steps.push(WorkflowStep::Limit(max));
             }
             QueryStep::Sort(sort) => {
-                steps.push(WorkflowStep::Sort(sort));
+                steps.push(WorkflowStep::Sort(transformer.transform_sort(sort)));
             }
             QueryStep::Top(sort, max) => {
-                steps.push(WorkflowStep::TopN(sort, max));
+                steps.push(WorkflowStep::TopN(transformer.transform_sort(sort), max));
             }
-            QueryStep::Summarize(config) => {
-                steps.push(WorkflowStep::Summarize(config));
+            QueryStep::Summarize(summarize) => {
+                steps.push(WorkflowStep::Summarize(
+                    transformer.transform_summarize(summarize),
+                ));
             }
             QueryStep::Distinct(by) => {
-                steps.push(WorkflowStep::Summarize(Summarize {
-                    aggs: HashMap::new(),
-                    by: by.into_iter().map(Expr::Field).collect(),
-                }));
+                steps.push(WorkflowStep::Summarize(transformer.transform_summarize(
+                    Summarize {
+                        aggs: HashMap::new(),
+                        by: by.into_iter().map(Expr::Field).collect(),
+                    },
+                )));
             }
             QueryStep::Union(inner_steps) => {
                 steps.push(WorkflowStep::Union(Workflow::new(
