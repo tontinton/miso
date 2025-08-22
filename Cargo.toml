@@ -81,6 +81,7 @@ tracing-subscriber.workspace = true
 [dev-dependencies]
 collection_macros.workspace = true
 criterion.workspace = true
+ctor.workspace = true
 flume.workspace = true
 futures-util.workspace = true
 miso-connectors.workspace = true

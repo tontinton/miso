@@ -9,6 +9,7 @@ use color_eyre::{
     eyre::{bail, Context, OptionExt},
     Result,
 };
+use ctor::ctor;
 use futures_util::{future::try_join_all, TryStreamExt};
 use miso_connectors::{
     quickwit::{QuickwitConfig, QuickwitConnector},
@@ -32,6 +33,12 @@ use tokio_retry::{strategy::FixedInterval, Retry};
 use tokio_test::block_on;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
+
+#[ctor]
+fn init() {
+    color_eyre::install().unwrap();
+    tracing_subscriber::fmt::init();
+}
 
 const INDEXES: [(&str, &str); 3] = [
     (
