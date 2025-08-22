@@ -505,6 +505,12 @@ async fn predicate_pushdown_same_results(
     "distinct"
 )]
 #[test_case(
+    r#"test.stack | distinct @timestamp"#,
+    r#"test.stack"#,
+    10;
+    "distinct_timestamp"
+)]
+#[test_case(
     r#"test.stack | summarize minQuestionId=min(questionId) by user | top 3 by minQuestionId"#,
     r#"test.stack | top 3 by minQuestionId"#,
     3;
