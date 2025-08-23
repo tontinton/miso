@@ -161,7 +161,7 @@ pub trait Connector: Debug + Send + Sync {
     /// None means it can't predicate pushdown the provided projections.
     fn apply_project(
         &self,
-        _projections: Vec<ProjectField>,
+        _projections: &[ProjectField],
         _handle: &dyn QueryHandle,
     ) -> Option<Box<dyn QueryHandle>> {
         None
@@ -171,7 +171,7 @@ pub trait Connector: Debug + Send + Sync {
     /// None means it can't predicate pushdown the provided projections.
     fn apply_extend(
         &self,
-        _projections: Vec<ProjectField>,
+        _projections: &[ProjectField],
         _handle: &dyn QueryHandle,
     ) -> Option<Box<dyn QueryHandle>> {
         None

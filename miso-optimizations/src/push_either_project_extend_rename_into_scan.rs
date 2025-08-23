@@ -20,13 +20,13 @@ impl Optimization for PushEitherProjectExtendRenameIntoScan {
             WorkflowStep::Project(projections) => {
                 scan.handle = scan
                     .connector
-                    .apply_project(projections.clone(), scan.handle.as_ref())?
+                    .apply_project(projections, scan.handle.as_ref())?
                     .into();
             }
             WorkflowStep::Extend(projections) => {
                 scan.handle = scan
                     .connector
-                    .apply_extend(projections.clone(), scan.handle.as_ref())?
+                    .apply_extend(projections, scan.handle.as_ref())?
                     .into();
             }
             WorkflowStep::Rename(renames) => {
