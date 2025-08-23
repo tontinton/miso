@@ -372,6 +372,7 @@ where
             },
             Token::Float(x) => Expr::Literal(json!(x)),
             Token::Bool(x) => Expr::Literal(json!(x)),
+            Token::Timespan(x) => Expr::Literal(json!(x)),
             Token::Null => Expr::Literal(Value::Null),
         }
         .or(string_literal.map(|x| Expr::Literal(json!(x))))
