@@ -122,6 +122,13 @@ impl ExprFieldReplacer {
             .collect()
     }
 
+    fn transform_rename(&self, fields: Vec<(Field, Field)>) -> Vec<(Field, Field)> {
+        fields
+            .into_iter()
+            .map(|(from, to)| (self.replace(from), self.replace(to)))
+            .collect()
+    }
+
     fn transform_sort(&self, sorts: Vec<Sort>) -> Vec<Sort> {
         sorts
             .into_iter()
@@ -249,6 +256,9 @@ pub async fn to_workflow_steps(
             }
             QueryStep::Extend(fields) => {
                 steps.push(WorkflowStep::Extend(transformer.transform_project(fields)));
+            }
+            QueryStep::Rename(renames) => {
+                steps.push(WorkflowStep::Rename(transformer.transform_rename(renames)));
             }
             QueryStep::Limit(max) => {
                 steps.push(WorkflowStep::Limit(max));
