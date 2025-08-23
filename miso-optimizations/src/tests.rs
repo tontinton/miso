@@ -331,6 +331,15 @@ fn reorder_filter_before_mux() {
         S::Filter(Expr::Eq(Box::new(Expr::Field(field("b"))), Box::new(Expr::Literal(string_val("test"))))),
         S::Project(vec![rename_project("a", "b")])
     ]
+    ; "rename project through filter"
+)]
+#[test_case(
+    S::Rename(vec![(field("a"), field("b"))]),
+    S::Filter(Expr::Eq(Box::new(Expr::Field(field("a"))), Box::new(Expr::Literal(string_val("test"))))),
+    vec![
+        S::Filter(Expr::Eq(Box::new(Expr::Field(field("b"))), Box::new(Expr::Literal(string_val("test"))))),
+        S::Rename(vec![(field("a"), field("b"))])
+    ]
     ; "rename through filter"
 )]
 #[test_case(
@@ -349,7 +358,7 @@ fn reorder_filter_before_mux() {
         S::Filter(Expr::Eq(Box::new(Expr::Field(field("b"))), Box::new(Expr::Literal(int_val(50))))),
         S::Project(vec![rename_project("a", "b"), literal_project("c", int_val(50))])
     ]
-    ; "mixed rename and literal through filter"
+    ; "mixed rename project and literal through filter"
 )]
 #[test_case(
     S::Extend(vec![rename_project("a", "b")]),
@@ -367,7 +376,7 @@ fn reorder_filter_before_mux() {
         S::Sort(vec![sort_asc(field("b"))]),
         S::Project(vec![rename_project("a", "b")])
     ]
-    ; "rename through sort asc"
+    ; "rename project through sort asc"
 )]
 #[test_case(
     S::Project(vec![rename_project("a", "b")]),
@@ -375,6 +384,15 @@ fn reorder_filter_before_mux() {
     vec![
         S::Sort(vec![sort_desc(field("b"))]),
         S::Project(vec![rename_project("a", "b")])
+    ]
+    ; "rename project through sort desc"
+)]
+#[test_case(
+    S::Rename(vec![(field("a"), field("b"))]),
+    S::Sort(vec![sort_desc(field("a"))]),
+    vec![
+        S::Sort(vec![sort_desc(field("b"))]),
+        S::Rename(vec![(field("a"), field("b"))])
     ]
     ; "rename through sort desc"
 )]
@@ -391,6 +409,15 @@ fn reorder_filter_before_mux() {
         S::TopN(vec![sort_desc(field("b"))], 10),
         S::Project(vec![rename_project("a", "b")])
     ]
+    ; "rename project through topn"
+)]
+#[test_case(
+    S::Rename(vec![(field("a"), field("b"))]),
+    S::TopN(vec![sort_desc(field("a"))], 10),
+    vec![
+        S::TopN(vec![sort_desc(field("b"))], 10),
+        S::Rename(vec![(field("a"), field("b"))])
+    ]
     ; "rename through topn"
 )]
 #[test_case(
@@ -403,6 +430,12 @@ fn reorder_filter_before_mux() {
     S::Project(vec![rename_project("a", "b")]),
     S::Limit(100),
     vec![S::Limit(100), S::Project(vec![rename_project("a", "b")])]
+    ; "rename project through limit"
+)]
+#[test_case(
+    S::Rename(vec![(field("a"), field("b"))]),
+    S::Limit(100),
+    vec![S::Limit(100), S::Rename(vec![(field("a"), field("b"))])]
     ; "rename through limit"
 )]
 #[test_case(
@@ -431,6 +464,18 @@ fn test_project_propagation_through_next_step(first_step: S, second_step: S, exp
         S::Limit(1),
         S::Project(vec![rename_project("c", "b")])
     ]
+    ; "rename project through project"
+)]
+#[test_case(
+    vec![
+        S::Rename(vec![(field("a"), field("b"))]),
+        S::Limit(1),
+        S::Project(vec![rename_project("c", "a")]),
+    ],
+    vec![
+        S::Limit(1),
+        S::Project(vec![rename_project("c", "b")])
+    ]
     ; "rename through project"
 )]
 #[test_case(
@@ -443,6 +488,19 @@ fn test_project_propagation_through_next_step(first_step: S, second_step: S, exp
         S::Limit(1),
         S::Extend(vec![rename_project("c", "b")]),
         S::Project(vec![rename_project("a", "b")])
+    ]
+    ; "rename project through extend"
+)]
+#[test_case(
+    vec![
+        S::Rename(vec![(field("a"), field("b"))]),
+        S::Limit(1),
+        S::Extend(vec![rename_project("c", "a")]),
+    ],
+    vec![
+        S::Limit(1),
+        S::Extend(vec![rename_project("c", "b")]),
+        S::Rename(vec![(field("a"), field("b"))])
     ]
     ; "rename through extend"
 )]
@@ -487,7 +545,7 @@ fn test_project_propagation_through_next_step(first_step: S, second_step: S, exp
         S::Limit(1),
         S::Project(vec![rename_project("c", "b")])
     ]
-    ; "extend rename through project"
+    ; "extend rename project through project"
 )]
 #[test_case(
     vec![
@@ -500,7 +558,7 @@ fn test_project_propagation_through_next_step(first_step: S, second_step: S, exp
         S::Extend(vec![rename_project("c", "b")]),
         S::Extend(vec![rename_project("a", "b")])
     ]
-    ; "extend rename through extend"
+    ; "extend rename project through extend"
 )]
 #[test_case(
     vec![
@@ -521,7 +579,7 @@ fn test_project_propagation_through_next_step(first_step: S, second_step: S, exp
             literal_project("e", int_val(10)),
         ]),
     ]
-    ; "mixed rename and literal through project"
+    ; "mixed rename project and literal through project"
 )]
 #[test_case(
     vec![
@@ -546,7 +604,7 @@ fn test_project_propagation_through_next_step(first_step: S, second_step: S, exp
             literal_project("c", int_val(10)),
         ]),
     ]
-    ; "mixed rename and literal through extend"
+    ; "mixed rename project and literal through extend"
 )]
 fn test_project_propagation_through_project(input: Vec<S>, expected: Vec<S>) {
     check_default(input, expected);
@@ -567,7 +625,7 @@ fn test_project_propagation_through_project(input: Vec<S>, expected: Vec<S>) {
             by: vec![Expr::Field(field("c"))],
         })
     ]
-    ; "rename sum aggregation"
+    ; "rename project sum aggregation"
 )]
 #[test_case(
     vec![rename_project("a", "b")],
@@ -584,7 +642,7 @@ fn test_project_propagation_through_project(input: Vec<S>, expected: Vec<S>) {
             by: vec![Expr::Field(field("d"))],
         })
     ]
-    ; "rename min aggregation"
+    ; "rename project min aggregation"
 )]
 #[test_case(
     vec![rename_project("a", "b")],
@@ -601,7 +659,7 @@ fn test_project_propagation_through_project(input: Vec<S>, expected: Vec<S>) {
             by: vec![Expr::Field(field("e"))],
         })
     ]
-    ; "rename max aggregation"
+    ; "rename project max aggregation"
 )]
 #[test_case(
     vec![rename_project("a", "b")],
@@ -614,7 +672,7 @@ fn test_project_propagation_through_project(input: Vec<S>, expected: Vec<S>) {
             by: vec![Expr::Field(field("f"))],
         })
     ]
-    ; "rename dcount aggregation"
+    ; "rename project dcount aggregation"
 )]
 fn test_project_propagation_rename_through_summarize(
     project_fields: Vec<ProjectField>,
@@ -728,7 +786,7 @@ fn test_project_propagation_literal_through_summarize(
             by: vec![Expr::Field(field("c"))],
         })
     ]
-    ; "rename through mux_summarize"
+    ; "rename project through mux_summarize"
 )]
 #[test_case(
     vec![rename_project("a", "b")],
@@ -741,7 +799,7 @@ fn test_project_propagation_literal_through_summarize(
             by: vec![Expr::Field(field("c"))],
         })
     ]
-    ; "rename through summarize with count"
+    ; "rename project through summarize with count"
 )]
 fn test_project_propagation_summarize_variants(
     project_fields: Vec<ProjectField>,
@@ -771,7 +829,7 @@ fn test_project_propagation_summarize_variants(
         S::Sort(vec![sort_desc(field("b"))]),
         S::Project(vec![rename_project("a", "b")])
     ]
-    ; "rename through filter and sort"
+    ; "rename project through filter and sort"
 )]
 #[test_case(
     vec![rename_project("a", "b")],
@@ -785,7 +843,7 @@ fn test_project_propagation_summarize_variants(
         S::TopN(vec![sort_asc(field("b"))], 3),
         S::Project(vec![rename_project("a", "b")])
     ]
-    ; "rename through filter, topn, and limit"
+    ; "rename project through filter, topn, and limit"
 )]
 #[test_case(
     vec![literal_project("x", int_val(50))],

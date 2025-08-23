@@ -32,7 +32,7 @@ pub struct ProjectPropagationWithEnd;
 
 impl Optimization for ProjectPropagationWithoutEnd {
     fn pattern(&self) -> Pattern {
-        pattern!([Project Extend] ([Filter Sort TopN Limit Extend]+))
+        pattern!([Project Extend Rename] ([Filter Sort TopN Limit Extend Rename]+))
     }
 
     fn apply(&self, steps: &[WorkflowStep], groups: &[Group]) -> Option<Vec<WorkflowStep>> {
@@ -42,12 +42,18 @@ impl Optimization for ProjectPropagationWithoutEnd {
 
 impl Optimization for ProjectPropagationWithEnd {
     fn pattern(&self) -> Pattern {
-        pattern!([Project Extend] ([Filter Sort TopN Limit Extend]*?) [Project Summarize MuxSummarize])
+        pattern!([Project Extend Rename] ([Filter Sort TopN Limit Extend Rename]*?) [Project Summarize MuxSummarize])
     }
 
     fn apply(&self, steps: &[WorkflowStep], groups: &[Group]) -> Option<Vec<WorkflowStep>> {
         apply(steps, groups[0], true)
     }
+}
+
+enum StepType {
+    Project,
+    Extend,
+    Rename,
 }
 
 fn apply(
@@ -61,22 +67,28 @@ fn apply(
 
     if matches!(
         &steps[1],
-        WorkflowStep::Project(..) | WorkflowStep::Extend(..)
+        WorkflowStep::Project(..) | WorkflowStep::Extend(..) | WorkflowStep::Rename(..)
     ) {
-        // Switching between project & extend will cause infinite loop, as it will keep getting into
+        // Switching between project, extend, and rename will cause infinite loop, as it will keep getting into
         // this optimization and keep switching positions between them.
         return None;
     }
 
-    let (project_fields, is_project) = match &steps[0] {
-        WorkflowStep::Project(fields) => (fields, true),
-        WorkflowStep::Extend(fields) => (fields, false),
-        _ => return None,
-    };
-
     let mut renames: HashMap<Field, Field> = HashMap::new(); // a = b
     let mut literals: HashMap<Field, Value> = HashMap::new(); // c = 50
     let mut unhandled_projects = Vec::new();
+
+    let (project_fields, step_type) = match &steps[0] {
+        WorkflowStep::Project(fields) => (fields, StepType::Project),
+        WorkflowStep::Extend(fields) => (fields, StepType::Extend),
+        WorkflowStep::Rename(renames_to_track) => {
+            for (from, to) in renames_to_track {
+                renames.insert(from.clone(), to.clone());
+            }
+            (&vec![], StepType::Rename)
+        }
+        _ => return None,
+    };
 
     for pf in project_fields.iter().cloned() {
         match pf.from {
@@ -98,11 +110,12 @@ fn apply(
 
     let mut out = Vec::new();
     if !unhandled_projects.is_empty() {
-        out.push(if is_project {
-            WorkflowStep::Project(unhandled_projects)
-        } else {
-            WorkflowStep::Extend(unhandled_projects)
-        });
+        let step = match step_type {
+            StepType::Project => WorkflowStep::Project(unhandled_projects),
+            StepType::Extend => WorkflowStep::Extend(unhandled_projects),
+            StepType::Rename => unreachable!("rename cannot include unhandled projects"),
+        };
+        out.push(step);
     }
 
     {
@@ -147,12 +160,16 @@ fn apply(
     }
 
     if !with_end_step {
-        let leftover_project_fields = renames_and_literals_to_project_fields(renames, literals);
-        out.push(if is_project {
-            WorkflowStep::Project(leftover_project_fields)
-        } else {
-            WorkflowStep::Extend(leftover_project_fields)
-        });
+        let step = match step_type {
+            StepType::Project => {
+                WorkflowStep::Project(renames_and_literals_to_project_fields(renames, literals))
+            }
+            StepType::Extend => {
+                WorkflowStep::Extend(renames_and_literals_to_project_fields(renames, literals))
+            }
+            StepType::Rename => WorkflowStep::Rename(renames.into_iter().collect()),
+        };
+        out.push(step);
         return Some(out);
     }
 
