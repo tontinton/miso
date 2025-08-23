@@ -1,4 +1,5 @@
 use logos::Logos;
+use time::Duration;
 
 use crate::lexer::{StringValue, Token};
 
@@ -749,4 +750,143 @@ fn test_comments() {
     assert_eq!(lex.next(), Some(Ok(Token::Ident("x".to_string()))));
     assert_eq!(lex.next(), Some(Ok(Token::Div)));
     assert_eq!(lex.next(), Some(Ok(Token::Ident("y".to_string()))));
+}
+
+#[test]
+fn test_basic_timespan_literals() {
+    let mut lex = Token::lexer("5ms");
+    assert_eq!(
+        lex.next(),
+        Some(Ok(Token::Timespan(Duration::milliseconds(5))))
+    );
+    assert_eq!(lex.next(), None);
+
+    let mut lex = Token::lexer("30s");
+    assert_eq!(lex.next(), Some(Ok(Token::Timespan(Duration::seconds(30)))));
+    assert_eq!(lex.next(), None);
+
+    let mut lex = Token::lexer("2.5m");
+    assert_eq!(
+        lex.next(),
+        Some(Ok(Token::Timespan(Duration::seconds_f64(2.5 * 60.0))))
+    );
+    assert_eq!(lex.next(), None);
+}
+
+#[test]
+fn test_full_timespan_units() {
+    let mut lex = Token::lexer("10minutes");
+    assert_eq!(
+        lex.next(),
+        Some(Ok(Token::Timespan(Duration::seconds(10 * 60))))
+    );
+    assert_eq!(lex.next(), None);
+
+    let mut lex = Token::lexer("45seconds");
+    assert_eq!(lex.next(), Some(Ok(Token::Timespan(Duration::seconds(45)))));
+    assert_eq!(lex.next(), None);
+
+    let mut lex = Token::lexer("3hours");
+    assert_eq!(
+        lex.next(),
+        Some(Ok(Token::Timespan(Duration::seconds(3 * 3600))))
+    );
+    assert_eq!(lex.next(), None);
+
+    let mut lex = Token::lexer("1.5days");
+    assert_eq!(
+        lex.next(),
+        Some(Ok(Token::Timespan(Duration::seconds_f64(1.5 * 86400.0))))
+    );
+    assert_eq!(lex.next(), None);
+}
+
+#[test]
+fn test_abbreviated_timespan_units() {
+    let mut lex = Token::lexer("24hrs");
+    assert_eq!(
+        lex.next(),
+        Some(Ok(Token::Timespan(Duration::seconds(24 * 3600))))
+    );
+    assert_eq!(lex.next(), None);
+
+    let mut lex = Token::lexer("1hr");
+    assert_eq!(
+        lex.next(),
+        Some(Ok(Token::Timespan(Duration::seconds(3600))))
+    );
+    assert_eq!(lex.next(), None);
+
+    let mut lex = Token::lexer("15min");
+    assert_eq!(
+        lex.next(),
+        Some(Ok(Token::Timespan(Duration::seconds(15 * 60))))
+    );
+    assert_eq!(lex.next(), None);
+}
+
+#[test]
+fn test_sub_second_timespan_units() {
+    let mut lex = Token::lexer("500milliseconds");
+    assert_eq!(
+        lex.next(),
+        Some(Ok(Token::Timespan(Duration::milliseconds(500))))
+    );
+    assert_eq!(lex.next(), None);
+
+    let mut lex = Token::lexer("1000microseconds");
+    assert_eq!(
+        lex.next(),
+        Some(Ok(Token::Timespan(Duration::microseconds(1000))))
+    );
+    assert_eq!(lex.next(), None);
+
+    let mut lex = Token::lexer("500nanoseconds");
+    assert_eq!(
+        lex.next(),
+        Some(Ok(Token::Timespan(Duration::nanoseconds(500))))
+    );
+    assert_eq!(lex.next(), None);
+
+    let mut lex = Token::lexer("100ticks");
+    assert_eq!(
+        lex.next(),
+        Some(Ok(Token::Timespan(Duration::nanoseconds(100 * 100))))
+    );
+    assert_eq!(lex.next(), None);
+}
+
+#[test]
+fn test_timespan_vs_ident_priority() {
+    let mut lex = Token::lexer("5ms");
+    assert_eq!(
+        lex.next(),
+        Some(Ok(Token::Timespan(Duration::milliseconds(5))))
+    );
+    assert_eq!(lex.next(), None);
+
+    let mut lex = Token::lexer("5msABC");
+    assert_eq!(lex.next(), Some(Ok(Token::Ident("5msABC".to_string()))));
+    assert_eq!(lex.next(), None);
+
+    let mut lex = Token::lexer("123xyz");
+    assert_eq!(lex.next(), Some(Ok(Token::Ident("123xyz".to_string()))));
+    assert_eq!(lex.next(), None);
+}
+
+#[test]
+fn test_decimal_timespan_values() {
+    let mut lex = Token::lexer("3.25s");
+    assert_eq!(
+        lex.next(),
+        Some(Ok(Token::Timespan(Duration::seconds_f64(3.25))))
+    );
+    assert_eq!(lex.next(), None);
+
+    let mut lex = Token::lexer("0.5hours");
+    assert_eq!(
+        lex.next(),
+        Some(Ok(Token::Timespan(Duration::seconds_f64(0.5 * 3600.0))))
+    );
+    assert_eq!(lex.next(), None);
 }

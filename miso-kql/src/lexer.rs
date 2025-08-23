@@ -1,4 +1,5 @@
 use logos::Logos;
+use time::Duration;
 
 #[derive(Logos, Debug, Clone, PartialEq)]
 #[logos(skip r"[ \t\r\n\f]+")]
@@ -190,8 +191,11 @@ pub enum Token {
     #[regex(r"[0-9]+", |lex| lex.slice().parse::<i64>().ok())]
     Integer(i64),
 
+    #[regex(r"[0-9]+(\.[0-9]+)?(ms|micro(s((ec(ond)?)?|econds)?)?|milli(s((ec(ond)?)?|econds)?)?|nano(s((ec(ond)?)?|econds)?)?|ticks?|m(in(ute)?s?)?|s(ec(ond)?s?)?|h((ours?)|rs?)?|d(ays?)?)", parse_timespan, priority=2)]
+    Timespan(Duration),
+
     #[regex(r"[_a-zA-Z][_a-zA-Z0-9]*", |lex| lex.slice().to_owned())]
-    #[regex(r"[0-9]+[_a-zA-Z][_a-zA-Z0-9]*", |lex| lex.slice().to_owned())]
+    #[regex(r"[0-9]+[_a-zA-Z][_a-zA-Z0-9]*", |lex| lex.slice().to_owned(), priority=1)]
     Ident(String),
 }
 
@@ -390,4 +394,36 @@ fn parse_multiline_triple_backtick(lex: &mut logos::Lexer<Token>) -> Option<Stri
 
 fn parse_multiline_triple_tilde(lex: &mut logos::Lexer<Token>) -> Option<StringValue> {
     parse_multiline_custom_delimiter(lex, "~~~")
+}
+
+fn parse_timespan(lex: &mut logos::Lexer<Token>) -> Option<Duration> {
+    let slice = lex.slice();
+    let mut split_pos = 0;
+
+    for (i, c) in slice.char_indices() {
+        match c {
+            '0'..='9' | '.' => split_pos = i + 1,
+            _ => break,
+        }
+    }
+
+    let (num_str, unit_str) = slice.split_at(split_pos);
+    let value = num_str.parse::<f64>().ok()?;
+
+    let duration = match unit_str {
+        s if s.starts_with("nano") => Duration::nanoseconds((value * 1.0) as i64),
+        s if s.starts_with("micro") => Duration::microseconds((value * 1.0) as i64),
+        s if s.starts_with("milli") || s == "ms" => Duration::milliseconds((value * 1.0) as i64),
+        s if s.starts_with("tick") => {
+            // .NET tick = 100 nanoseconds.
+            Duration::nanoseconds((value * 100.0) as i64)
+        }
+        s if s.starts_with("s") => Duration::seconds_f64(value),
+        s if s.starts_with("m") => Duration::seconds_f64(value * 60.0),
+        s if s.starts_with("h") => Duration::seconds_f64(value * 3600.0),
+        s if s.starts_with("d") => Duration::seconds_f64(value * 3600.0 * 24.0),
+        _ => return None,
+    };
+
+    Some(duration)
 }
