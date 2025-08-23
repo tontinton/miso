@@ -10,7 +10,7 @@ use axum::async_trait;
 use bytes::BytesMut;
 use color_eyre::eyre::{Context, OptionExt, Result, bail, eyre};
 use futures_util::stream;
-use hashbrown::HashMap;
+use hashbrown::{HashMap, HashSet};
 use miso_common::{
     humantime_utils::{deserialize_duration, serialize_duration},
     metrics::METRICS,
@@ -19,6 +19,7 @@ use miso_common::{
 };
 use miso_workflow_types::{
     expr::Expr,
+    field::Field,
     json,
     log::{Log, LogTryStream},
     sort::Sort,
@@ -70,11 +71,13 @@ impl Split for QuickwitSplit {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 struct QuickwitHandle {
+    timestamp_field: Option<String>,
     queries: Vec<Value>,
     sorts: Option<Value>,
     aggs: Option<Value>,
     group_by: Vec<String>,
     count_fields: Vec<String>,
+    agg_timestamp_fields: HashSet<String>,
     limit: Option<u32>,
     count: bool,
     collections: Vec<String>,
@@ -84,6 +87,61 @@ struct QuickwitHandle {
 impl QueryHandle for QuickwitHandle {
     fn as_any(&self) -> &dyn Any {
         self
+    }
+}
+
+impl QuickwitHandle {
+    fn new(timestamp_field: Option<String>) -> Self {
+        Self {
+            timestamp_field,
+            ..Default::default()
+        }
+    }
+
+    fn with_filter(&self, query: Value) -> QuickwitHandle {
+        let mut handle = self.clone();
+        handle.queries.push(query);
+        handle
+    }
+
+    fn with_limit(&self, limit: u32) -> QuickwitHandle {
+        let mut handle = self.clone();
+        handle.limit = Some(limit);
+        handle
+    }
+
+    fn with_topn(&self, sort: Value, limit: u32) -> QuickwitHandle {
+        let mut handle = self.clone();
+        handle.limit = Some(limit);
+        handle.sorts = Some(sort);
+        handle
+    }
+
+    fn with_count(&self) -> QuickwitHandle {
+        let mut handle = self.clone();
+        handle.count = true;
+        handle
+    }
+
+    fn with_summarize(
+        &self,
+        aggs: Value,
+        group_by: Vec<String>,
+        count_fields: Vec<String>,
+        agg_timestamp_fields: HashSet<String>,
+    ) -> QuickwitHandle {
+        let mut handle = self.clone();
+        handle.aggs = Some(aggs);
+        handle.group_by = group_by;
+        handle.count_fields = count_fields;
+        handle.agg_timestamp_fields = agg_timestamp_fields;
+        handle
+    }
+
+    fn with_union(&self, collection: &str) -> QuickwitHandle {
+        let mut handle = self.clone();
+        handle.collections.push(collection.to_string());
+        handle
     }
 }
 
@@ -144,52 +202,6 @@ impl fmt::Display for QuickwitHandle {
         }
 
         write!(f, "{}", items.join(", "))
-    }
-}
-
-impl QuickwitHandle {
-    fn with_filter(&self, query: Value) -> QuickwitHandle {
-        let mut handle = self.clone();
-        handle.queries.push(query);
-        handle
-    }
-
-    fn with_limit(&self, limit: u32) -> QuickwitHandle {
-        let mut handle = self.clone();
-        handle.limit = Some(limit);
-        handle
-    }
-
-    fn with_topn(&self, sort: Value, limit: u32) -> QuickwitHandle {
-        let mut handle = self.clone();
-        handle.limit = Some(limit);
-        handle.sorts = Some(sort);
-        handle
-    }
-
-    fn with_count(&self) -> QuickwitHandle {
-        let mut handle = self.clone();
-        handle.count = true;
-        handle
-    }
-
-    fn with_summarize(
-        &self,
-        aggs: Value,
-        group_by: Vec<String>,
-        count_fields: Vec<String>,
-    ) -> QuickwitHandle {
-        let mut handle = self.clone();
-        handle.aggs = Some(aggs);
-        handle.group_by = group_by;
-        handle.count_fields = count_fields;
-        handle
-    }
-
-    fn with_union(&self, collection: &str) -> QuickwitHandle {
-        let mut handle = self.clone();
-        handle.collections.push(collection.to_string());
-        handle
     }
 }
 
@@ -741,7 +753,7 @@ impl QuickwitConnector {
         if let Some(timestamp_field) = timestamp_field
             && let Some(value) = log.get_mut(timestamp_field)
         {
-            Self::string_value_to_datetime(value)?;
+            Self::value_to_datetime(value)?;
         }
         Ok(log)
     }
@@ -790,32 +802,53 @@ impl QuickwitConnector {
         }))
     }
 
-    fn string_value_to_datetime(value: &mut Value) -> Result<()> {
-        if let Value::String(s) = &value {
-            let dt = OffsetDateTime::parse(s, &time::format_description::well_known::Rfc3339)
-                .context("parse quickwit datetime response")?;
-            *value = Value::from(dt)
+    fn value_to_datetime(value: &mut Value) -> Result<()> {
+        match value {
+            Value::String(s) => {
+                let dt = OffsetDateTime::parse(s, &time::format_description::well_known::Rfc3339)
+                    .context("parse quickwit datetime string response")?;
+                *value = Value::from(dt)
+            }
+            Value::Float(f) => {
+                let dt = OffsetDateTime::from_unix_timestamp_nanos(*f as i128)
+                    .context("parse quickwit datetime float response")?;
+                *value = Value::from(dt)
+            }
+            _ => {}
         }
         Ok(())
     }
 
-    fn transform_value(
+    fn transform_timestamp_value(
         key: &str,
         mut value: Value,
         timestamp_field: &Option<String>,
     ) -> Result<Value> {
         if timestamp_field.as_deref() == Some(key) {
-            Self::string_value_to_datetime(&mut value)?;
+            Self::value_to_datetime(&mut value)?;
         }
         Ok(value)
     }
 
+    fn transform_agg_timestamp_value(
+        key: &str,
+        mut value: Value,
+        agg_timestamp_fields: &HashSet<String>,
+    ) -> Result<Value> {
+        if agg_timestamp_fields.contains(key) {
+            Self::value_to_datetime(&mut value)?;
+        }
+        Ok(value)
+    }
+
+    #[allow(clippy::too_many_arguments)]
     fn parse_last_bucket(
         buckets_or_value_wrap: HashMap<String, SearchAggregationBucketsOrValue>,
         doc_count: u64,
         group_by: &[String],
         count_fields: &[String],
         timestamp_field: &Option<String>,
+        agg_timestamp_fields: &HashSet<String>,
         keys_stack: &[Value],
         logs: &mut Vec<Log>,
     ) -> Result<()> {
@@ -824,7 +857,7 @@ impl QuickwitConnector {
         for (key, value) in group_by.iter().zip(keys_stack.iter()) {
             log.insert(
                 key.clone(),
-                Self::transform_value(key, value.clone(), timestamp_field)
+                Self::transform_timestamp_value(key, value.clone(), timestamp_field)
                     .context("aggregation transform result")?,
             );
         }
@@ -836,7 +869,10 @@ impl QuickwitConnector {
             let SearchAggregationBucketsOrValue::Value(value_wrap) = buckets_or_value else {
                 bail!("expected value, not bucket");
             };
-            log.insert(field, value_wrap.value);
+            let value =
+                Self::transform_agg_timestamp_value(&field, value_wrap.value, agg_timestamp_fields)
+                    .context("aggregation transform result")?;
+            log.insert(field, value);
         }
 
         logs.push(log);
@@ -844,12 +880,14 @@ impl QuickwitConnector {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn parse_buckets(
         buckets_or_value: SearchAggregationBucketsOrValue,
         index: usize,
         group_by: &[String],
         count_fields: &[String],
         timestamp_field: &Option<String>,
+        agg_timestamp_fields: &HashSet<String>,
         keys_stack: &mut Vec<Value>,
         logs: &mut Vec<Log>,
     ) -> Result<()> {
@@ -867,6 +905,7 @@ impl QuickwitConnector {
                     group_by,
                     count_fields,
                     timestamp_field,
+                    agg_timestamp_fields,
                     keys_stack,
                     logs,
                 )?;
@@ -883,6 +922,7 @@ impl QuickwitConnector {
                     group_by,
                     count_fields,
                     timestamp_field,
+                    agg_timestamp_fields,
                     keys_stack,
                     logs,
                 )?;
@@ -903,6 +943,7 @@ impl QuickwitConnector {
         limit: Option<u32>,
         group_by: Vec<String>,
         count_fields: Vec<String>,
+        agg_timestamp_fields: HashSet<String>,
         timestamp_field: Option<String>,
     ) -> Result<LogTryStream> {
         let mut response = search_aggregation(&client, &url, &index, query)
@@ -919,6 +960,7 @@ impl QuickwitConnector {
                 &group_by,
                 &count_fields,
                 &timestamp_field,
+                &agg_timestamp_fields,
                 &mut Vec::new(),
                 &mut logs,
             )
@@ -930,6 +972,7 @@ impl QuickwitConnector {
                 &[],
                 &count_fields,
                 &timestamp_field,
+                &agg_timestamp_fields,
                 &[],
                 &mut logs,
             )
@@ -970,8 +1013,15 @@ impl Connector for QuickwitConnector {
         vec![Box::new(QuickwitSplit {}) as Box<dyn Split>]
     }
 
-    fn get_handle(&self) -> Box<dyn QueryHandle> {
-        Box::new(QuickwitHandle::default())
+    fn get_handle(&self, collection: &str) -> Result<Box<dyn QueryHandle>> {
+        let timestamp_field = self
+            .indexes
+            .read()
+            .get(collection)
+            .ok_or_eyre("collection not found")?
+            .timestamp_field
+            .clone();
+        Ok(Box::new(QuickwitHandle::new(timestamp_field)))
     }
 
     async fn query(
@@ -994,14 +1044,7 @@ impl Connector for QuickwitConnector {
         let scroll_size = limit.map_or(self.config.scroll_size, |l| {
             l.min(self.config.scroll_size as u32) as u16
         });
-
-        let timestamp_field = self
-            .indexes
-            .read()
-            .get(collection)
-            .ok_or_eyre("collection not found")?
-            .timestamp_field
-            .clone();
+        let timestamp_field = handle.timestamp_field.clone();
 
         let mut collections = Vec::with_capacity(1 + handle.collections.len());
         collections.push(collection);
@@ -1079,6 +1122,7 @@ impl Connector for QuickwitConnector {
                     limit,
                     handle.group_by.clone(),
                     handle.count_fields.clone(),
+                    handle.agg_timestamp_fields.clone(),
                     timestamp_field,
                 )
                 .await?,
@@ -1186,13 +1230,25 @@ impl Connector for QuickwitConnector {
         }
 
         let mut count_fields = Vec::new();
+        let mut agg_timestamp_fields = HashSet::new();
         let mut inner_aggs = Map::new();
 
+        fn agg_json(
+            op: &str,
+            agg_field: &Field,
+            timestamp_field: &Option<String>,
+        ) -> (Value, bool) {
+            (
+                json!({ op: { "field": agg_field } }),
+                timestamp_field == &Some(agg_field.to_string()),
+            )
+        }
+
         for (output_field, agg) in &config.aggs {
-            let value = match agg {
-                Aggregation::Min(agg_field) => json!({ "min": { "field": agg_field } }),
-                Aggregation::Max(agg_field) => json!({ "max": { "field": agg_field } }),
-                Aggregation::Sum(agg_field) => json!({ "sum": { "field": agg_field } }),
+            let (value, is_timestamp) = match agg {
+                Aggregation::Min(agg_field) => agg_json("min", agg_field, &handle.timestamp_field),
+                Aggregation::Max(agg_field) => agg_json("max", agg_field, &handle.timestamp_field),
+                Aggregation::Sum(agg_field) => agg_json("sum", agg_field, &handle.timestamp_field),
                 Aggregation::Count => {
                     // Count is always returned in doc_count.
                     count_fields.push(output_field.to_string());
@@ -1203,6 +1259,9 @@ impl Connector for QuickwitConnector {
                 Aggregation::DCount(..) => return None,
             };
 
+            if is_timestamp {
+                agg_timestamp_fields.insert(output_field.to_string());
+            }
             inner_aggs.insert(output_field.to_string(), value);
         }
 
@@ -1273,6 +1332,7 @@ impl Connector for QuickwitConnector {
             json!({"aggs": aggs}),
             group_by,
             count_fields,
+            agg_timestamp_fields,
         )))
     }
 
