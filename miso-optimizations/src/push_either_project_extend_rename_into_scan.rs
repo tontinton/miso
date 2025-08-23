@@ -4,11 +4,11 @@ use crate::pattern;
 
 use super::{Group, Optimization, Pattern};
 
-pub struct PushProjectOrExtendIntoScan;
+pub struct PushEitherProjectExtendRenameIntoScan;
 
-impl Optimization for PushProjectOrExtendIntoScan {
+impl Optimization for PushEitherProjectExtendRenameIntoScan {
     fn pattern(&self) -> Pattern {
-        pattern!(Scan [Project Extend])
+        pattern!(Scan [Project Extend Rename])
     }
 
     fn apply(&self, steps: &[WorkflowStep], _groups: &[Group]) -> Option<Vec<WorkflowStep>> {
@@ -27,6 +27,12 @@ impl Optimization for PushProjectOrExtendIntoScan {
                 scan.handle = scan
                     .connector
                     .apply_extend(projections.clone(), scan.handle.as_ref())?
+                    .into();
+            }
+            WorkflowStep::Rename(renames) => {
+                scan.handle = scan
+                    .connector
+                    .apply_rename(renames, scan.handle.as_ref())?
                     .into();
             }
             _ => return None,
