@@ -663,6 +663,16 @@ async fn project_add() -> Result<()> {
 }
 
 #[tokio::test]
+async fn rename() -> Result<()> {
+    check(
+        r#"test.c | project-rename out=world, here=hello"#,
+        r#"[{"world": 2}, {"world": 1}, {"hello": "world", "random": 42}]"#,
+        r#"[{"out": 2}, {"out": 1}, {"here": "world", "random": 42}]"#,
+    )
+    .await
+}
+
+#[tokio::test]
 async fn project_filter() -> Result<()> {
     check(
         r#"

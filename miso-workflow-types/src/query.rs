@@ -10,6 +10,7 @@ pub enum QueryStep {
     Filter(Expr),
     Project(Vec<ProjectField>),
     Extend(Vec<ProjectField>),
+    Rename(Vec<(Field, Field)>),
     Limit(u32),
     Sort(Vec<Sort>),
     Top(Vec<Sort>, u32),
