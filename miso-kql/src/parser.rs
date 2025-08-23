@@ -157,6 +157,8 @@ where
         Token::Where => "where".to_string(),
         Token::Filter => "filter".to_string(),
         Token::Project => "project".to_string(),
+        // ProjectRename left out on purpose as it includes a '-' which is not a valid character
+        // in ident.
         Token::Extend => "extend".to_string(),
         Token::Limit => "limit".to_string(),
         Token::Take => "take".to_string(),
@@ -554,6 +556,7 @@ where
         .or(just(Token::Filter))
         .ignore_then(expr.clone())
         .map(QueryStep::Filter)
+        .labelled("filter")
         .boxed();
 
     let project_expr = field_no_arr
@@ -581,6 +584,24 @@ where
         .ignore_then(project_exprs)
         .map(QueryStep::Extend)
         .labelled("extend");
+
+    let project_rename_expr = field_no_arr
+        .clone()
+        .then(just(Token::Eq).ignore_then(field_no_arr.clone()))
+        .map(|(to, from)| (from, to))
+        .labelled("project-rename expression")
+        .boxed();
+
+    let project_rename_exprs = project_rename_expr
+        .separated_by(just(Token::Comma))
+        .at_least(1)
+        .collect::<Vec<_>>();
+
+    let project_rename_step = just(Token::ProjectRename)
+        .ignore_then(project_rename_exprs.clone())
+        .map(QueryStep::Rename)
+        .labelled("project-rename")
+        .boxed();
 
     let limit_int = select! { Token::Integer(x) => x }
         .validate(|x, e, emitter| {
@@ -810,6 +831,7 @@ where
     filter_step
         .or(project_step)
         .or(extend_step)
+        .or(project_rename_step)
         .or(limit_step)
         .or(sort_step)
         .or(top_step)

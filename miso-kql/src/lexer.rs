@@ -100,6 +100,8 @@ pub enum Token {
     Filter,
     #[token("project")]
     Project,
+    #[token("project-rename")]
+    ProjectRename,
     #[token("extend")]
     Extend,
     #[token("limit")]
