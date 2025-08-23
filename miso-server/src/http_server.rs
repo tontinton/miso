@@ -226,7 +226,13 @@ pub async fn to_workflow_steps(
 
                 steps.push(WorkflowStep::Scan(
                     Scan::from_connector_state(connector_state, connector_name, collection_name)
-                        .await,
+                        .await
+                        .map_err(|e| {
+                            HttpError::from_string(
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                format!("failed to create connector from scan step: {e}"),
+                            )
+                        })?,
                 ));
             }
             _ if steps.is_empty() => {

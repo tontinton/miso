@@ -133,7 +133,7 @@ pub trait Connector: Debug + Send + Sync {
 
     fn get_collection(&self, collection: &str) -> Option<Collection>;
 
-    fn get_handle(&self) -> Box<dyn QueryHandle>;
+    fn get_handle(&self, collection: &str) -> Result<Box<dyn QueryHandle>>;
 
     /// Returns splits to run multiple shorter queries in parallel (which we union).
     /// Empty vec (default implementation) means no need to split the query.

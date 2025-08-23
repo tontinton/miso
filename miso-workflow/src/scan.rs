@@ -46,11 +46,14 @@ impl Scan {
         connector_state: Arc<ConnectorState>,
         connector_name: String,
         collection: String,
-    ) -> Self {
+    ) -> Result<Self> {
         let connector = connector_state.connector.clone();
-        let handle = connector.get_handle().into();
+        let handle = connector
+            .get_handle(&collection)
+            .context("get connector handle")?
+            .into();
         let stats = connector_state.stats.clone();
-        Self {
+        Ok(Self {
             connector_name,
             collection,
             connector,
@@ -59,7 +62,7 @@ impl Scan {
             stats,
             dynamic_filter_tx: None,
             dynamic_filter_rx: None,
-        }
+        })
     }
 
     pub fn get_field_stats(&self, field: &str) -> Option<FieldStats> {

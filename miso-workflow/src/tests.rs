@@ -96,8 +96,8 @@ impl Connector for TestConnector {
             .then_some(Collection::default())
     }
 
-    fn get_handle(&self) -> Box<dyn QueryHandle> {
-        Box::new(TestHandle {})
+    fn get_handle(&self, _: &str) -> Result<Box<dyn QueryHandle>> {
+        Ok(Box::new(TestHandle {}))
     }
 
     fn get_splits(&self) -> Vec<Box<dyn Split>> {
