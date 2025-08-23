@@ -12,7 +12,7 @@ use std::{
 };
 
 use serde::{Deserialize, Deserializer, Serialize};
-use time::OffsetDateTime;
+use time::{Duration, OffsetDateTime};
 
 use crate::field::Field;
 
@@ -27,6 +27,7 @@ pub enum Value {
     UInt(u64),
     Float(f64),
     Timestamp(OffsetDateTime),
+    Timespan(Duration),
     String(String),
     Array(Vec<Value>),
     Object(Map<String, Value>),
@@ -50,6 +51,7 @@ impl Hash for Value {
                 }
             }
             Value::Timestamp(x) => x.hash(h),
+            Value::Timespan(x) => x.hash(h),
             Value::String(x) => x.hash(h),
             Value::Array(x) => x.hash(h),
             Value::Object(x) => x.hash(h),
@@ -70,6 +72,7 @@ impl fmt::Display for Value {
             Value::Timestamp(t) => {
                 write!(f, "\"{}\"", t)
             }
+            Value::Timespan(t) => write!(f, "\"{}\"", t),
             Value::String(s) => {
                 write!(f, "\"")?;
                 for ch in s.chars() {
@@ -187,6 +190,10 @@ impl Ord for Value {
             (Timestamp(_), _) => Ordering::Less,
             (_, Timestamp(_)) => Ordering::Greater,
 
+            (Timespan(a), Timespan(b)) => a.cmp(b),
+            (Timespan(_), _) => Ordering::Less,
+            (_, Timespan(_)) => Ordering::Greater,
+
             (String(a), String(b)) => a.cmp(b),
             (String(_), _) => Ordering::Less,
             (_, String(_)) => Ordering::Greater,
@@ -290,6 +297,12 @@ impl From<f32> for Value {
 impl From<OffsetDateTime> for Value {
     fn from(value: OffsetDateTime) -> Self {
         Value::Timestamp(value)
+    }
+}
+
+impl From<Duration> for Value {
+    fn from(value: Duration) -> Self {
+        Value::Timespan(value)
     }
 }
 
@@ -438,6 +451,7 @@ impl Serialize for Value {
                 }
             }
             Value::Timestamp(t) => serializer.serialize_str(&t.to_string()),
+            Value::Timespan(t) => serializer.serialize_str(&t.to_string()),
             Value::String(s) => serializer.serialize_str(s),
             Value::Array(arr) => arr.serialize(serializer),
             Value::Object(obj) => obj.serialize(serializer),
@@ -454,6 +468,7 @@ impl Value {
             Value::UInt(_) => "integer",
             Value::Float(_) => "float",
             Value::Timestamp(_) => "timestamp",
+            Value::Timespan(_) => "timespan",
             Value::String(_) => "string",
             Value::Array(_) => "array",
             Value::Object(_) => "object",
@@ -468,6 +483,7 @@ impl Value {
             Value::UInt(i) => *i != 0,
             Value::Float(f) => *f != 0.0,
             Value::Timestamp(_) => true,
+            Value::Timespan(_) => true,
             Value::String(x) => !x.is_empty(),
             Value::Array(x) => !x.is_empty(),
             Value::Object(x) => !x.is_empty(),

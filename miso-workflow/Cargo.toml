@@ -20,6 +20,7 @@ scoped_thread_local.workspace = true
 scopeguard.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+time.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
 tracing.workspace = true

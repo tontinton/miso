@@ -15,6 +15,7 @@ use miso_workflow_types::{
     log::Log,
     value::{Map, Value},
 };
+use time::{Duration, OffsetDateTime};
 
 /// Extract the inner value as ref, propagate and return None if no value.
 macro_rules! val {
@@ -223,26 +224,120 @@ impl<'a> Val<'a> {
     fn add(&self, other: &Val) -> Result<Option<Value>> {
         let lhs = val!(self);
         let rhs = val!(other);
-        if let (Value::String(x), Value::String(y)) = (lhs, rhs) {
-            return Ok(Some(Value::String(format!("{x}{y}"))));
+
+        match (lhs, rhs) {
+            (Value::String(x), Value::String(y)) => Ok(Some(Value::String(format!("{x}{y}")))),
+
+            (Value::Timestamp(ts), Value::Timespan(dur))
+            | (Value::Timespan(dur), Value::Timestamp(ts)) => match ts.checked_add(*dur) {
+                Some(result) => Ok(Some(Value::Timestamp(result))),
+                None => bail!("timestamp overflow in addition"),
+            },
+
+            (Value::Timespan(dur1), Value::Timespan(dur2)) => match dur1.checked_add(*dur2) {
+                Some(result) => Ok(Some(Value::Timespan(result))),
+                None => bail!("duration overflow in addition"),
+            },
+
+            _ => impl_op!(lhs, rhs, |x, y| x + y, "+"),
         }
-        impl_op!(lhs, rhs, |x, y| x + y, "+")
     }
 
     fn sub(&self, other: &Val) -> Result<Option<Value>> {
-        impl_op!(val!(self), val!(other), |x, y| x - y, "-")
+        let lhs = val!(self);
+        let rhs = val!(other);
+
+        match (lhs, rhs) {
+            (Value::Timestamp(ts), Value::Timespan(dur)) => match ts.checked_sub(*dur) {
+                Some(result) => Ok(Some(Value::Timestamp(result))),
+                None => bail!("timestamp underflow in subtraction"),
+            },
+
+            (Value::Timestamp(ts1), Value::Timestamp(ts2)) => {
+                Ok(Some(Value::Timespan(*ts1 - *ts2)))
+            }
+
+            (Value::Timespan(dur1), Value::Timespan(dur2)) => match dur1.checked_sub(*dur2) {
+                Some(result) => Ok(Some(Value::Timespan(result))),
+                None => bail!("duration underflow in subtraction"),
+            },
+
+            _ => impl_op!(lhs, rhs, |x, y| x - y, "-"),
+        }
     }
 
     fn mul(&self, other: &Val) -> Result<Option<Value>> {
-        impl_op!(val!(self), val!(other), |x, y| x * y, "*")
+        let lhs = val!(self);
+        let rhs = val!(other);
+
+        match (lhs, rhs) {
+            (Value::Timespan(dur), Value::Int(n)) | (Value::Int(n), Value::Timespan(dur)) => {
+                match dur.checked_mul(*n as i32) {
+                    Some(result) => Ok(Some(Value::Timespan(result))),
+                    None => bail!("duration overflow in multiplication"),
+                }
+            }
+
+            (Value::Timespan(dur), Value::UInt(n)) | (Value::UInt(n), Value::Timespan(dur)) => {
+                match dur.checked_mul(*n as i32) {
+                    Some(result) => Ok(Some(Value::Timespan(result))),
+                    None => bail!("duration overflow in multiplication"),
+                }
+            }
+
+            (Value::Timespan(dur), Value::Float(n)) | (Value::Float(n), Value::Timespan(dur)) => {
+                let nanos = dur.whole_nanoseconds() as f64 * n;
+                let duration = Duration::nanoseconds(nanos as i64);
+                Ok(Some(Value::Timespan(duration)))
+            }
+
+            _ => impl_op!(lhs, rhs, |x, y| x * y, "*"),
+        }
     }
 
     fn div(&self, other: &Val) -> Result<Option<Value>> {
+        let lhs = val!(self);
         let rhs = val!(other);
-        if rhs.as_f64() == Some(0.0) {
-            bail!("division by zero");
+
+        match (lhs, rhs) {
+            (Value::Timespan(dur), Value::Int(n)) => {
+                if *n == 0 {
+                    bail!("cannot divide duration by zero");
+                }
+                match dur.checked_div(*n as i32) {
+                    Some(result) => Ok(Some(Value::Timespan(result))),
+                    None => bail!("duration overflow in division"),
+                }
+            }
+
+            (Value::Timespan(dur), Value::UInt(n)) => {
+                if *n == 0 {
+                    bail!("cannot divide duration by zero");
+                }
+                match dur.checked_div(*n as i32) {
+                    Some(result) => Ok(Some(Value::Timespan(result))),
+                    None => bail!("duration overflow in division"),
+                }
+            }
+
+            (Value::Timespan(dur), Value::Float(n)) => {
+                if *n == 0.0 {
+                    bail!("cannot divide duration by zero");
+                }
+                let nanos = dur.whole_nanoseconds() as f64 / n;
+                Ok(Some(Value::Timespan(Duration::nanoseconds(nanos as i64))))
+            }
+
+            (Value::Timespan(dur1), Value::Timespan(dur2)) => {
+                if dur2.is_zero() {
+                    bail!("cannot divide by zero duration");
+                }
+                let ratio = dur1.whole_nanoseconds() as f64 / dur2.whole_nanoseconds() as f64;
+                Ok(Some(Value::Float(ratio)))
+            }
+
+            _ => impl_op!(lhs, rhs, |x, y| x / y, "/"),
         }
-        impl_op!(val!(self), rhs, |x, y| x / y, "/")
     }
 
     fn cast(self, ty: CastType) -> Result<Val<'a>> {
@@ -305,20 +400,46 @@ impl<'a> Val<'a> {
         let self_val = val!(self);
         let by_val = val!(by);
 
-        let Some(a) = self_val.as_f64() else {
-            bail!(
-                "cannot bin '{}', currently only numbers are supported",
-                self_val.kind()
-            );
-        };
-        let Some(b) = by_val.as_f64() else {
-            bail!(
-                "cannot bin by '{}', currently only numbers are supported",
-                by_val.kind()
-            );
-        };
+        match (self_val, by_val) {
+            (Value::Timestamp(ts), Value::Timespan(dur)) => {
+                if dur.is_zero() {
+                    bail!("cannot bin timestamp by zero duration");
+                }
+                if dur.is_negative() {
+                    bail!("cannot bin timestamp by negative duration");
+                }
 
-        Ok(Some(Value::from((a / b).floor() * b)))
+                let ts_nanos = ts.unix_timestamp_nanos();
+                let dur_nanos = dur.whole_nanoseconds();
+
+                let binned_nanos = (ts_nanos / dur_nanos) * dur_nanos;
+
+                let binned_ts = OffsetDateTime::from_unix_timestamp_nanos(binned_nanos)
+                    .map_err(|_| eyre!("timestamp overflow in binning operation"))?;
+                Ok(Some(Value::Timestamp(binned_ts)))
+            }
+
+            _ => {
+                let Some(a) = self_val.as_f64() else {
+                    bail!(
+                        "cannot bin '{}', currently only numbers and timestamps are supported",
+                        self_val.kind()
+                    );
+                };
+                let Some(b) = by_val.as_f64() else {
+                    bail!(
+                        "cannot bin by '{}', currently only numbers and timespans are supported",
+                        by_val.kind()
+                    );
+                };
+
+                if b == 0.0 {
+                    bail!("cannot bin by zero");
+                }
+
+                Ok(Some(Value::from((a / b).floor() * b)))
+            }
+        }
     }
 }
 
