@@ -10,6 +10,7 @@ use futures_util::{
 use kinded::Kinded;
 use miso_workflow_types::{
     expr::Expr,
+    field::Field,
     join::{Join, JoinType},
     log::{Log, LogItem, LogIter, LogStream, LogTryStream},
     project::ProjectField,
@@ -27,6 +28,7 @@ use crate::{
     limit::LimitIter,
     partial_stream::{PartialStream, PartialStreamIter, UnionIter},
     project::ProjectIter,
+    rename::RenameIter,
     scan::{Scan, scan_rx},
     sort::sort_rx,
     spawn_thread::{ThreadRx, spawn},
@@ -46,6 +48,7 @@ pub mod limit;
 mod log_utils;
 pub mod partial_stream;
 pub mod project;
+mod rename;
 pub mod scan;
 mod send_once;
 pub mod sort;
@@ -70,11 +73,15 @@ pub enum WorkflowStep {
     /// Filter some records.
     Filter(Expr),
 
-    /// Project to select only some of the fields, and optionally rename some.
+    /// Fully transform the input into different records.
     Project(Vec<ProjectField>),
 
     /// Same as project but keeps original fields, and adds new projected fields to the results.
     Extend(Vec<ProjectField>),
+
+    /// Rename some of the fields in the input.
+    /// Basically the same as Project, but keeps unspecified fields unaltered and can only rename.
+    Rename(Vec<(/*from=*/ Field, /*to=*/ Field)>),
 
     /// Limit to X amount of records.
     Limit(u32),
@@ -207,6 +214,7 @@ impl WorkflowStep {
             WorkflowStep::Extend(fields) => {
                 Box::new(ProjectIter::new_extend(rx.into_iter(), fields))
             }
+            WorkflowStep::Rename(renames) => Box::new(RenameIter::new(rx.into_iter(), renames)),
             WorkflowStep::Limit(limit) | WorkflowStep::MuxLimit(limit) => {
                 Box::new(LimitIter::new(rx.into_iter(), limit))
             }
@@ -300,6 +308,7 @@ impl WorkflowStep {
             Self::Filter(..)
             | Self::Project(..)
             | Self::Extend(..)
+            | Self::Rename(..)
             | Self::Limit(..)
             | Self::MuxLimit(..)
             | Self::TopN(..)
