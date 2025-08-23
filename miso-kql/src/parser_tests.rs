@@ -545,6 +545,8 @@ fn test_complex_pipeline() {
 #[test_case("field1 == false", "boolean")]
 #[test_case("field1 == null", "null")]
 #[test_case("field1 == \"string\"", "string")]
+#[test_case("field1 == datetime(\"2020-01-01\")", "timestamp")]
+#[test_case("field1 == 1h", "timespan")]
 fn test_literal_values(condition: &str, literal_type: &str) {
     let query = format!("connector.table | where {}", condition);
     let result = parse_unwrap!(&query);
@@ -557,6 +559,8 @@ fn test_literal_values(condition: &str, literal_type: &str) {
                 Expr::Literal(Value::Bool(_)) if literal_type == "boolean" => {}
                 Expr::Literal(Value::Null) if literal_type == "null" => {}
                 Expr::Literal(Value::String(_)) if literal_type == "string" => {}
+                Expr::Literal(Value::Timestamp(_)) if literal_type == "timestamp" => {}
+                Expr::Literal(Value::Timespan(_)) if literal_type == "timespan" => {}
                 _ => panic!("Expected {} literal", literal_type),
             },
             _ => panic!("Expected Eq expression"),
