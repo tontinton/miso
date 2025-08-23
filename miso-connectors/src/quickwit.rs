@@ -256,6 +256,9 @@ struct SearchAggregationBucket {
     doc_count: u64,
     key: Value,
 
+    #[serde(rename = "key_as_string", default)]
+    _key_as_string: Option<String>,
+
     #[serde(flatten)]
     buckets_or_value: HashMap<String, SearchAggregationBucketsOrValue>,
 }
@@ -752,8 +755,11 @@ impl QuickwitConnector {
     fn transform_log(mut log: Log, timestamp_field: &Option<String>) -> Result<Log> {
         if let Some(timestamp_field) = timestamp_field
             && let Some(value) = log.get_mut(timestamp_field)
+            && let Value::String(s) = value
         {
-            Self::value_to_datetime(value)?;
+            let dt = OffsetDateTime::parse(s, &time::format_description::well_known::Rfc3339)
+                .context("parse quickwit datetime string response")?;
+            *value = Value::from(dt)
         }
         Ok(log)
     }
@@ -802,7 +808,7 @@ impl QuickwitConnector {
         }))
     }
 
-    fn value_to_datetime(value: &mut Value) -> Result<()> {
+    fn group_by_value_to_datetime(value: &mut Value) -> Result<()> {
         match value {
             Value::String(s) => {
                 let dt = OffsetDateTime::parse(s, &time::format_description::well_known::Rfc3339)
@@ -810,7 +816,7 @@ impl QuickwitConnector {
                 *value = Value::from(dt)
             }
             Value::Float(f) => {
-                let dt = OffsetDateTime::from_unix_timestamp_nanos(*f as i128)
+                let dt = OffsetDateTime::from_unix_timestamp_nanos(*f as i128 * 1_000_000)
                     .context("parse quickwit datetime float response")?;
                 *value = Value::from(dt)
             }
@@ -819,13 +825,22 @@ impl QuickwitConnector {
         Ok(())
     }
 
-    fn transform_timestamp_value(
+    fn agg_value_to_datetime(value: &mut Value) -> Result<()> {
+        if let Value::Float(f) = value {
+            let dt = OffsetDateTime::from_unix_timestamp_nanos(*f as i128)
+                .context("parse quickwit datetime float response")?;
+            *value = Value::from(dt)
+        }
+        Ok(())
+    }
+
+    fn transform_group_by_timestamp_value(
         key: &str,
         mut value: Value,
         timestamp_field: &Option<String>,
     ) -> Result<Value> {
         if timestamp_field.as_deref() == Some(key) {
-            Self::value_to_datetime(&mut value)?;
+            Self::group_by_value_to_datetime(&mut value)?;
         }
         Ok(value)
     }
@@ -836,7 +851,7 @@ impl QuickwitConnector {
         agg_timestamp_fields: &HashSet<String>,
     ) -> Result<Value> {
         if agg_timestamp_fields.contains(key) {
-            Self::value_to_datetime(&mut value)?;
+            Self::agg_value_to_datetime(&mut value)?;
         }
         Ok(value)
     }
@@ -852,12 +867,18 @@ impl QuickwitConnector {
         keys_stack: &[Value],
         logs: &mut Vec<Log>,
     ) -> Result<()> {
+        if doc_count == 0 {
+            // Quickwit fills in groups when running date_histogram aggregation,
+            // we need to filter them out.
+            return Ok(());
+        }
+
         let mut log = Log::new();
 
         for (key, value) in group_by.iter().zip(keys_stack.iter()) {
             log.insert(
                 key.clone(),
-                Self::transform_timestamp_value(key, value.clone(), timestamp_field)
+                Self::transform_group_by_timestamp_value(key, value.clone(), timestamp_field)
                     .context("aggregation transform result")?,
             );
         }
@@ -1285,12 +1306,20 @@ impl Connector for QuickwitConnector {
                     let Expr::Literal(value) = &**rhs else {
                         return None;
                     };
-                    json!({
-                        "histogram": {
-                            "field": field,
-                            "interval": value.clone(),
-                        }
-                    })
+                    match value {
+                        Value::Timespan(dur) => json!({
+                            "date_histogram": {
+                                "field": field,
+                                "fixed_interval": *dur,
+                            }
+                        }),
+                        _ => json!({
+                            "histogram": {
+                                "field": field,
+                                "interval": value.clone(),
+                            }
+                        }),
+                    }
                 }
                 _ => return None,
             };
