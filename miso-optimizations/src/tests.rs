@@ -177,6 +177,19 @@ fn remove_sorts_before_count() {
 }
 
 #[test]
+fn remove_redundant_steps_before_count() {
+    check_default(
+        vec![
+            S::Project(vec![]),
+            S::Extend(vec![]),
+            S::Rename(vec![]),
+            S::Count,
+        ],
+        vec![S::Count],
+    );
+}
+
+#[test]
 fn dont_remove_sorts_before_limit_before_count() {
     check_default(
         vec![
