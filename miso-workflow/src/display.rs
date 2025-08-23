@@ -1,6 +1,6 @@
 use std::fmt;
 
-use miso_workflow_types::{project::ProjectField, sort::Sort};
+use miso_workflow_types::{field::Field, project::ProjectField, sort::Sort};
 
 use super::{Workflow, WorkflowStep};
 
@@ -93,6 +93,10 @@ impl fmt::Display for DisplayableWorkflowStep<'_> {
                 write!(f, "{pre}Extend")?;
                 fmt_projects(f, projects)
             }
+            WorkflowStep::Rename(renames) => {
+                write!(f, "{pre}Rename")?;
+                fmt_rename(f, renames)
+            }
             WorkflowStep::Limit(limit) => write!(f, "{pre}Limit({limit})"),
             WorkflowStep::MuxLimit(limit) => write!(f, "{pre}MuxLimit({limit})"),
             WorkflowStep::Sort(sorts) => {
@@ -156,6 +160,17 @@ fn fmt_projects(f: &mut fmt::Formatter<'_>, projects: &[ProjectField]) -> fmt::R
             write!(f, ", ")?;
         }
         write!(f, "{pf}")?;
+    }
+    write!(f, ")")
+}
+
+fn fmt_rename(f: &mut fmt::Formatter<'_>, renames: &[(Field, Field)]) -> fmt::Result {
+    write!(f, "(")?;
+    for (i, (from, to)) in renames.iter().enumerate() {
+        if i > 0 {
+            write!(f, ", ")?;
+        }
+        write!(f, "{to}={from}")?;
     }
     write!(f, ")")
 }

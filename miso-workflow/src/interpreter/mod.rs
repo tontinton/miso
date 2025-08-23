@@ -443,6 +443,10 @@ impl<'a> Val<'a> {
     }
 }
 
+fn ident<'a>(log: &'a Log, field: &Field) -> Val<'a> {
+    get_field_value(log, field).map_or_else(Val::not_exist, Val::borrowed)
+}
+
 fn follow_key<'a>(obj: &'a Log, key: &FieldAccess) -> Option<&'a Value> {
     let mut val = obj.get(&key.name)?;
     for &idx in &key.arr_indices {
@@ -451,8 +455,12 @@ fn follow_key<'a>(obj: &'a Log, key: &FieldAccess) -> Option<&'a Value> {
     Some(val)
 }
 
-fn ident<'a>(log: &'a Log, field: &Field) -> Val<'a> {
-    get_field_value(log, field).map_or_else(Val::not_exist, Val::borrowed)
+fn follow_key_mut<'a>(obj: &'a mut Log, key: &FieldAccess) -> Option<&'a mut Value> {
+    let mut val = obj.get_mut(&key.name)?;
+    for &idx in &key.arr_indices {
+        val = val.as_array_mut()?.get_mut(idx)?;
+    }
+    Some(val)
 }
 
 pub fn get_field_value<'a>(log: &'a Log, field: &Field) -> Option<&'a Value> {
@@ -509,5 +517,59 @@ pub fn insert_field_value(log: &mut Log, field: &Field, value: Value) {
     *insert_part(&mut root, field) = value;
     if let Value::Object(final_map) = root {
         *log = final_map;
+    }
+}
+
+pub fn rename_field(log: &mut Log, from: &Field, to: &Field) -> bool {
+    if from.is_empty() {
+        return false;
+    }
+
+    let value = match extract_field(log, from) {
+        Some(val) => val,
+        None => return false,
+    };
+
+    if !to.is_empty() {
+        insert_field_value(log, to, value);
+    }
+
+    true
+}
+
+fn extract_field(log: &mut Log, field: &Field) -> Option<Value> {
+    // Navigate to the parent object
+    let mut obj = log;
+    for key in &field[..field.len() - 1] {
+        obj = match follow_key_mut(obj, key) {
+            Some(Value::Object(map)) => map,
+            _ => return None,
+        };
+    }
+
+    let last = field.last().unwrap();
+
+    // Extract from the final location
+    if last.arr_indices.is_empty() {
+        // Simple key removal
+        obj.remove(&last.name)
+    } else {
+        // Navigate through array indices except the last one
+        let mut val = obj.get_mut(&last.name)?;
+        for &idx in &last.arr_indices[..last.arr_indices.len() - 1] {
+            val = val.as_array_mut()?.get_mut(idx)?;
+        }
+
+        // Extract from the final array
+        let final_idx = *last.arr_indices.last()?;
+        if let Some(arr) = val.as_array_mut() {
+            if final_idx < arr.len() {
+                Some(arr.remove(final_idx))
+            } else {
+                None
+            }
+        } else {
+            None
+        }
     }
 }
