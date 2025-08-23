@@ -497,6 +497,19 @@ async fn predicate_pushdown_same_results(
     "summarize_min_max_count_by_bin"
 )]
 #[test_case(
+    r#"
+    test.stack
+    | summarize minQuestionId=min(questionId),
+                maxQuestionId=max(questionId),
+                sumQuestionId=sum(questionId),
+                c=count()
+      by bin(@timestamp, 1h)
+    "#,
+    r#"test.stack"#,
+    6;
+    "summarize_min_max_count_by_bin_timestamp"
+)]
+#[test_case(
     r#"test.stack | summarize by user"#,
     r#"test.stack"#,
     5;
