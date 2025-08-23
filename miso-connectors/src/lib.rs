@@ -9,6 +9,7 @@ use std::{any::Any, collections::BTreeMap};
 use axum::async_trait;
 use color_eyre::eyre::Result;
 use hashbrown::HashMap;
+use miso_workflow_types::field::Field;
 use miso_workflow_types::{
     expr::Expr, log::LogTryStream, project::ProjectField, sort::Sort, summarize::Summarize,
 };
@@ -171,6 +172,16 @@ pub trait Connector: Debug + Send + Sync {
     fn apply_extend(
         &self,
         _projections: Vec<ProjectField>,
+        _handle: &dyn QueryHandle,
+    ) -> Option<Box<dyn QueryHandle>> {
+        None
+    }
+
+    /// Returns the handle with renames pushdown.
+    /// None means it can't predicate pushdown the provided renames.
+    fn apply_rename(
+        &self,
+        _renames: &[(Field, Field)],
         _handle: &dyn QueryHandle,
     ) -> Option<Box<dyn QueryHandle>> {
         None
