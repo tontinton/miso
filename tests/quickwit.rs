@@ -472,6 +472,8 @@ async fn predicate_pushdown_same_results(
     | summarize minQuestionId=min(questionId),
                 maxQuestionId=max(questionId),
                 sumQuestionId=sum(questionId),
+                minTimestamp=min(@timestamp),
+                maxTimestamp=max(@timestamp),
                 c=count()
       by user
     "#,
@@ -485,6 +487,8 @@ async fn predicate_pushdown_same_results(
     | summarize minQuestionId=min(questionId),
                 maxQuestionId=max(questionId),
                 sumQuestionId=sum(questionId),
+                minTimestamp=min(@timestamp),
+                maxTimestamp=max(@timestamp),
                 c=count()
       by bin(answerId, 5)
     "#,
