@@ -23,6 +23,8 @@ use reorder_filter_before_sort::ReorderFilterBeforeSort;
 use reorder_steps_before_mux::ReorderStepsBeforeMux;
 use split_scan_to_union::SplitScanIntoUnion;
 
+use crate::remove_redundant_steps_before_count::RemoveRedundantStepsBeforeCount;
+
 mod convert_sort_limit_to_topn;
 mod dynamic_filter;
 mod merge_filters_into_and_filter;
@@ -40,6 +42,7 @@ mod push_summarize_into_scan;
 mod push_topn_into_scan;
 mod push_union_into_scan;
 mod remove_redundant_sorts_before_count;
+mod remove_redundant_steps_before_count;
 mod reorder_filter_before_sort;
 mod reorder_steps_before_mux;
 mod split_scan_to_union;
@@ -124,6 +127,7 @@ impl Optimizer {
                 // Count.
                 opt!(PushCountIntoScan),
                 opt!(RemoveRedundantSortsBeforeCount),
+                opt!(RemoveRedundantStepsBeforeCount),
                 // Summarize.
                 opt!(PushSummarizeIntoScan),
                 // Union.
