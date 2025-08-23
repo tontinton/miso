@@ -1256,8 +1256,6 @@ impl Connector for QuickwitConnector {
             }
         }
 
-        dbg!(&aggs);
-
         let group_by = config
             .by
             .iter()
