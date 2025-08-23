@@ -776,7 +776,7 @@ fn test_project_propagation_literal_through_summarize(
 }
 
 #[test_case(
-    vec![rename_project("a", "b")],
+    S::Project(vec![rename_project("a", "b")]),
     Aggregation::Sum(field("a")),
     "total",
     S::MuxSummarize,
@@ -789,7 +789,20 @@ fn test_project_propagation_literal_through_summarize(
     ; "rename project through mux_summarize"
 )]
 #[test_case(
-    vec![rename_project("a", "b")],
+    S::Rename(vec![(field("a"), field("b"))]),
+    Aggregation::Sum(field("a")),
+    "total",
+    S::MuxSummarize,
+    vec![
+        S::MuxSummarize(Summarize {
+            aggs: hashmap! { field("total") => Aggregation::Sum(field("b")) },
+            by: vec![Expr::Field(field("c"))],
+        })
+    ]
+    ; "rename through mux_summarize"
+)]
+#[test_case(
+    S::Project(vec![rename_project("a", "b")]),
     Aggregation::Count,
     "cnt",
     S::Summarize,
@@ -801,15 +814,28 @@ fn test_project_propagation_literal_through_summarize(
     ]
     ; "rename project through summarize with count"
 )]
+#[test_case(
+    S::Rename(vec![(field("a"), field("b"))]),
+    Aggregation::Count,
+    "cnt",
+    S::Summarize,
+    vec![
+        S::Summarize(Summarize {
+            aggs: hashmap! { field("cnt") => Aggregation::Count },
+            by: vec![Expr::Field(field("c"))],
+        })
+    ]
+    ; "rename through summarize with count"
+)]
 fn test_project_propagation_summarize_variants(
-    project_fields: Vec<ProjectField>,
+    step: S,
     aggregation: Aggregation,
     agg_name: &str,
     summarize_constructor: fn(Summarize) -> S,
     expected: Vec<S>,
 ) {
     let input = vec![
-        S::Project(project_fields),
+        step,
         summarize_constructor(Summarize {
             aggs: hashmap! { field(agg_name) => aggregation },
             by: vec![Expr::Field(field("c"))],
@@ -819,8 +845,8 @@ fn test_project_propagation_summarize_variants(
 }
 
 #[test_case(
-    vec![rename_project("a", "b")],
     vec![
+        S::Project(vec![rename_project("a", "b")]),
         S::Filter(Expr::Gt(Box::new(Expr::Field(field("a"))), Box::new(Expr::Literal(int_val(0))))),
         S::Sort(vec![sort_desc(field("a"))])
     ],
@@ -832,8 +858,21 @@ fn test_project_propagation_summarize_variants(
     ; "rename project through filter and sort"
 )]
 #[test_case(
-    vec![rename_project("a", "b")],
     vec![
+        S::Rename(vec![(field("a"), field("b"))]),
+        S::Filter(Expr::Gt(Box::new(Expr::Field(field("a"))), Box::new(Expr::Literal(int_val(0))))),
+        S::Sort(vec![sort_desc(field("a"))])
+    ],
+    vec![
+        S::Filter(Expr::Gt(Box::new(Expr::Field(field("b"))), Box::new(Expr::Literal(int_val(0))))),
+        S::Sort(vec![sort_desc(field("b"))]),
+        S::Rename(vec![(field("a"), field("b"))])
+    ]
+    ; "rename through filter and sort"
+)]
+#[test_case(
+    vec![
+        S::Project(vec![rename_project("a", "b")]),
         S::Filter(Expr::Lt(Box::new(Expr::Field(field("a"))), Box::new(Expr::Literal(int_val(100))))),
         S::TopN(vec![sort_asc(field("a"))], 5),
         S::Limit(3)
@@ -846,8 +885,22 @@ fn test_project_propagation_summarize_variants(
     ; "rename project through filter, topn, and limit"
 )]
 #[test_case(
-    vec![literal_project("x", int_val(50))],
     vec![
+        S::Rename(vec![(field("a"), field("b"))]),
+        S::Filter(Expr::Lt(Box::new(Expr::Field(field("a"))), Box::new(Expr::Literal(int_val(100))))),
+        S::TopN(vec![sort_asc(field("a"))], 5),
+        S::Limit(3)
+    ],
+    vec![
+        S::Filter(Expr::Lt(Box::new(Expr::Field(field("b"))), Box::new(Expr::Literal(int_val(100))))),
+        S::TopN(vec![sort_asc(field("b"))], 3),
+        S::Rename(vec![(field("a"), field("b"))])
+    ]
+    ; "rename through filter, topn, and limit"
+)]
+#[test_case(
+    vec![
+        S::Project(vec![literal_project("x", int_val(50))]),
         S::Filter(Expr::Eq(Box::new(Expr::Field(field("x"))), Box::new(Expr::Literal(int_val(50))))),
         S::Sort(vec![sort_asc(field("x"))])
     ],
@@ -857,13 +910,7 @@ fn test_project_propagation_summarize_variants(
     ]
     ; "literal through filter with sort removed"
 )]
-fn test_project_propagation_multi_step(
-    project_fields: Vec<ProjectField>,
-    middle_steps: Vec<S>,
-    expected: Vec<S>,
-) {
-    let mut input = vec![S::Project(project_fields)];
-    input.extend(middle_steps);
+fn test_project_propagation_multi_step(input: Vec<S>, expected: Vec<S>) {
     check_default(input, expected);
 }
 
@@ -904,12 +951,17 @@ fn test_project_propagation_drop_unused_field_through_summarize() {
 
 #[test]
 fn test_project_propagation_rename_by_clause_field_through_summarize() {
-    let input = vec![
+    let summarize = Summarize {
+        aggs: HashMap::new(),
+        by: vec![Expr::Field(field("z"))],
+    };
+    let project_input = vec![
         S::Project(vec![rename_project("z", "c")]),
-        S::Summarize(Summarize {
-            aggs: HashMap::new(),
-            by: vec![Expr::Field(field("z"))],
-        }),
+        S::Summarize(summarize.clone()),
+    ];
+    let rename_input = vec![
+        S::Rename(vec![(field("z"), field("c"))]),
+        S::Summarize(summarize),
     ];
 
     let expected = vec![
@@ -920,20 +972,26 @@ fn test_project_propagation_rename_by_clause_field_through_summarize() {
         S::Project(vec![rename_project("z", "c")]),
     ];
 
-    check_default(input, expected);
+    check_default(project_input, expected.clone());
+    check_default(rename_input, expected.clone());
 }
 
 #[test]
 fn test_project_propagation_rename_summarize_by_bin() {
-    let input = vec![
+    let summarize = Summarize {
+        aggs: HashMap::new(),
+        by: vec![Expr::Bin(
+            Box::new(Expr::Field(field("x"))),
+            Box::new(Expr::Literal(int_val(2))),
+        )],
+    };
+    let project_input = vec![
         S::Project(vec![rename_project("x", "z")]),
-        S::Summarize(Summarize {
-            aggs: HashMap::new(),
-            by: vec![Expr::Bin(
-                Box::new(Expr::Field(field("x"))),
-                Box::new(Expr::Literal(int_val(2))),
-            )],
-        }),
+        S::Summarize(summarize.clone()),
+    ];
+    let rename_input = vec![
+        S::Rename(vec![(field("x"), field("z"))]),
+        S::Summarize(summarize),
     ];
 
     let expected = vec![
@@ -947,7 +1005,8 @@ fn test_project_propagation_rename_summarize_by_bin() {
         S::Project(vec![rename_project("x", "z")]),
     ];
 
-    check_default(input, expected);
+    check_default(project_input, expected.clone());
+    check_default(rename_input, expected.clone());
 }
 
 #[test]
