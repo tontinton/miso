@@ -388,7 +388,7 @@ async fn query_stream(
 
     Ok(Sse::new(stream! {
         let _cancel_on_drop = scopeguard::guard(cancel, |cancel| {
-            info!("Cancelling query");
+            info!("Query dropped");
             cancel.cancel();
         });
 
