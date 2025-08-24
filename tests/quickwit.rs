@@ -353,16 +353,20 @@ async fn predicate_pushdown_same_results(
     let predicate_pushdown_steps =
         spawn_blocking(move || default_optimizer.optimize(steps_cloned)).await?;
 
+    let pushdown_workflow = Workflow::new(predicate_pushdown_steps.clone());
+    let expected_workflow = Workflow::new(expected_after_optimizations_steps.clone());
+    info!("Pushdown workflow:\n{pushdown_workflow}");
+    info!("Expected pushdown workflow:\n{expected_workflow}");
+
     assert_eq!(
         predicate_pushdown_steps, expected_after_optimizations_steps,
         "query predicates should have been equal to expected steps after optimization"
     );
 
-    let pushdown_workflow = Workflow::new(predicate_pushdown_steps);
-
     let no_predicate_pushdown_steps =
         spawn_blocking(move || no_pushdown_optimizer.optimize(steps)).await?;
     let no_pushdown_workflow = Workflow::new(no_predicate_pushdown_steps);
+    info!("No pushdown workflow:\n{no_pushdown_workflow}");
 
     let cancel1 = CancellationToken::new();
     let cancel2 = CancellationToken::new();
