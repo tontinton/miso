@@ -86,7 +86,11 @@ fn smoke() {
 
 #[test]
 fn sort_limit_into_topn() {
-    let sort1 = vec![];
+    let sort1 = vec![Sort {
+        by: field("b"),
+        order: SortOrder::Desc,
+        nulls: NullsOrder::First,
+    }];
     let sort2 = vec![Sort {
         by: field("a"),
         order: SortOrder::Asc,
@@ -134,7 +138,11 @@ fn topn_limit_into_topn() {
 
 #[test]
 fn filter_before_sort() {
-    let sort1 = S::Sort(vec![]);
+    let sort1 = S::Sort(vec![Sort {
+        by: field("b"),
+        order: SortOrder::Desc,
+        nulls: NullsOrder::First,
+    }]);
     let sort2 = S::Sort(vec![Sort {
         by: field("a"),
         order: SortOrder::Asc,
@@ -191,15 +199,21 @@ fn remove_redundant_steps_before_count() {
 
 #[test]
 fn dont_remove_sorts_before_limit_before_count() {
+    let sort = S::Sort(vec![Sort {
+        by: field("a"),
+        order: SortOrder::Asc,
+        nulls: NullsOrder::First,
+    }]);
+
     check_default(
         vec![
-            S::Sort(vec![]),
+            sort.clone(),
             S::Project(vec![]),
             S::Limit(10),
-            S::Sort(vec![]),
+            sort.clone(),
             S::Count,
         ],
-        vec![S::Sort(vec![]), S::Project(vec![]), S::Limit(10), S::Count],
+        vec![sort, S::Project(vec![]), S::Limit(10), S::Count],
     );
 }
 
@@ -315,13 +329,18 @@ fn summarize_into_union() {
 
 #[test]
 fn reorder_filter_before_sort() {
+    let sort = S::Sort(vec![Sort {
+        by: field("a"),
+        order: SortOrder::Asc,
+        nulls: NullsOrder::First,
+    }]);
     let filter = S::Filter(Expr::Eq(
         Box::new(Expr::Field(field("a"))),
         Box::new(Expr::Literal(Value::String("b".to_string()))),
     ));
     check_default(
-        vec![S::Sort(vec![]), S::Sort(vec![]), filter.clone()],
-        vec![filter, S::Sort(vec![]), S::Sort(vec![])],
+        vec![sort.clone(), sort.clone(), filter.clone()],
+        vec![filter, sort.clone(), sort],
     );
 }
 

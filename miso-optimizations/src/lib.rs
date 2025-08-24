@@ -23,7 +23,10 @@ use reorder_filter_before_sort::ReorderFilterBeforeSort;
 use reorder_steps_before_mux::ReorderStepsBeforeMux;
 use split_scan_to_union::SplitScanIntoUnion;
 
-use crate::remove_redundant_steps_before_count::RemoveRedundantStepsBeforeCount;
+use crate::{
+    remove_redundant_empty_steps::RemoveRedundantEmptySteps,
+    remove_redundant_steps_before_count::RemoveRedundantStepsBeforeCount,
+};
 
 mod convert_sort_limit_to_topn;
 mod dynamic_filter;
@@ -41,6 +44,7 @@ mod push_steps_into_union;
 mod push_summarize_into_scan;
 mod push_topn_into_scan;
 mod push_union_into_scan;
+mod remove_redundant_empty_steps;
 mod remove_redundant_sorts_before_count;
 mod remove_redundant_steps_before_count;
 mod reorder_filter_before_sort;
@@ -115,6 +119,7 @@ impl Optimizer {
                 opt!(PushEitherProjectExtendRenameIntoScan),
                 opt!(ProjectPropagationWithEnd),
                 opt!(ProjectPropagationWithoutEnd),
+                opt!(RemoveRedundantEmptySteps),
                 // Filter.
                 opt!(ReorderFilterBeforeSort),
                 opt!(PushFilterIntoScan),
