@@ -83,7 +83,7 @@ fn apply(
         WorkflowStep::Extend(fields) => (fields, StepType::Extend),
         WorkflowStep::Rename(renames_to_track) => {
             for (from, to) in renames_to_track {
-                renames.insert(from.clone(), to.clone());
+                renames.insert(to.clone(), from.clone());
             }
             (&vec![], StepType::Rename)
         }
@@ -167,7 +167,9 @@ fn apply(
             StepType::Extend => {
                 WorkflowStep::Extend(renames_and_literals_to_project_fields(renames, literals))
             }
-            StepType::Rename => WorkflowStep::Rename(renames.into_iter().collect()),
+            StepType::Rename => {
+                WorkflowStep::Rename(renames.into_iter().map(|(to, from)| (from, to)).collect())
+            }
         };
         out.push(step);
         return Some(out);
