@@ -25,7 +25,7 @@ curl -N -H 'Content-Type: application/json' localhost:8080/query -d '{
         | where questionId > 80
       ) on $left.minTid == $right.questionId
     | top 10 by count desc
-    | rename-project minimumTenantID = minTid
+    | project-rename minimumTenantID = minTid
   "
 }'
 ```
