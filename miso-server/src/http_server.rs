@@ -165,7 +165,7 @@ pub async fn to_workflow_steps(
                 let renames = collection
                     .field_replacements
                     .into_iter()
-                    .map(|(to, from)| Ok((parse_field(&to)?, parse_field(&from)?)))
+                    .map(|(to, from)| Ok((parse_field(&from)?, parse_field(&to)?)))
                     .collect::<Result<Vec<_>, HttpError>>()?;
 
                 if !renames.is_empty() {
