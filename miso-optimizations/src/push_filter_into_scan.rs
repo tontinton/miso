@@ -1,6 +1,7 @@
 use miso_workflow::WorkflowStep;
+use miso_workflow_types::expr_visitor::ExprTransformer;
 
-use crate::pattern;
+use crate::{field_replacer::FieldReplacer, pattern};
 
 use super::{Group, Optimization, Pattern};
 
@@ -19,9 +20,11 @@ impl Optimization for PushFilterIntoScan {
             return None;
         };
 
+        let replacer = FieldReplacer::new(&scan.static_fields);
+
         scan.handle = scan
             .connector
-            .apply_filter(ast, scan.handle.as_ref())?
+            .apply_filter(&replacer.transform(ast.clone()), scan.handle.as_ref())?
             .into();
 
         Some(vec![WorkflowStep::Scan(scan)])

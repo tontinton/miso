@@ -1,6 +1,6 @@
 use miso_workflow::WorkflowStep;
 
-use crate::pattern;
+use crate::{field_replacer::FieldReplacer, pattern};
 
 use super::{Group, Optimization, Pattern};
 
@@ -19,9 +19,14 @@ impl Optimization for PushSummarizeIntoScan {
             return None;
         };
 
+        let replacer = FieldReplacer::new(&scan.static_fields);
+
         scan.handle = scan
             .connector
-            .apply_summarize(summarize, scan.handle.as_ref())?
+            .apply_summarize(
+                &replacer.transform_summarize(summarize.clone()),
+                scan.handle.as_ref(),
+            )?
             .into();
 
         Some(vec![WorkflowStep::Scan(scan)])

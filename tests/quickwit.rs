@@ -17,7 +17,7 @@ use miso_connectors::{
 };
 use miso_kql::parse;
 use miso_optimizations::Optimizer;
-use miso_server::http_server::{to_workflow_steps, ConnectorsMap};
+use miso_server::{http_server::ConnectorsMap, query_to_workflow::to_workflow_steps};
 use miso_workflow::Workflow;
 use miso_workflow_types::value::Value;
 use reqwest::{header::CONTENT_TYPE, Client, Response};
@@ -335,7 +335,6 @@ async fn predicate_pushdown_same_results(
         &BTreeMap::new(),
         parse(query).expect("parse KQL"),
     )
-    .await
     .expect("to workflow steps");
 
     let expected_after_optimizations_steps = to_workflow_steps(
@@ -343,7 +342,6 @@ async fn predicate_pushdown_same_results(
         &BTreeMap::new(),
         parse(query_after_optimizations).expect("parse expected KQL"),
     )
-    .await
     .expect("to expected workflow steps");
 
     let default_optimizer = Optimizer::default();
@@ -435,7 +433,7 @@ async fn predicate_pushdown_same_results(
 }
 
 #[test_case(
-    r#"test.stack | sort by creationDate | take 3"#,
+    r#"test.stack | sort by @timestamp | take 3"#,
     r#"test.stack"#,
     3;
     "top_n"

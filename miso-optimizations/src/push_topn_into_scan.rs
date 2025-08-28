@@ -1,6 +1,6 @@
 use miso_workflow::WorkflowStep;
 
-use crate::pattern;
+use crate::{field_replacer::FieldReplacer, pattern};
 
 use super::{Group, Optimization, Pattern};
 
@@ -19,9 +19,15 @@ impl Optimization for PushTopNIntoScan {
             return None;
         };
 
+        let replacer = FieldReplacer::new(&scan.static_fields);
+
         scan.handle = scan
             .connector
-            .apply_topn(sorts, *max, scan.handle.as_ref())?
+            .apply_topn(
+                &replacer.transform_sort(sorts.to_vec()),
+                *max,
+                scan.handle.as_ref(),
+            )?
             .into();
 
         Some(vec![WorkflowStep::Scan(scan)])

@@ -1,6 +1,6 @@
 use miso_workflow::WorkflowStep;
 
-use crate::pattern;
+use crate::{field_replacer::FieldReplacer, pattern};
 
 use super::{Group, Optimization, Pattern};
 
@@ -16,23 +16,34 @@ impl Optimization for PushEitherProjectExtendRenameIntoScan {
             return None;
         };
 
+        let replacer = FieldReplacer::new(&scan.static_fields);
+
         match &steps[1] {
             WorkflowStep::Project(projections) => {
                 scan.handle = scan
                     .connector
-                    .apply_project(projections, scan.handle.as_ref())?
+                    .apply_project(
+                        &replacer.transform_project(projections.to_vec()),
+                        scan.handle.as_ref(),
+                    )?
                     .into();
             }
             WorkflowStep::Extend(projections) => {
                 scan.handle = scan
                     .connector
-                    .apply_extend(projections, scan.handle.as_ref())?
+                    .apply_project(
+                        &replacer.transform_project(projections.to_vec()),
+                        scan.handle.as_ref(),
+                    )?
                     .into();
             }
             WorkflowStep::Rename(renames) => {
                 scan.handle = scan
                     .connector
-                    .apply_rename(renames, scan.handle.as_ref())?
+                    .apply_rename(
+                        &replacer.transform_rename(renames.to_vec()),
+                        scan.handle.as_ref(),
+                    )?
                     .into();
             }
             _ => return None,

@@ -1022,12 +1022,12 @@ impl Connector for QuickwitConnector {
         let guard = self.indexes.read();
         let index = guard.get(collection)?;
 
-        let mut field_replacements = HashMap::new();
+        let mut static_fields = HashMap::new();
         if let Some(timestamp_field) = &index.timestamp_field {
-            field_replacements.insert("@timestamp".to_string(), timestamp_field.clone());
+            static_fields.insert("@timestamp".to_string(), timestamp_field.clone());
         }
 
-        Some(Collection { field_replacements })
+        Some(Collection { static_fields })
     }
 
     fn get_splits(&self) -> Vec<Box<dyn Split>> {

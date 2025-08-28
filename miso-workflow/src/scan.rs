@@ -3,6 +3,7 @@ use std::{future::Future, sync::Arc, time::Duration};
 use color_eyre::{Result, eyre::Context};
 use flume::Receiver;
 use futures_util::{StreamExt, stream::once};
+use hashbrown::HashMap;
 use miso_common::watch::Watch;
 use miso_connectors::{
     Connector, ConnectorState, QueryHandle, QueryResponse, Split,
@@ -24,6 +25,7 @@ const DYNAMIC_FILTER_TIMEOUT: Duration = Duration::from_secs(30);
 pub struct Scan {
     pub connector_name: String,
     pub collection: String,
+    pub static_fields: HashMap<String, String>,
 
     pub connector: Arc<dyn Connector>,
     pub handle: Arc<dyn QueryHandle>,
@@ -42,10 +44,11 @@ impl PartialEq for Scan {
 }
 
 impl Scan {
-    pub async fn from_connector_state(
+    pub fn new(
         connector_state: Arc<ConnectorState>,
         connector_name: String,
         collection: String,
+        static_fields: HashMap<String, String>,
     ) -> Result<Self> {
         let connector = connector_state.connector.clone();
         let handle = connector
@@ -56,6 +59,7 @@ impl Scan {
         Ok(Self {
             connector_name,
             collection,
+            static_fields,
             connector,
             handle,
             split: None,
@@ -101,6 +105,7 @@ async fn scan_stream(scan: Scan) -> Result<LogTryStream> {
     let Scan {
         collection,
         connector,
+        static_fields,
         mut handle,
         split,
         dynamic_filter_rx,
@@ -118,7 +123,19 @@ async fn scan_stream(scan: Scan) -> Result<LogTryStream> {
         .query(&collection, handle.as_ref(), split.as_deref())
         .await?;
     let stream = match response {
-        QueryResponse::Logs(logs) => Box::pin(logs.map(Into::into)),
+        QueryResponse::Logs(logs) if static_fields.is_empty() => {
+            Box::pin(logs.map(Into::into)) as LogTryStream
+        }
+        QueryResponse::Logs(logs) => Box::pin(logs.map(move |mut res| {
+            if let Ok(log) = &mut res {
+                for (to, from) in &static_fields {
+                    if let Some(value) = log.remove(from) {
+                        log.insert(to.clone(), value);
+                    }
+                }
+            }
+            res
+        })) as LogTryStream,
         QueryResponse::Count(count) => count_to_stream(count),
     };
 
