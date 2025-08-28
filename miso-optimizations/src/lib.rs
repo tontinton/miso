@@ -30,6 +30,7 @@ use crate::{
 
 mod convert_sort_limit_to_topn;
 mod dynamic_filter;
+mod field_replacer;
 mod merge_filters_into_and_filter;
 mod mux_into_union;
 mod pattern;

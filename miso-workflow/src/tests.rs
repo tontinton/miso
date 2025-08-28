@@ -22,7 +22,7 @@ use miso_connectors::{
 };
 use miso_kql::parse;
 use miso_optimizations::Optimizer;
-use miso_server::http_server::to_workflow_steps;
+use miso_server::query_to_workflow::to_workflow_steps;
 use miso_workflow::Workflow;
 use miso_workflow_types::{expr::Expr, field::Field, field_unwrap, json, log::Log, value::Value};
 use serde::{Deserialize, Serialize};
@@ -221,7 +221,6 @@ async fn check_multi_connectors(
     };
 
     let steps = to_workflow_steps(&connectors, &views, parse(query).expect("parse query"))
-        .await
         .expect("workflow steps to compile");
 
     let optimizer = Optimizer::default();

@@ -122,7 +122,7 @@ pub trait QueryHandle: Any + Debug + fmt::Display + Send + Sync {
 pub struct Collection {
     /// Field replacements (for the top level field, not inner field accesses).
     /// Examples: @timestamp -> event_time, @metadata.info -> _metadata.info.
-    pub field_replacements: HashMap<String, String>,
+    pub static_fields: HashMap<String, String>,
 }
 
 #[async_trait]
