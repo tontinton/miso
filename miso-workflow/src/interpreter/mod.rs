@@ -308,38 +308,35 @@ impl<'a> Val<'a> {
         let rhs = val!(other);
 
         match (lhs, rhs) {
-            (Value::Timespan(dur), Value::Int(n)) => {
-                if *n == 0 {
-                    bail!("cannot divide duration by zero");
-                }
-                match dur.checked_div(*n as i32) {
-                    Some(result) => Ok(Some(Value::Timespan(result))),
-                    None => bail!("duration overflow in division"),
-                }
+            (_, Value::Int(n)) if *n == 0 => {
+                bail!("cannot divide by zero");
+            }
+            (_, Value::UInt(n)) if *n == 0 => {
+                bail!("cannot divide by zero");
+            }
+            (_, Value::Float(n)) if *n == 0.0 => {
+                bail!("cannot divide by zero");
+            }
+            (_, Value::Timespan(d)) if d.is_zero() => {
+                bail!("cannot divide by zero");
             }
 
-            (Value::Timespan(dur), Value::UInt(n)) => {
-                if *n == 0 {
-                    bail!("cannot divide duration by zero");
-                }
-                match dur.checked_div(*n as i32) {
-                    Some(result) => Ok(Some(Value::Timespan(result))),
-                    None => bail!("duration overflow in division"),
-                }
-            }
+            (Value::Timespan(dur), Value::Int(n)) => match dur.checked_div(*n as i32) {
+                Some(result) => Ok(Some(Value::Timespan(result))),
+                None => bail!("duration overflow in division"),
+            },
+
+            (Value::Timespan(dur), Value::UInt(n)) => match dur.checked_div(*n as i32) {
+                Some(result) => Ok(Some(Value::Timespan(result))),
+                None => bail!("duration overflow in division"),
+            },
 
             (Value::Timespan(dur), Value::Float(n)) => {
-                if *n == 0.0 {
-                    bail!("cannot divide duration by zero");
-                }
                 let nanos = dur.whole_nanoseconds() as f64 / n;
                 Ok(Some(Value::Timespan(Duration::nanoseconds(nanos as i64))))
             }
 
             (Value::Timespan(dur1), Value::Timespan(dur2)) => {
-                if dur2.is_zero() {
-                    bail!("cannot divide by zero duration");
-                }
                 let ratio = dur1.whole_nanoseconds() as f64 / dur2.whole_nanoseconds() as f64;
                 Ok(Some(Value::Float(ratio)))
             }
