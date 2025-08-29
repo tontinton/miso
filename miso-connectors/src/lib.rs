@@ -121,7 +121,7 @@ pub trait QueryHandle: Any + Debug + fmt::Display + Send + Sync {
 #[derive(Debug, Default, Clone)]
 pub struct Collection {
     /// Field replacements (for the top level field, not inner field accesses).
-    /// Examples: @timestamp -> event_time, @metadata.info -> _metadata.info.
+    /// Examples: @time -> event_time, @metadata.info -> _metadata.info.
     pub static_fields: HashMap<String, String>,
 }
 
