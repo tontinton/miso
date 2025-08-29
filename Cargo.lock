@@ -1539,6 +1539,7 @@ dependencies = [
 name = "miso-optimizations"
 version = "0.1.0"
 dependencies = [
+ "color-eyre",
  "flume",
  "hashbrown 0.15.3",
  "miso-common",
