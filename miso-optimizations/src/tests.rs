@@ -6,7 +6,7 @@ use miso_workflow::{Workflow, WorkflowStep as S, display::DisplayableWorkflowSte
 use miso_workflow_types::{
     expr::Expr,
     field::Field,
-    field_unwrap,
+    field_unwrap, json,
     project::ProjectField,
     sort::{NullsOrder, Sort, SortOrder},
     summarize::{Aggregation, Summarize},
@@ -1095,4 +1095,143 @@ fn test_project_propagation_partial_optimization_with_mixed_expressions() {
     ];
 
     check_default(input, expected);
+}
+
+#[test]
+fn const_fold_in_filter_simple_arith() {
+    let filter = S::Filter(Expr::Gt(
+        Box::new(Expr::Field(field("x"))),
+        Box::new(Expr::Minus(
+            Box::new(Expr::Mul(
+                Box::new(Expr::Literal(json!(50))),
+                Box::new(Expr::Literal(json!(10))),
+            )),
+            Box::new(Expr::Literal(json!(2))),
+        )),
+    ));
+
+    check_default(
+        vec![filter],
+        vec![S::Filter(Expr::Gt(
+            Box::new(Expr::Field(field("x"))),
+            Box::new(Expr::Literal(json!(498))),
+        ))],
+    );
+}
+
+#[test]
+fn const_fold_in_filter_nested() {
+    let filter = S::Filter(Expr::Eq(
+        Box::new(Expr::Field(field("x"))),
+        Box::new(Expr::Mul(
+            Box::new(Expr::Plus(
+                Box::new(Expr::Literal(json!(1))),
+                Box::new(Expr::Literal(json!(2))),
+            )),
+            Box::new(Expr::Plus(
+                Box::new(Expr::Literal(json!(3))),
+                Box::new(Expr::Literal(json!(4))),
+            )),
+        )),
+    ));
+
+    check_default(
+        vec![filter],
+        vec![S::Filter(Expr::Eq(
+            Box::new(Expr::Field(field("x"))),
+            Box::new(Expr::Literal(json!(21))),
+        ))],
+    );
+}
+
+#[test_case(S::Project as fn(Vec<ProjectField>) -> S)]
+#[test_case(S::Extend as fn(Vec<ProjectField>) -> S)]
+fn const_fold_in_fields_simple(ctor: fn(Vec<ProjectField>) -> S) {
+    let step = ctor(vec![ProjectField {
+        from: Expr::Mul(
+            Box::new(Expr::Plus(
+                Box::new(Expr::Literal(json!(2))),
+                Box::new(Expr::Literal(json!(3))),
+            )),
+            Box::new(Expr::Literal(json!(4))),
+        ),
+        to: field("b"),
+    }]);
+
+    check_default(
+        vec![step],
+        vec![ctor(vec![ProjectField {
+            from: Expr::Literal(json!(20)),
+            to: field("b"),
+        }])],
+    );
+}
+
+#[test_case(S::Project as fn(Vec<ProjectField>) -> S)]
+#[test_case(S::Extend as fn(Vec<ProjectField>) -> S)]
+fn const_fold_in_fields_partial(ctor: fn(Vec<ProjectField>) -> S) {
+    let step = ctor(vec![ProjectField {
+        from: Expr::Plus(
+            Box::new(Expr::Field(field("a"))),
+            Box::new(Expr::Plus(
+                Box::new(Expr::Literal(json!(10))),
+                Box::new(Expr::Literal(json!(3))),
+            )),
+        ),
+        to: field("c"),
+    }]);
+
+    check_default(
+        vec![step.clone()],
+        vec![ctor(vec![ProjectField {
+            from: Expr::Plus(
+                Box::new(Expr::Field(field("a"))),
+                Box::new(Expr::Literal(json!(13))),
+            ),
+            to: field("c"),
+        }])],
+    );
+}
+
+#[test]
+fn const_fold_no_fold_when_partial_eval_fails_keeps_expr() {
+    let bad = S::Filter(Expr::Div(
+        Box::new(Expr::Literal(json!(1))),
+        Box::new(Expr::Literal(json!(0))),
+    ));
+
+    check_default(vec![bad.clone()], vec![bad]);
+}
+
+#[test]
+fn const_fold_only_affects_first_matched_step() {
+    let filter_then_project = vec![
+        S::Filter(Expr::Gt(
+            Box::new(Expr::Field(field("x"))),
+            Box::new(Expr::Plus(
+                Box::new(Expr::Literal(json!(400))),
+                Box::new(Expr::Literal(json!(98))),
+            )),
+        )),
+        S::Project(vec![ProjectField {
+            from: Expr::Plus(
+                Box::new(Expr::Literal(json!(1))),
+                Box::new(Expr::Literal(json!(1))),
+            ),
+            to: field("b"),
+        }]),
+    ];
+
+    let expected = vec![
+        S::Filter(Expr::Gt(
+            Box::new(Expr::Field(field("x"))),
+            Box::new(Expr::Literal(json!(498))),
+        )),
+        S::Project(vec![ProjectField {
+            from: Expr::Literal(json!(2)),
+            to: field("b"),
+        }]),
+    ];
+
+    check_default(filter_then_project, expected);
 }
