@@ -3,7 +3,7 @@ use miso_workflow_types::{expr::Expr, log::Log};
 
 use super::{Val, get_field_value, ident};
 
-/// Eval left and right and run some function like so: left(right).
+/// Eval left and right and run some function like so: func(left, right).
 macro_rules! eval_lr {
     ($self:ident, $func:ident, $l:expr, $r:expr) => {
         $self.eval($l)?.$func(&$self.eval($r)?)?.into()
