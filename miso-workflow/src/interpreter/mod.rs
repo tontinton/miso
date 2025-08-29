@@ -73,14 +73,14 @@ macro_rules! impl_op {
             }
             (Int(l), UInt(r)) if $op_str != "/" => {
                 if *l < 0 {
-                    return Ok(Some(Float($op(*l as f64, *r as f64))));
+                    return Ok(Some(Int($op(*l, *r as i64))));
                 } else {
                     return Ok(Some(UInt($op(*l as u64, *r))));
                 }
             }
             (UInt(l), Int(r)) if $op_str != "/" => {
                 if *r < 0 {
-                    return Ok(Some(Float($op(*l as f64, *r as f64))));
+                    return Ok(Some(Int($op(*l as i64, *r))));
                 } else {
                     return Ok(Some(UInt($op(*l, *r as u64))));
                 }
