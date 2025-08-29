@@ -583,6 +583,18 @@ mod tests {
             ),
             Some((1, 6))
         );
+
+        assert_eq!(
+            Pattern::search_first(
+                &pattern!([Filter Project Extend]+),
+                &[
+                    WorkflowStepKind::Sort,
+                    WorkflowStepKind::Sort,
+                    WorkflowStepKind::Filter
+                ],
+            ),
+            Some((2, 3))
+        );
     }
 
     #[test]
