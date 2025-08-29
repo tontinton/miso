@@ -2,6 +2,7 @@ use std::collections::BTreeSet;
 
 use miso_workflow::{WorkflowStep, WorkflowStepKind};
 
+use const_folding::ConstFolding;
 use convert_sort_limit_to_topn::ConvertSortLimitToTopN;
 use dynamic_filter::DynamicFilter;
 use merge_filters_into_and_filter::MergeFiltersIntoAndFilter;
@@ -18,16 +19,14 @@ use push_steps_into_union::PushStepsIntoUnion;
 use push_summarize_into_scan::PushSummarizeIntoScan;
 use push_topn_into_scan::PushTopNIntoScan;
 use push_union_into_scan::PushUnionIntoScan;
+use remove_redundant_empty_steps::RemoveRedundantEmptySteps;
 use remove_redundant_sorts_before_count::RemoveRedundantSortsBeforeCount;
+use remove_redundant_steps_before_count::RemoveRedundantStepsBeforeCount;
 use reorder_filter_before_sort::ReorderFilterBeforeSort;
 use reorder_steps_before_mux::ReorderStepsBeforeMux;
 use split_scan_to_union::SplitScanIntoUnion;
 
-use crate::{
-    remove_redundant_empty_steps::RemoveRedundantEmptySteps,
-    remove_redundant_steps_before_count::RemoveRedundantStepsBeforeCount,
-};
-
+mod const_folding;
 mod convert_sort_limit_to_topn;
 mod dynamic_filter;
 mod field_replacer;
@@ -113,6 +112,8 @@ impl Optimizer {
                 // Must come after dynamic filtering, so the split scan nodes will also receive
                 // the dynamic filter.
                 opt_once!(SplitScanIntoUnion),
+                // Always returns something, even if the step is unmodified, so run only once.
+                opt_once!(ConstFolding),
             ],
             // Predicate pushdowns + optimizations that help predicate pushdowns.
             vec![

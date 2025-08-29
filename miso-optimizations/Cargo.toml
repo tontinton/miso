@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+color-eyre.workspace = true
 flume.workspace = true
 hashbrown.workspace = true
 miso-common.workspace = true

@@ -140,20 +140,24 @@ impl From<Option<Value>> for Val<'_> {
 }
 
 impl<'a> Val<'a> {
-    fn not_exist() -> Val<'a> {
+    pub fn not_exist() -> Val<'a> {
         Val(None)
     }
 
-    fn owned(value: Value) -> Val<'a> {
+    pub fn owned(value: Value) -> Val<'a> {
         Val(Some(Cow::Owned(value)))
     }
 
-    fn borrowed(value: &'a Value) -> Val<'a> {
+    pub fn borrowed(value: &'a Value) -> Val<'a> {
         Val(Some(Cow::Borrowed(value)))
     }
 
-    fn bool(value: bool) -> Val<'a> {
+    pub fn bool(value: bool) -> Val<'a> {
         Val(Some(Cow::Owned(Value::Bool(value))))
+    }
+
+    pub fn is_exist(&self) -> bool {
+        self.0.is_some()
     }
 
     pub fn to_bool(&self) -> bool {
@@ -163,31 +167,35 @@ impl<'a> Val<'a> {
         cow.as_ref().to_bool()
     }
 
-    fn eq(&self, other: &Val) -> Result<Option<bool>> {
+    pub fn eq(&self, other: &Val) -> Result<Option<bool>> {
         impl_cmp!(self, other, |o| o == Ordering::Equal, "==")
     }
 
-    fn ne(&self, other: &Val) -> Result<Option<bool>> {
+    pub fn ne(&self, other: &Val) -> Result<Option<bool>> {
         impl_cmp!(self, other, |o| o != Ordering::Equal, "!=")
     }
 
-    fn gt(&self, other: &Val) -> Result<Option<bool>> {
+    pub fn gt(&self, other: &Val) -> Result<Option<bool>> {
         impl_cmp!(self, other, |o| o == Ordering::Greater, ">")
     }
 
-    fn gte(&self, other: &Val) -> Result<Option<bool>> {
+    pub fn gte(&self, other: &Val) -> Result<Option<bool>> {
         impl_cmp!(self, other, |o| o >= Ordering::Equal, ">=")
     }
 
-    fn lt(&self, other: &Val) -> Result<Option<bool>> {
+    pub fn lt(&self, other: &Val) -> Result<Option<bool>> {
         impl_cmp!(self, other, |o| o == Ordering::Less, "<")
     }
 
-    fn lte(&self, other: &Val) -> Result<Option<bool>> {
+    pub fn lte(&self, other: &Val) -> Result<Option<bool>> {
         impl_cmp!(self, other, |o| o <= Ordering::Equal, "<=")
     }
 
-    fn is_in(&self, others: &[Val]) -> Result<Option<bool>> {
+    pub fn is_in(&self, others: &[Val]) -> Result<Option<bool>> {
+        if !self.is_exist() {
+            return Ok(None);
+        }
+
         for other in others {
             if matches!(self.eq(other)?, Some(true)) {
                 return Ok(Some(true));
@@ -196,11 +204,11 @@ impl<'a> Val<'a> {
         Ok(Some(false))
     }
 
-    fn contains(&self, other: &Val) -> Result<Option<bool>> {
+    pub fn contains(&self, other: &Val) -> Result<Option<bool>> {
         impl_two_strs_fn!(self, other, |x: &str, y: &str| x.contains(y), "contains")
     }
 
-    fn starts_with(&self, other: &Val) -> Result<Option<bool>> {
+    pub fn starts_with(&self, other: &Val) -> Result<Option<bool>> {
         impl_two_strs_fn!(
             self,
             other,
@@ -209,19 +217,19 @@ impl<'a> Val<'a> {
         )
     }
 
-    fn ends_with(&self, other: &Val) -> Result<Option<bool>> {
+    pub fn ends_with(&self, other: &Val) -> Result<Option<bool>> {
         impl_two_strs_fn!(self, other, |x: &str, y: &str| x.ends_with(y), "ends_with")
     }
 
-    fn has(&self, other: &Val) -> Result<Option<bool>> {
+    pub fn has(&self, other: &Val) -> Result<Option<bool>> {
         impl_two_strs_fn!(self, other, string_ops::has, "has")
     }
 
-    fn has_cs(&self, other: &Val) -> Result<Option<bool>> {
+    pub fn has_cs(&self, other: &Val) -> Result<Option<bool>> {
         impl_two_strs_fn!(self, other, string_ops::has_cs, "has_cs")
     }
 
-    fn add(&self, other: &Val) -> Result<Option<Value>> {
+    pub fn add(&self, other: &Val) -> Result<Option<Value>> {
         let lhs = val!(self);
         let rhs = val!(other);
 
@@ -243,7 +251,7 @@ impl<'a> Val<'a> {
         }
     }
 
-    fn sub(&self, other: &Val) -> Result<Option<Value>> {
+    pub fn sub(&self, other: &Val) -> Result<Option<Value>> {
         let lhs = val!(self);
         let rhs = val!(other);
 
@@ -266,7 +274,7 @@ impl<'a> Val<'a> {
         }
     }
 
-    fn mul(&self, other: &Val) -> Result<Option<Value>> {
+    pub fn mul(&self, other: &Val) -> Result<Option<Value>> {
         let lhs = val!(self);
         let rhs = val!(other);
 
@@ -295,7 +303,7 @@ impl<'a> Val<'a> {
         }
     }
 
-    fn div(&self, other: &Val) -> Result<Option<Value>> {
+    pub fn div(&self, other: &Val) -> Result<Option<Value>> {
         let lhs = val!(self);
         let rhs = val!(other);
 
@@ -340,7 +348,7 @@ impl<'a> Val<'a> {
         }
     }
 
-    fn cast(self, ty: CastType) -> Result<Val<'a>> {
+    pub fn cast(self, ty: CastType) -> Result<Val<'a>> {
         let Some(cow) = self.0 else {
             return Ok(Val::not_exist());
         };
@@ -396,7 +404,7 @@ impl<'a> Val<'a> {
         Ok(Val::owned(casted_value))
     }
 
-    fn bin(&self, by: &Val) -> Result<Option<Value>> {
+    pub fn bin(&self, by: &Val) -> Result<Option<Value>> {
         let self_val = val!(self);
         let by_val = val!(by);
 
