@@ -433,7 +433,7 @@ async fn predicate_pushdown_same_results(
 }
 
 #[test_case(
-    r#"test.stack | sort by @timestamp | take 3"#,
+    r#"test.stack | sort by @time | take 3"#,
     r#"test.stack"#,
     3;
     "top_n"
@@ -463,7 +463,7 @@ async fn predicate_pushdown_same_results(
     "filter_eq_and_exists"
 )]
 #[test_case(
-    r#"test.stack | where @timestamp == datetime("2008-07-31 22:17:57")"#,
+    r#"test.stack | where @time == datetime("2008-07-31 22:17:57")"#,
     r#"test.stack"#,
     1;
     "filter_eq_timestamp"
@@ -474,8 +474,8 @@ async fn predicate_pushdown_same_results(
     | summarize minQuestionId=min(questionId),
                 maxQuestionId=max(questionId),
                 sumQuestionId=sum(questionId),
-                minTimestamp=min(@timestamp),
-                maxTimestamp=max(@timestamp),
+                minTimestamp=min(@time),
+                maxTimestamp=max(@time),
                 c=count()
       by user
     "#,
@@ -489,8 +489,8 @@ async fn predicate_pushdown_same_results(
     | summarize minQuestionId=min(questionId),
                 maxQuestionId=max(questionId),
                 sumQuestionId=sum(questionId),
-                minTimestamp=min(@timestamp),
-                maxTimestamp=max(@timestamp),
+                minTimestamp=min(@time),
+                maxTimestamp=max(@time),
                 c=count()
       by bin(answerId, 5)
     "#,
@@ -505,7 +505,7 @@ async fn predicate_pushdown_same_results(
                 maxQuestionId=max(questionId),
                 sumQuestionId=sum(questionId),
                 c=count()
-      by bin(@timestamp, 1h)
+      by bin(@time, 1h)
     "#,
     r#"test.stack"#,
     6;
@@ -524,7 +524,7 @@ async fn predicate_pushdown_same_results(
     "distinct"
 )]
 #[test_case(
-    r#"test.stack | distinct @timestamp"#,
+    r#"test.stack | distinct @time"#,
     r#"test.stack"#,
     10;
     "distinct_timestamp"

@@ -1024,7 +1024,7 @@ impl Connector for QuickwitConnector {
 
         let mut static_fields = HashMap::new();
         if let Some(timestamp_field) = &index.timestamp_field {
-            static_fields.insert("@timestamp".to_string(), timestamp_field.clone());
+            static_fields.insert("@time".to_string(), timestamp_field.clone());
         }
 
         Some(Collection { static_fields })
