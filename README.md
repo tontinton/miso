@@ -18,6 +18,7 @@ curl -N -H 'Content-Type: application/json' localhost:8080/query -d '{
   "query": "
     localqw.hdfs1
     | union (localqw.hdfs2)
+    | where @timestamp > now() - 1d
     | summarize minTid = min(tenant_id), maxTid = max(tenant_id), count = count()
       by severity_text
     | join (
