@@ -195,29 +195,35 @@ fn run_optimization_pass(
 
             let mut groups = Vec::new();
 
-            let mut last_found_end = 0;
+            let mut current_start = 0;
+            let mut last_start = None;
             while let Some((start, end)) = Pattern::search_first_with_groups(
                 pattern,
-                &kinded_steps[last_found_end..],
+                &kinded_steps[current_start..],
                 &mut groups,
             ) {
-                last_found_end += end - start;
+                if last_start == Some(current_start) {
+                    // Prevent infinite loop when an optimization returns the same amount of steps.
+                    current_start += 1;
+                    continue;
+                }
+                last_start = Some(current_start);
 
                 let matched_groups = std::mem::take(&mut groups);
-                let Some(new_steps) = optimization_step
-                    .optimization
-                    .apply(&steps[start..end], &matched_groups)
-                else {
+                let Some(new_steps) = optimization_step.optimization.apply(
+                    &steps[current_start + start..current_start + end],
+                    &matched_groups,
+                ) else {
+                    current_start += end - start;
                     continue;
                 };
 
-                if new_steps.len() > (end - start) {
-                    last_found_end += new_steps.len() - (end - start);
-                } else {
-                    last_found_end -= (end - start) - new_steps.len();
-                }
+                current_start += end.saturating_sub(new_steps.len() + start);
 
-                steps.splice(start..end, new_steps);
+                steps.splice(
+                    last_start.unwrap() + start..last_start.unwrap() + end,
+                    new_steps,
+                );
                 *kinded_steps = to_kind(steps);
 
                 optimized_in_loop = true;
