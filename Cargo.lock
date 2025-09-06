@@ -1940,7 +1940,6 @@ dependencies = [
  "miso-workflow-types",
  "reqwest",
  "serde",
- "serde_json",
  "test-case",
  "testcontainers",
  "tokio",
@@ -1999,7 +1998,6 @@ dependencies = [
  "logos",
  "miso-workflow-types",
  "serde",
- "serde_json",
  "test-case",
  "time",
 ]
@@ -2009,15 +2007,11 @@ name = "miso-optimizations"
 version = "0.1.0"
 dependencies = [
  "color-eyre",
- "flume",
  "hashbrown 0.15.5",
  "miso-common",
  "miso-workflow",
  "miso-workflow-types",
- "scopeguard",
- "serde_json",
  "test-case",
- "tokio",
 ]
 
 [[package]]
