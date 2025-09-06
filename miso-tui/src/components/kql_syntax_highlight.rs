@@ -12,186 +12,166 @@ pub fn highlight_text_with_cursor(
     cursor_x: usize,
     scroll_x: usize,
 ) -> Vec<Line<'static>> {
-    let mut styled_lines: Vec<Line> = Vec::with_capacity(lines.len());
-
-    for (y, line) in lines.iter().enumerate() {
-        if focused && y == cursor_y {
+    lines
+        .iter()
+        .enumerate()
+        .map(|(y, line)| {
             let visible_line = &line[scroll_x.min(line.len())..];
-            let cursor_x_pos = cursor_x.saturating_sub(scroll_x);
-            let (before, rest) = visible_line.split_at(cursor_x_pos.min(visible_line.len()));
-            let cursor_char = rest.chars().next();
-            let after = cursor_char.map(|c| &rest[c.len_utf8()..]).unwrap_or("");
-
-            let mut spans: Vec<Span> = Vec::new();
-
-            if !before.is_empty() {
-                spans.extend(highlight_line(before));
-            }
-
-            spans.push(Span::styled(
-                cursor_char
-                    .map(|c| c.to_string())
-                    .unwrap_or(" ".to_string()),
-                Style::new().reversed(),
-            ));
-
-            if !after.is_empty() {
-                spans.extend(highlight_line(after));
-            }
-
-            styled_lines.push(Line::from(spans));
-        } else {
-            let visible_line = &line[scroll_x.min(line.len())..];
-            let spans = highlight_line(visible_line);
-            styled_lines.push(Line::from(spans));
-        }
-    }
-
-    styled_lines
+            let cursor_pos = if focused && y == cursor_y {
+                Some(cursor_x.saturating_sub(scroll_x))
+            } else {
+                None
+            };
+            Line::from(highlight_line(visible_line, cursor_pos))
+        })
+        .collect()
 }
 
-fn highlight_line(text: &str) -> Vec<Span<'static>> {
+fn highlight_line(text: &str, cursor_pos: Option<usize>) -> Vec<Span<'static>> {
     let mut spans = Vec::new();
     let mut lexer = Token::lexer(text);
-    let mut current_pos = 0;
+    let mut pos = 0;
 
     while let Some(result) = lexer.next() {
         let token_span = lexer.span();
+
+        if pos < token_span.start {
+            let whitespace = &text[pos..token_span.start];
+            spans.extend(render_text_with_cursor(
+                whitespace,
+                pos..token_span.start,
+                Style::default(),
+                cursor_pos,
+            ));
+        }
+
         let token_text = &text[token_span.clone()];
+        let style = result.map_or(Style::default(), |token| get_token_style(&token));
+        spans.extend(render_text_with_cursor(
+            token_text,
+            token_span.clone(),
+            style,
+            cursor_pos,
+        ));
 
-        if current_pos < token_span.start {
-            let whitespace = &text[current_pos..token_span.start];
-            spans.push(Span::raw(whitespace.to_owned()));
-        }
-
-        match result {
-            Ok(token) => {
-                let style = get_token_style(&token);
-                spans.push(Span::styled(token_text.to_owned(), style));
-            }
-            Err(_) => {
-                spans.push(Span::raw(token_text.to_owned()));
-            }
-        }
-
-        current_pos = token_span.end;
+        pos = token_span.end;
     }
 
-    if current_pos < text.len() {
-        spans.push(Span::raw(text[current_pos..].to_owned()));
+    if pos < text.len() {
+        let remaining = &text[pos..];
+        spans.extend(render_text_with_cursor(
+            remaining,
+            pos..text.len(),
+            Style::default(),
+            cursor_pos,
+        ));
+    }
+
+    if cursor_pos == Some(text.len()) {
+        spans.push(Span::raw(" ".to_string()).reversed());
     }
 
     spans
 }
 
+fn render_text_with_cursor(
+    text: &str,
+    range: std::ops::Range<usize>,
+    style: Style,
+    cursor_pos: Option<usize>,
+) -> Vec<Span<'static>> {
+    match cursor_pos.filter(|&pos| range.contains(&pos)) {
+        Some(cursor) => {
+            let offset = cursor - range.start;
+            let (before, middle, after) = split_at_char_boundary(text, offset);
+
+            let mut spans =
+                Vec::with_capacity(before.is_some() as usize + 1 + after.is_some() as usize);
+
+            if let Some(c) = before {
+                spans.push(Span::styled(c, style));
+            }
+
+            let cursor_style = style.add_modifier(Modifier::REVERSED);
+            spans.push(Span::styled(middle, cursor_style));
+
+            if let Some(c) = after {
+                spans.push(Span::styled(c, style));
+            }
+
+            spans
+        }
+        None => vec![Span::styled(text.to_string(), style)],
+    }
+}
+
+fn split_at_char_boundary(text: &str, pos: usize) -> (Option<String>, String, Option<String>) {
+    assert!(pos < text.len());
+
+    let (before, rest) = text.split_at(pos);
+    let cursor_char = rest.chars().next();
+    let after = cursor_char.map(|c| &rest[c.len_utf8()..]);
+
+    (
+        (!before.is_empty()).then(|| before.to_string()),
+        cursor_char
+            .map(|c| c.to_string())
+            .unwrap_or_else(|| " ".to_string()),
+        after.filter(|s| !s.is_empty()).map(|s| s.to_string()),
+    )
+}
+
 fn get_token_style(token: &Token) -> Style {
-    match token {
+    use Token::*;
+
+    let (color, modifiers) = match token {
         // Keywords.
-        Token::Where
-        | Token::Filter
-        | Token::Project
-        | Token::ProjectRename
-        | Token::Extend
-        | Token::Limit
-        | Token::Take
-        | Token::Sort
-        | Token::Order
-        | Token::Top
-        | Token::Summarize
-        | Token::Distinct
-        | Token::Join
-        | Token::Union => Style::default()
-            .fg(Color::Blue)
-            .add_modifier(Modifier::BOLD),
+        Where | Filter | Project | ProjectRename | Extend | Limit | Take | Sort | Order | Top
+        | Summarize | Distinct | Join | Union | Kind | Inner | Outer | Left | Right | On | In => {
+            (Color::Blue, Modifier::BOLD)
+        }
 
         // Functions.
-        Token::Count
-        | Token::DCount
-        | Token::Sum
-        | Token::Min
-        | Token::Max
-        | Token::Avg
-        | Token::ToString
-        | Token::ToInt
-        | Token::ToLong
-        | Token::ToReal
-        | Token::ToDecimal
-        | Token::ToBool
-        | Token::Datetime
-        | Token::Now
-        | Token::Bin => Style::default().fg(Color::Cyan),
+        Count | DCount | Sum | Min | Max | Avg | ToString | ToInt | ToLong | ToReal | ToDecimal
+        | ToBool | Datetime | Now | Bin | Not | Exists => (Color::Cyan, Modifier::empty()),
 
-        // Logical operators.
-        Token::Or | Token::And | Token::Not => Style::default()
-            .fg(Color::Yellow)
-            .add_modifier(Modifier::BOLD),
-
-        // Comparison operators.
-        Token::DoubleEq
-        | Token::Eq
-        | Token::Ne
-        | Token::Gte
-        | Token::Gt
-        | Token::Lte
-        | Token::Lt => Style::default().fg(Color::Magenta),
-
-        // Arithmetic operators.
-        Token::Plus | Token::Minus | Token::Mul | Token::Div => Style::default().fg(Color::White),
+        // Comparison & arithmetic operators.
+        Plus | Minus | Mul | Div | Or | And | DoubleEq | Eq | Ne | Gte | Gt | Lte | Lt => {
+            (Color::Magenta, Modifier::empty())
+        }
 
         // String operators.
-        Token::Contains
-        | Token::StartsWith
-        | Token::EndsWith
-        | Token::Has
-        | Token::HasCs
-        | Token::In => Style::default().fg(Color::Green),
+        Contains | StartsWith | EndsWith | Has | HasCs => (Color::Green, Modifier::empty()),
 
         // Literals.
-        Token::String(_) => Style::default().fg(Color::Green),
-        Token::Integer(_) => Style::default().fg(Color::Yellow),
-        Token::Float(_) => Style::default().fg(Color::Yellow),
-        Token::Bool(_) => Style::default().fg(Color::Red),
-        Token::Null => Style::default()
-            .fg(Color::Gray)
-            .add_modifier(Modifier::ITALIC),
-        Token::Timespan(_) => Style::default().fg(Color::Cyan),
-
-        // Identifiers.
-        Token::Ident(_) => Style::default(),
-
-        // Join keywords.
-        Token::Kind | Token::Inner | Token::Outer | Token::Left | Token::Right | Token::On => {
-            Style::default().fg(Color::Blue)
-        }
+        String(_) | Integer(_) | Float(_) => (Color::Yellow, Modifier::empty()),
+        Bool(_) => (Color::Red, Modifier::empty()),
+        Null => (Color::Gray, Modifier::ITALIC),
+        Timespan(_) => (Color::Cyan, Modifier::empty()),
 
         // Modifiers.
-        Token::By | Token::Asc | Token::Desc | Token::Nulls | Token::First | Token::Last => {
-            Style::default().fg(Color::LightBlue)
-        }
+        By | Asc | Desc | Nulls | First | Last => (Color::LightBlue, Modifier::empty()),
 
         // Special tokens.
-        Token::Hint | Token::Partitions | Token::Exists => Style::default().fg(Color::LightMagenta),
+        Hint | Partitions => (Color::LightMagenta, Modifier::empty()),
 
         // Punctuation.
-        Token::Pipe
-        | Token::Dot
-        | Token::Comma
-        | Token::LParen
-        | Token::RParen
-        | Token::LBracket
-        | Token::RBracket
-        | Token::Dollar
-        | Token::At => Style::default().fg(Color::Gray),
+        Pipe | Dot | Comma | LParen | RParen | LBracket | RBracket | Dollar | At => {
+            (Color::Gray, Modifier::empty())
+        }
 
-        // Error.
-        Token::Error => Style::default()
-            .fg(Color::White)
-            .bg(Color::Red)
-            .add_modifier(Modifier::BOLD),
+        Error => {
+            return Style::default()
+                .fg(Color::White)
+                .bg(Color::Red)
+                .add_modifier(Modifier::BOLD);
+        }
 
-        // Comment.
-        Token::Comment => Style::default()
-            .fg(Color::Gray)
-            .add_modifier(Modifier::ITALIC),
-    }
+        Comment => (Color::Gray, Modifier::ITALIC),
+
+        // Identifiers (default).
+        _ => return Style::default(),
+    };
+
+    Style::default().fg(color).add_modifier(modifiers)
 }
