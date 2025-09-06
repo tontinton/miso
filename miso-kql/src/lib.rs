@@ -1,6 +1,7 @@
 mod lexer;
 mod parser;
 
+pub use lexer::Token;
 pub use parser::{ParseError, parse};
 
 #[cfg(test)]

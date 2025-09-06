@@ -1889,6 +1889,8 @@ dependencies = [
  "arboard",
  "color-eyre",
  "crossterm 0.29.0",
+ "logos",
+ "miso-kql",
  "ratatui",
  "reqwest",
  "serde_json",

@@ -1,4 +1,5 @@
 mod footer;
+mod kql_syntax_highlight;
 mod log_view;
 mod query_input;
 mod results_list;

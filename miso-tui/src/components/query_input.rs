@@ -3,13 +3,13 @@ use ratatui::{
     Frame,
     layout::Rect,
     style::{Style, Stylize},
-    text::{Line, Span, Text},
+    text::{Line, Text},
     widgets::{Block, Padding, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState},
 };
 
 use crate::{
     common::{BORDER_TYPE, HORIZONTAL},
-    components::{Action, Component},
+    components::{Action, Component, kql_syntax_highlight::highlight_text_with_cursor},
 };
 
 const HORIZONTAL_PADDING: u16 = 1;
@@ -181,42 +181,8 @@ impl Component for QueryInput {
             .title_bottom(bottom_title.right_aligned())
             .padding(Padding::horizontal(HORIZONTAL_PADDING));
 
-        let mut styled_lines: Vec<Line> = Vec::with_capacity(self.lines.len());
-
-        for (y, line) in self.lines.iter().enumerate() {
-            if self.focused && y == self.y {
-                let x = self.x();
-                let visible_line = &line[self.scroll_x.min(line.len())..];
-
-                let cursor_x = x.saturating_sub(self.scroll_x);
-                let (before, rest) = visible_line.split_at(cursor_x.min(visible_line.len()));
-
-                let cursor_char = rest.chars().next();
-                let after = cursor_char.map(|c| &rest[c.len_utf8()..]).unwrap_or("");
-
-                let mut spans: Vec<Span<'_>> = Vec::with_capacity(
-                    !before.is_empty() as usize + 1 + !after.is_empty() as usize,
-                );
-                if !before.is_empty() {
-                    spans.push(Span::raw(before));
-                }
-                spans.push(Span::styled(
-                    cursor_char
-                        .map(|c| c.to_string())
-                        .unwrap_or(" ".to_string()),
-                    Style::new().reversed(),
-                ));
-                if !after.is_empty() {
-                    spans.push(Span::raw(after));
-                }
-
-                styled_lines.push(Line::from(spans));
-            } else {
-                let visible_line = &line[self.scroll_x.min(line.len())..];
-                styled_lines.push(Line::raw(visible_line));
-            }
-        }
-
+        let styled_lines =
+            highlight_text_with_cursor(&self.lines, self.focused, self.y, self.x(), self.scroll_x);
         let query = Text::from(styled_lines);
         let paragraph = Paragraph::new(query).block(block);
 
