@@ -29,6 +29,10 @@ pub struct ResultsList {
 }
 
 impl ResultsList {
+    pub fn is_empty(&self) -> bool {
+        self.logs.is_empty()
+    }
+
     pub fn push(&mut self, log: Log) -> Action {
         self.logs.push(log.parsed);
         self.logs_lens.push(log.len);

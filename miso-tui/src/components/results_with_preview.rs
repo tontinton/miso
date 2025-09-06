@@ -9,7 +9,6 @@ use crate::components::{Action, Component, log_view::LogView, results_list::Resu
 #[derive(Debug, Default)]
 enum Mode {
     #[default]
-    OnlyList,
     ListWithPreview,
     OnlyLog,
 }
@@ -25,7 +24,7 @@ pub struct ResultsWithPreview {
 impl Component for ResultsWithPreview {
     fn draw(&mut self, frame: &mut Frame, area: Rect) {
         match self.mode {
-            Mode::OnlyList => {
+            Mode::ListWithPreview if self.results_list.is_empty() => {
                 self.results_list.draw(frame, area);
             }
             Mode::ListWithPreview => {
@@ -44,13 +43,6 @@ impl Component for ResultsWithPreview {
 
     fn handle_focus_event(&mut self, focus: bool) -> Action {
         match self.mode {
-            Mode::OnlyList if focus => {
-                self.mode = Mode::ListWithPreview;
-                Action::Multi(vec![
-                    self.results_list.handle_focus_event(focus),
-                    Action::Redraw,
-                ])
-            }
             Mode::ListWithPreview => Action::Multi(vec![
                 self.results_list.handle_focus_event(focus),
                 Action::Redraw,
@@ -59,7 +51,6 @@ impl Component for ResultsWithPreview {
                 self.log_view.handle_focus_event(focus),
                 Action::Redraw,
             ]),
-            _ => Action::None,
         }
     }
 
@@ -82,8 +73,12 @@ impl Component for ResultsWithPreview {
         }
 
         match self.mode {
-            Mode::OnlyList | Mode::ListWithPreview => match key.code {
+            Mode::ListWithPreview => match key.code {
                 Enter => {
+                    if self.results_list.is_empty() {
+                        return Action::None;
+                    }
+
                     self.mode = Mode::OnlyLog;
                     Action::Multi(vec![self.log_view.handle_focus_event(true), Action::Redraw])
                 }
