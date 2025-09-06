@@ -27,6 +27,7 @@ use serde::Deserialize;
 use serde_json::json;
 use tokio::{sync::RwLock, task::spawn_blocking};
 use tokio_util::sync::CancellationToken;
+use tower_http::trace::TraceLayer;
 use tracing::{Level, debug, error, info, span};
 use uuid::Uuid;
 
@@ -432,5 +433,6 @@ pub fn create_axum_app(config: OptimizationConfig) -> Result<Router> {
         .route("/views/:id", get(get_view))
         .route("/views/:id", post(post_view))
         .route("/views/:id", delete(delete_view))
-        .with_state(Arc::new(app)))
+        .with_state(Arc::new(app))
+        .layer(TraceLayer::new_for_http()))
 }

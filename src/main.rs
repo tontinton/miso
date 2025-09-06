@@ -41,10 +41,15 @@ async fn shutdown_signal() {
 #[tokio::main]
 async fn main() -> Result<()> {
     color_eyre::install()?;
-    tracing_subscriber::fmt::init();
 
     let args = parse_args();
     debug!(?args, "Init");
+
+    if args.log_json {
+        tracing_subscriber::fmt().json().init();
+    } else {
+        tracing_subscriber::fmt().init();
+    }
 
     let config = if args.no_optimizations {
         OptimizationConfig::NoOptimizations

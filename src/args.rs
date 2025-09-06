@@ -11,6 +11,9 @@ pub struct Args {
     )]
     pub listen: String,
 
+    #[clap(long, help = "Output logs formatted as JSON.", default_value = "false")]
+    pub log_json: bool,
+
     #[clap(
         long,
         help = "Disable all optimizations (helpful for debugging purposes).",
