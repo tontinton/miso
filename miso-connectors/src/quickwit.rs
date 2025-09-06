@@ -1045,6 +1045,7 @@ impl Connector for QuickwitConnector {
         Ok(Box::new(QuickwitHandle::new(timestamp_field)))
     }
 
+    #[instrument(skip(self), name = "Quickwit query")]
     async fn query(
         &self,
         collection: &str,
@@ -1396,6 +1397,7 @@ impl Connector for QuickwitConnector {
         Some(Box::new(handle.with_union(union_collection)))
     }
 
+    #[instrument(skip(self), name = "Quickwit close")]
     async fn close(&self) {
         self.interval_task.shutdown().await;
     }
