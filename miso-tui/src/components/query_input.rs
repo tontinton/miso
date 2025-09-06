@@ -29,10 +29,10 @@ pub struct QueryInput {
     scroll_x: usize,
 }
 
-impl Default for QueryInput {
-    fn default() -> Self {
+impl QueryInput {
+    pub fn new(input: String) -> Self {
         Self {
-            lines: vec!["".to_string()],
+            lines: input.split("\n").map(str::to_string).collect(),
             focused: false,
             raw_x: 0,
             y: 0,
@@ -48,7 +48,7 @@ impl QueryInput {
         self.lines.len() as u16 + 2
     }
 
-    fn value(&self) -> String {
+    pub fn value(&self) -> String {
         self.lines.join("\n")
     }
 

@@ -47,11 +47,13 @@ pub struct App {
     query_rx: Option<mpsc::Receiver<Log>>,
 }
 
-impl Default for App {
-    fn default() -> Self {
-        Self {
+impl App {
+    pub fn new(query: Option<String>) -> Self {
+        let input_given = query.is_some();
+
+        let mut app = Self {
             results_view: ResultsWithPreview::default(),
-            query_input_view: QueryInput::default(),
+            query_input_view: QueryInput::new(query.unwrap_or("".to_string())),
             footer_view: Footer::default(),
 
             focused: FocusedWindow::Query,
@@ -60,7 +62,13 @@ impl Default for App {
             clipboard: Clipboard::new().expect("failed to init clipboard"),
 
             query_rx: None,
+        };
+
+        if input_given {
+            app.handle_action(Action::RunQuery(app.query_input_view.value()));
         }
+
+        app
     }
 }
 
