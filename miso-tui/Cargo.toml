@@ -1,0 +1,13 @@
+[package]
+name = "miso-tui"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+arboard = "3.6.1"
+color-eyre.workspace = true
+crossterm = "0.29.0"
+ratatui = "0.29.0"
+reqwest.workspace = true
+serde_json.workspace = true
+simd-json.workspace = true

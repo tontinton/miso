@@ -11,6 +11,7 @@ members = [
     "miso-kql",
     "miso-optimizations",
     "miso-server",
+    "miso-tui",
     "miso-workflow",
     "miso-workflow-types",
 ]
