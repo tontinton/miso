@@ -51,7 +51,10 @@ jobs:
         with:
           tool: cargo-nextest
 
-      - name: Tests
+      - name: Compile
+        run: cargo nextest run --no-run --locked --workspace
+
+      - name: Run
         run: cargo nextest run --workspace
 
   lint:
