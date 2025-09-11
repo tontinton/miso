@@ -15,11 +15,10 @@ use miso_workflow_types::{
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
 
-use crate::interpreter::get_field_value;
-
-use super::{
-    WorkflowRx,
+use crate::{
+    CHANNEL_CAPACITY, WorkflowRx,
     cancel_iter::CancelIter,
+    interpreter::get_field_value,
     send_once::SendOnce,
     spawn_thread::{ThreadRx, spawn},
 };
@@ -413,7 +412,7 @@ fn workflow_rx_to_rxs(rx: WorkflowRx) -> (Vec<Receiver<Log>>, Option<ThreadRx>) 
     match rx {
         WorkflowRx::None => panic!("join cannot be the first step"),
         WorkflowRx::Pipeline(iter) => {
-            let (tx, rx) = flume::bounded(1);
+            let (tx, rx) = flume::bounded(CHANNEL_CAPACITY);
             let iter = SendOnce::new(iter);
             let thread = spawn(move || pipe_logiter_to_tx(iter.take(), tx), "join-pipe");
             (vec![rx], Some(thread))
@@ -440,11 +439,11 @@ fn join_rx_partitioned(
     let mut left_txs = Vec::with_capacity(partitions);
     let mut right_txs = Vec::with_capacity(partitions);
 
-    let (output_tx, output_rx) = flume::bounded(1);
+    let (output_tx, output_rx) = flume::bounded(CHANNEL_CAPACITY);
 
     for _ in 0..partitions {
-        let (left_tx, left_rx) = flume::bounded(1);
-        let (right_tx, right_rx) = flume::bounded(1);
+        let (left_tx, left_rx) = flume::bounded(CHANNEL_CAPACITY);
+        let (right_tx, right_rx) = flume::bounded(CHANNEL_CAPACITY);
 
         let config = config.clone();
         let output_tx = output_tx.clone();
@@ -511,7 +510,7 @@ fn join_rx_non_partitioned(
         threads.push(thread);
     }
 
-    let (tx, rx) = flume::bounded(1);
+    let (tx, rx) = flume::bounded(CHANNEL_CAPACITY);
     threads.push(spawn_join_thread(
         config,
         left_rxs,

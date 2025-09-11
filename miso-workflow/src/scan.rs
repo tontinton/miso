@@ -17,7 +17,7 @@ use parking_lot::Mutex;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info};
 
-use super::{AsyncTask, count::count_to_log};
+use super::{AsyncTask, CHANNEL_CAPACITY, count::count_to_log};
 
 const DYNAMIC_FILTER_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -157,7 +157,7 @@ where
 }
 
 pub fn scan_rx(scan: Scan, cancel: CancellationToken) -> (Receiver<LogItem>, AsyncTask) {
-    let (tx, rx) = flume::bounded(1);
+    let (tx, rx) = flume::bounded(CHANNEL_CAPACITY);
     let task = tokio::spawn(async move {
         let mut stream = scan_stream(scan).await.context("create scan stream")?;
         while let Some(Some(item)) = cancel_or(&cancel, stream.next()).await {

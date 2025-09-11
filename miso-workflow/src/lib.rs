@@ -59,6 +59,7 @@ pub mod topn;
 #[cfg(test)]
 mod tests;
 
+pub const CHANNEL_CAPACITY: usize = 4096;
 const MISO_METADATA_FIELD_NAME: &str = "_miso";
 
 pub type AsyncTask = tokio::task::JoinHandle<Result<()>>;
@@ -489,7 +490,7 @@ impl Workflow {
         for pipeline in pipelines {
             assert!(!pipeline.is_empty());
 
-            let (tx, rx) = flume::bounded(1);
+            let (tx, rx) = flume::bounded(CHANNEL_CAPACITY);
 
             let skip_rx = matches!(
                 pipeline[0].0,

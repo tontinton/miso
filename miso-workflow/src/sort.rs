@@ -14,6 +14,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::debug;
 
 use crate::{
+    CHANNEL_CAPACITY,
     cancel_iter::CancelIter,
     interpreter::get_field_value,
     send_once::SendOnce,
@@ -161,7 +162,7 @@ pub fn sort_rx(
     sorts: Vec<Sort>,
     cancel: CancellationToken,
 ) -> (Receiver<LogItem>, ThreadRx) {
-    let (tx, rx) = flume::bounded(1);
+    let (tx, rx) = flume::bounded(CHANNEL_CAPACITY);
 
     let input = SendOnce::new(input);
     let thread = spawn(

@@ -1,7 +1,7 @@
 use std::str::FromStr;
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
-use miso_workflow::join::join_iter;
+use miso_workflow::{join::join_iter, CHANNEL_CAPACITY};
 use miso_workflow_types::{
     field::Field,
     field_unwrap,
@@ -41,7 +41,7 @@ fn create_test_stream(
 }
 
 fn run_join(config: Join, iter: impl Iterator<Item = (bool, Log)>) -> usize {
-    let (tx, rx) = flume::bounded(1);
+    let (tx, rx) = flume::bounded(CHANNEL_CAPACITY);
     join_iter(config, iter, tx);
     let mut count = 0;
     while rx.recv().is_ok() {
