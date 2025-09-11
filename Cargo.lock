@@ -2064,6 +2064,7 @@ dependencies = [
  "bon",
  "collection_macros",
  "color-eyre",
+ "crossbeam-utils",
  "ctor",
  "flume",
  "futures-util",

@@ -3,6 +3,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use crossbeam_utils::Backoff;
 use flume::{Receiver, RecvError, Selector, TryRecvError};
 use miso_common::humantime_utils::deserialize_duration;
 use miso_workflow_types::{
@@ -75,21 +76,23 @@ impl Iterator for UnionIter {
             return None;
         }
 
-        let mut i = 0;
-        while i < self.rxs.len() {
-            match self.rxs[i].try_recv() {
-                Ok(log) => return Some(LogItem::Log(log)),
-                Err(TryRecvError::Disconnected) => {
-                    self.rxs.swap_remove(i);
-                    if self.rxs.is_empty() {
-                        return None;
+        let backoff = Backoff::new();
+        while !backoff.is_completed() {
+            for i in 0..self.rxs.len() {
+                match self.rxs[i].try_recv() {
+                    Ok(log) => return Some(LogItem::Log(log)),
+                    Err(TryRecvError::Disconnected) => {
+                        self.rxs.swap_remove(i);
+                        if self.rxs.is_empty() {
+                            return None;
+                        }
+                        return Some(LogItem::UnionSomePipelineDone);
                     }
-                    return Some(LogItem::UnionSomePipelineDone);
-                }
-                Err(TryRecvError::Empty) => {
-                    i += 1;
+                    Err(TryRecvError::Empty) => {}
                 }
             }
+
+            backoff.snooze();
         }
 
         let mut selector = Selector::new();

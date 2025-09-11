@@ -27,6 +27,7 @@ clap = { version = "4.5.20", features = ["derive"] }
 collection_macros = "0.2.0"
 color-eyre = { version = "0.6.3", default-features = false }
 criterion = { version = "0.5.1", features = ["async_tokio"] }
+crossbeam-utils = "0.8.21"
 crossterm = "0.29.0"
 ctor = "0.2.9"
 flume = "0.11.1"
