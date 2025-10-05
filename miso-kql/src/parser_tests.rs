@@ -545,7 +545,7 @@ fn test_complex_pipeline() {
 #[test_case("field1 == false", "boolean")]
 #[test_case("field1 == null", "null")]
 #[test_case("field1 == \"string\"", "string")]
-#[test_case("field1 == datetime(\"2020-01-01\")", "timestamp")]
+#[test_case("field1 == datetime(2020-01-01)", "timestamp")]
 #[test_case("field1 == 1h", "timespan")]
 fn test_literal_values(condition: &str, literal_type: &str) {
     let query = format!("connector.table | where {}", condition);
@@ -644,14 +644,14 @@ fn test_parentheses_in_expressions() {
 
 #[test_case("datetime()"; "current_time")]
 #[test_case("now()"; "now_function")]
-#[test_case("datetime(\"2015-12-31\")"; "date_only")]
-#[test_case("datetime(\"2015-12-31 23:59:59\")"; "date_with_time")]
-#[test_case("datetime(\"2015-12-31 23:59:59.999\")"; "date_with_millis")]
-#[test_case("datetime(\"2015-12-31T23:59:59Z\")"; "iso8601_utc")]
-#[test_case("datetime(\"2015-12-31T23:59:59+02:00\")"; "iso8601_with_offset")]
-#[test_case("datetime(\"2015-12-31T23:59:59.999Z\")"; "iso8601_with_millis")]
-#[test_case("datetime(\"Thu, 31 Dec 2015 23:59:59 GMT\")"; "rfc2822")]
-#[test_case("datetime(\"2015-12-31T23:59:59.999+00:00\")"; "rfc3339")]
+#[test_case("datetime(2015-12-31)"; "date_only")]
+#[test_case("datetime(2015-12-31 23:59:59)"; "date_with_time")]
+#[test_case("datetime(2015-12-31 23:59:59.999)"; "date_with_millis")]
+#[test_case("datetime(2015-12-31T23:59:59Z)"; "iso8601_utc")]
+#[test_case("datetime(2015-12-31T23:59:59+02:00)"; "iso8601_with_offset")]
+#[test_case("datetime(2015-12-31T23:59:59.999Z)"; "iso8601_with_millis")]
+#[test_case("datetime(Thu, 31 Dec 2015 23:59:59 GMT)"; "rfc2822")]
+#[test_case("datetime(2015-12-31T23:59:59.999+00:00)"; "rfc3339")]
 fn test_datetime_parsing(datetime_expr: &str) {
     let query = format!("connector.table | where field1 == {}", datetime_expr);
     let result = parse_unwrap!(&query);
@@ -715,10 +715,7 @@ fn test_datetime_null() {
 #[test_case("2020-01-01", secs_to_dt(1577836800); "date_only_2020")]
 #[test_case("1970-01-01", secs_to_dt(0); "epoch_start")]
 fn test_datetime_specific_dates(date_str: &str, expected_dt: OffsetDateTime) {
-    let query = format!(
-        "connector.table | where field1 == datetime(\"{}\")",
-        date_str
-    );
+    let query = format!("connector.table | where field1 == datetime({})", date_str);
     let result = parse_unwrap!(&query);
 
     match &result[1] {
@@ -741,7 +738,7 @@ fn test_datetime_specific_dates(date_str: &str, expected_dt: OffsetDateTime) {
 
 #[test]
 fn test_datetime_with_time() {
-    let query = "connector.table | where field1 == datetime(\"2020-01-01 12:30:45\")";
+    let query = "connector.table | where field1 == datetime(2020-01-01 12:30:45)";
     let result = parse_unwrap!(query);
 
     match &result[1] {
@@ -765,7 +762,7 @@ fn test_datetime_with_time() {
 
 #[test]
 fn test_datetime_with_milliseconds() {
-    let query = "connector.table | where field1 == datetime(\"2020-01-01 00:00:00.500\")";
+    let query = "connector.table | where field1 == datetime(2020-01-01 00:00:00.500)";
     let result = parse_unwrap!(query);
 
     match &result[1] {
@@ -784,12 +781,12 @@ fn test_datetime_with_milliseconds() {
     }
 }
 
-#[test_case("datetime(\"invalid\")"; "invalid_format")]
-#[test_case("datetime(\"2020-13-01\")"; "invalid_month")]
-#[test_case("datetime(\"2020-01-32\")"; "invalid_day")]
-#[test_case("datetime(\"2020-01-01 25:00:00\")"; "invalid_hour")]
-#[test_case("datetime(\"2020-01-01 12:60:00\")"; "invalid_minute")]
-#[test_case("datetime(\"2020-01-01 12:30:61\")"; "invalid_second")]
+#[test_case("datetime(invalid)"; "invalid_format")]
+#[test_case("datetime(2020-13-01)"; "invalid_month")]
+#[test_case("datetime(2020-01-32)"; "invalid_day")]
+#[test_case("datetime(2020-01-01 25:00:00)"; "invalid_hour")]
+#[test_case("datetime(2020-01-01 12:60:00)"; "invalid_minute")]
+#[test_case("datetime(2020-01-01 12:30:61)"; "invalid_second")]
 fn test_datetime_invalid_formats(datetime_expr: &str) {
     let query = format!("connector.table | where field1 == {}", datetime_expr);
     let result = parse(&query);
@@ -803,7 +800,7 @@ fn test_datetime_invalid_formats(datetime_expr: &str) {
 fn test_datetime_in_complex_expression() {
     let query = r#"
             connector.table 
-            | where timestamp > datetime("2020-01-01") and timestamp < datetime()
+            | where timestamp > datetime(2020-01-01) and timestamp < datetime()
             | project timestamp, age = datetime() - timestamp
         "#;
     let result = parse_unwrap!(query);

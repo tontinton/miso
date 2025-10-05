@@ -18,11 +18,7 @@ use miso_workflow_types::{
     value::Value,
 };
 use serde::Serialize;
-use time::{
-    OffsetDateTime, PrimitiveDateTime, UtcOffset,
-    format_description::well_known::{Iso8601, Rfc2822, Rfc3339},
-    macros::format_description,
-};
+use time::OffsetDateTime;
 
 use crate::lexer::{StringValue, Token};
 
@@ -236,48 +232,11 @@ where
         .boxed()
 }
 
-fn parse_datetime(date_str: &str) -> Result<OffsetDateTime, String> {
-    if let Ok(dt) = PrimitiveDateTime::parse(
-        date_str,
-        &format_description!("[year]-[month]-[day] [hour]:[minute]:[second].[subsecond]"),
-    ) {
-        return Ok(dt.assume_utc());
-    }
-
-    if let Ok(dt) = PrimitiveDateTime::parse(
-        date_str,
-        &format_description!("[year]-[month]-[day] [hour]:[minute]:[second]"),
-    ) {
-        return Ok(dt.assume_utc());
-    }
-
-    if let Ok(date) = time::Date::parse(date_str, &format_description!("[year]-[month]-[day]")) {
-        let dt = date
-            .with_hms(0, 0, 0)
-            .map_err(|_| "invalid date".to_string())?;
-        return Ok(dt.assume_offset(UtcOffset::UTC));
-    }
-
-    if let Ok(dt) = OffsetDateTime::parse(date_str, &Iso8601::PARSING) {
-        return Ok(dt);
-    }
-    if let Ok(dt) = OffsetDateTime::parse(date_str, &Rfc2822) {
-        return Ok(dt);
-    }
-    if let Ok(dt) = OffsetDateTime::parse(date_str, &Rfc3339) {
-        return Ok(dt);
-    }
-
-    Err("invalid datetime format".to_string())
-}
-
 fn now_expr() -> Expr {
     Expr::Literal(json!(OffsetDateTime::now_utc()))
 }
 
-fn datetime_parser<'a, I>(
-    string_literal: impl Parser<'a, I, String, extra::Err<Rich<'a, Token>>> + Clone + 'a,
-) -> impl Parser<'a, I, Expr, extra::Err<Rich<'a, Token>>> + Clone
+fn datetime_parser<'a, I>() -> impl Parser<'a, I, Expr, extra::Err<Rich<'a, Token>>> + Clone
 where
     I: ValueInput<'a, Token = Token, Span = SimpleSpan>,
 {
@@ -286,45 +245,30 @@ where
             // datetime() - current time.
             just(Token::LParen)
                 .ignore_then(just(Token::RParen))
-                .map(|_| {
-                    now_expr()
-                })
+                .map(|_| now_expr())
                 .or(
                     // datetime(null) - null value.
                     just(Token::LParen)
                         .ignore_then(just(Token::Null))
                         .then_ignore(just(Token::RParen))
-                        .map(|_| Expr::Literal(Value::Null))
+                        .map(|_| Expr::Literal(Value::Null)),
                 )
                 .or(
                     // datetime(year.month.day hour:minute:second.milliseconds)
                     // or datetime(year.month.day).
                     just(Token::LParen)
-                        .ignore_then(string_literal)
+                        .ignore_then(
+                            select! { Token::DatetimeLiteral(x) => Expr::Literal(Value::from(x)) },
+                        )
                         .then_ignore(just(Token::RParen))
-                        .validate(|date_str, e, emitter| {
-                            match parse_datetime(&date_str) {
-                                Ok(datetime) => Expr::Literal(json!(datetime)),
-                                Err(err) => {
-                                    emitter.emit(Rich::custom(
-                                        e.span(),
-                                        format!(
-                                            "Invalid datetime format: {}. Expected any of: YYYY-MM-DD [HH:MM:SS[.mmm]], ISO 8601, RFC 2822, RFC 3339",
-                                            err
-                                        ),
-                                    ));
-                                    Expr::Literal(Value::Null)
-                                }
-                            }
-                        })
-                        .boxed()
+                        .boxed(),
                 )
                 .recover_with(via_parser(nested_delimiters(
                     Token::LParen,
                     Token::RParen,
                     [(Token::LBracket, Token::RBracket)],
                     |_| Expr::Literal(Value::Null),
-                )))
+                ))),
         )
         .labelled("datetime")
         .boxed();
@@ -342,7 +286,7 @@ where
         .labelled("now")
         .boxed();
 
-    datetime.or(now).boxed()
+    datetime.or(now).labelled("datetime literal").boxed()
 }
 
 fn expr_parser<'a, I>() -> impl Parser<'a, I, Expr, extra::Err<Rich<'a, Token>>> + Clone
@@ -366,7 +310,7 @@ where
         .labelled("string literal")
         .boxed();
 
-        let datetime = datetime_parser(string_literal.clone());
+        let datetime = datetime_parser();
 
         let literal = select! {
             Token::Integer(x) => {

@@ -1,5 +1,9 @@
 use logos::Logos;
-use time::Duration;
+use time::{
+    Duration, OffsetDateTime, PrimitiveDateTime, UtcOffset,
+    format_description::well_known::{Iso8601, Rfc2822, Rfc3339},
+    macros::format_description,
+};
 
 #[derive(Logos, Debug, Clone, PartialEq)]
 #[logos(skip r"[ \t\r\n\f]+")]
@@ -169,6 +173,23 @@ pub enum Token {
     #[token("True", |_| true)]
     #[token("TRUE", |_| true)]
     Bool(bool),
+
+    #[regex(
+        r"[0-9]{4}-[0-9]{2}-[0-9]{2}(\s+[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?)?",
+        parse_datetime_literal,
+        priority = 3
+    )]
+    #[regex(
+        r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?(Z|[+-][0-9]{2}:[0-9]{2})",
+        parse_datetime_literal,
+        priority = 3
+    )]
+    #[regex(
+        r"(Mon|Tue|Wed|Thu|Fri|Sat|Sun),\s+[0-9]{1,2}\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+[0-9]{4}\s+[0-9]{2}:[0-9]{2}:[0-9]{2}\s+[A-Z]{3,4}",
+        parse_datetime_literal,
+        priority = 3
+    )]
+    DatetimeLiteral(OffsetDateTime),
 
     #[regex(
         r#"[hH]?"([^"]|\\['"\\abfnrtuUxv]|\\[0-3][0-7][0-7]|\\[0-7][0-7]?)*""#,
@@ -428,4 +449,40 @@ fn parse_timespan(lex: &mut logos::Lexer<Token>) -> Option<Duration> {
     };
 
     Some(duration)
+}
+
+fn parse_datetime_literal(lex: &mut logos::Lexer<Token>) -> Option<OffsetDateTime> {
+    let date_str = lex.slice();
+
+    if let Ok(dt) = PrimitiveDateTime::parse(
+        date_str,
+        &format_description!("[year]-[month]-[day] [hour]:[minute]:[second].[subsecond]"),
+    ) {
+        return Some(dt.assume_utc());
+    }
+
+    if let Ok(dt) = PrimitiveDateTime::parse(
+        date_str,
+        &format_description!("[year]-[month]-[day] [hour]:[minute]:[second]"),
+    ) {
+        return Some(dt.assume_utc());
+    }
+
+    if let Ok(date) = time::Date::parse(date_str, &format_description!("[year]-[month]-[day]"))
+        && let Ok(dt) = date.with_hms(0, 0, 0)
+    {
+        return Some(dt.assume_offset(UtcOffset::UTC));
+    }
+
+    if let Ok(dt) = OffsetDateTime::parse(date_str, &Iso8601::PARSING) {
+        return Some(dt);
+    }
+    if let Ok(dt) = OffsetDateTime::parse(date_str, &Rfc2822) {
+        return Some(dt);
+    }
+    if let Ok(dt) = OffsetDateTime::parse(date_str, &Rfc3339) {
+        return Some(dt);
+    }
+
+    None
 }

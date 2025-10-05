@@ -463,7 +463,7 @@ async fn predicate_pushdown_same_results(
     "filter_eq_and_exists"
 )]
 #[test_case(
-    r#"test.stack | where @time == datetime("2008-07-31 22:17:57")"#,
+    r#"test.stack | where @time == datetime(2008-07-31 22:17:57)"#,
     r#"test.stack"#,
     1;
     "filter_eq_timestamp"
