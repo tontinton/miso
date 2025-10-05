@@ -19,7 +19,7 @@ impl RenameIter {
 
     fn rename(&self, mut log: Log) -> Log {
         for (from, to) in &self.renames {
-            let _removed = rename_field(&mut log, from, to);
+            let _renamed = rename_field(&mut log, from, to);
         }
         log
     }
