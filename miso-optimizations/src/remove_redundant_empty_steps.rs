@@ -16,6 +16,7 @@ impl Optimization for RemoveRedundantEmptySteps {
             WorkflowStep::Rename(v) if v.is_empty() => {}
             WorkflowStep::Extend(v) if v.is_empty() => {}
             WorkflowStep::Sort(v) if v.is_empty() => {}
+            WorkflowStep::Expand(v) if v.is_empty() => {}
             _ => return None,
         }
         Some(vec![])
