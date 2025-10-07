@@ -4,6 +4,7 @@ use hashbrown::{HashMap, HashSet};
 use miso_workflow::WorkflowStep;
 use miso_workflow_types::{
     expr::Expr,
+    expr_visitor::ExprTransformer,
     field::Field,
     project::ProjectField,
     sort::Sort,
@@ -32,7 +33,7 @@ pub struct ProjectPropagationWithEnd;
 
 impl Optimization for ProjectPropagationWithoutEnd {
     fn pattern(&self) -> Pattern {
-        pattern!([Project Extend Rename] ([Filter Sort TopN Limit Extend Rename]+))
+        pattern!([Project Extend Rename] ([Filter Sort TopN Limit Extend Rename Expand]+))
     }
 
     fn apply(&self, steps: &[WorkflowStep], groups: &[Group]) -> Option<Vec<WorkflowStep>> {
@@ -42,7 +43,7 @@ impl Optimization for ProjectPropagationWithoutEnd {
 
 impl Optimization for ProjectPropagationWithEnd {
     fn pattern(&self) -> Pattern {
-        pattern!([Project Extend Rename] ([Filter Sort TopN Limit Extend Rename]*?) [Project Summarize MuxSummarize])
+        pattern!([Project Extend Rename] ([Filter Sort TopN Limit Extend Rename Expand]*?) [Project Summarize MuxSummarize])
     }
 
     fn apply(&self, steps: &[WorkflowStep], groups: &[Group]) -> Option<Vec<WorkflowStep>> {
@@ -152,6 +153,14 @@ fn apply(
                     WorkflowStep::Extend(new_fields)
                 }
 
+                WorkflowStep::Expand(fields) => {
+                    let new_fields = rewrite_expand(fields, &renames, &literals);
+                    if new_fields.is_empty() {
+                        continue;
+                    }
+                    WorkflowStep::Expand(new_fields)
+                }
+
                 _ => unreachable!("not in middle pattern"),
             };
 
@@ -231,6 +240,24 @@ fn rewrite_project_fields(
         .map(|pf| ProjectField {
             from: expr_subst.substitute(pf.from),
             to: pf.to,
+        })
+        .collect()
+}
+
+fn rewrite_expand(
+    fields: Vec<Field>,
+    renames: &HashMap<Field, Field>,
+    literals: &HashMap<Field, Value>,
+) -> Vec<Field> {
+    let expr_subst = ExprSubstitute::new(renames, literals);
+    fields
+        .into_iter()
+        .filter_map(|f| {
+            if let Expr::Field(field) = expr_subst.transform_field(f) {
+                Some(field)
+            } else {
+                None
+            }
         })
         .collect()
 }
