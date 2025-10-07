@@ -1099,3 +1099,55 @@ async fn union_count() -> Result<()> {
         .call()
         .await
 }
+
+#[tokio::test]
+async fn expand_array() -> Result<()> {
+    check(
+        r#"test.c | mv-expand b"#,
+        r#"[{"a": 1, "b": [10, 20]}, {"a": 2, "b": ["a", "b"]}]"#,
+        r#"[
+            {"a": 1, "b": 10},
+            {"a": 1, "b": 20},
+            {"a": 2, "b": "a"},
+            {"a": 2, "b": "b"}
+        ]"#,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn expand_zip() -> Result<()> {
+    check(
+        r#"test.c | mv-expand b, c"#,
+        r#"[{"a": 1, "b": ["x", "y"], "c": [5, 4, 3]}]"#,
+        r#"[
+            {"a": 1, "b": "x", "c": 5},
+            {"a": 1, "b": "y", "c": 4},
+            {"a": 1, "b": null, "c": 3}
+        ]"#,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn expand_deeply_nested_path() -> Result<()> {
+    check(
+        r#"test.c | mv-expand a.b.c.d.e"#,
+        r#"[{"a": {"b": {"c": {"d": {"e": [1, 2]}}}}}]"#,
+        r#"[
+            {"a": {"b": {"c": {"d": {"e": 1}}}}},
+            {"a": {"b": {"c": {"d": {"e": 2}}}}}
+        ]"#,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn expand_non_existent_field() -> Result<()> {
+    check(
+        r#"test.c | mv-expand missing"#,
+        r#"[{"id": 1, "name": "test"}]"#,
+        r#"[{"id": 1, "name": "test"}]"#,
+    )
+    .await
+}
