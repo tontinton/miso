@@ -547,6 +547,18 @@ where
         .labelled("project-rename")
         .boxed();
 
+    let mv_expand_exprs = field
+        .clone()
+        .separated_by(just(Token::Comma))
+        .at_least(1)
+        .collect::<Vec<_>>();
+
+    let mv_expand_step = just(Token::MvExpand)
+        .ignore_then(mv_expand_exprs)
+        .map(QueryStep::Expand)
+        .labelled("mv-expand")
+        .boxed();
+
     let limit_int = select! { Token::Integer(x) => x }
         .validate(|x, e, emitter| {
             if x >= 0 && x <= u32::MAX as i64 {
@@ -776,6 +788,7 @@ where
         .or(project_step)
         .or(extend_step)
         .or(project_rename_step)
+        .or(mv_expand_step)
         .or(limit_step)
         .or(sort_step)
         .or(top_step)
