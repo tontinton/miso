@@ -118,6 +118,8 @@ pub enum Token {
     Order,
     #[token("top")]
     Top,
+    #[token("mv-expand")]
+    MvExpand,
     #[token("summarize")]
     Summarize,
     #[token("distinct")]
