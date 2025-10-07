@@ -97,6 +97,10 @@ impl fmt::Display for DisplayableWorkflowStep<'_> {
                 write!(f, "{pre}Rename")?;
                 fmt_rename(f, renames)
             }
+            WorkflowStep::Expand(fields) => {
+                write!(f, "{pre}Expand")?;
+                fmt_expand(f, fields)
+            }
             WorkflowStep::Limit(limit) => write!(f, "{pre}Limit({limit})"),
             WorkflowStep::MuxLimit(limit) => write!(f, "{pre}MuxLimit({limit})"),
             WorkflowStep::Sort(sorts) => {
@@ -171,6 +175,17 @@ fn fmt_rename(f: &mut fmt::Formatter<'_>, renames: &[(Field, Field)]) -> fmt::Re
             write!(f, ", ")?;
         }
         write!(f, "{to}={from}")?;
+    }
+    write!(f, ")")
+}
+
+fn fmt_expand(f: &mut fmt::Formatter<'_>, fields: &[Field]) -> fmt::Result {
+    write!(f, "(")?;
+    for (i, field) in fields.iter().enumerate() {
+        if i > 0 {
+            write!(f, ", ")?;
+        }
+        write!(f, "{field}")?;
     }
     write!(f, ")")
 }
