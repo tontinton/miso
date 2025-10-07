@@ -488,6 +488,8 @@ async fn predicate_pushdown_same_results(
     test.stack
     | summarize minQuestionId=min(questionId),
                 maxQuestionId=max(questionId),
+                avgQuestionId=max(questionId),
+                cifQuestionId=countif(exists(questionId)),
                 sumQuestionId=sum(questionId),
                 minTimestamp=min(@time),
                 maxTimestamp=max(@time),
@@ -503,6 +505,8 @@ async fn predicate_pushdown_same_results(
     test.stack
     | summarize minQuestionId=min(questionId),
                 maxQuestionId=max(questionId),
+                avgQuestionId=max(questionId),
+                cifQuestionId=countif(exists(questionId)),
                 sumQuestionId=sum(questionId),
                 c=count()
       by bin(@time, 1h)
