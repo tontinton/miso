@@ -9,15 +9,10 @@ use merge_filters_into_and_filter::MergeFiltersIntoAndFilter;
 use mux_into_union::MuxIntoUnion;
 use pattern::{Group, Pattern};
 use project_propagation::{ProjectPropagationWithEnd, ProjectPropagationWithoutEnd};
-use push_count_into_scan::PushCountIntoScan;
-use push_either_project_extend_rename_into_scan::PushEitherProjectExtendRenameIntoScan;
-use push_filter_into_scan::PushFilterIntoScan;
+use push_into_scan::PushIntoScan;
 use push_limit_into_limit::PushLimitIntoLimit;
-use push_limit_into_scan::PushLimitIntoScan;
 use push_limit_into_topn::PushLimitIntoTopN;
 use push_steps_into_union::PushStepsIntoUnion;
-use push_summarize_into_scan::PushSummarizeIntoScan;
-use push_topn_into_scan::PushTopNIntoScan;
 use push_union_into_scan::PushUnionIntoScan;
 use remove_redundant_empty_steps::RemoveRedundantEmptySteps;
 use remove_redundant_sorts_before_count::RemoveRedundantSortsBeforeCount;
@@ -34,15 +29,10 @@ mod merge_filters_into_and_filter;
 mod mux_into_union;
 mod pattern;
 mod project_propagation;
-mod push_count_into_scan;
-mod push_either_project_extend_rename_into_scan;
-mod push_filter_into_scan;
+mod push_into_scan;
 mod push_limit_into_limit;
-mod push_limit_into_scan;
 mod push_limit_into_topn;
 mod push_steps_into_union;
-mod push_summarize_into_scan;
-mod push_topn_into_scan;
 mod push_union_into_scan;
 mod remove_redundant_empty_steps;
 mod remove_redundant_sorts_before_count;
@@ -117,26 +107,20 @@ impl Optimizer {
             ],
             // Predicate pushdowns + optimizations that help predicate pushdowns.
             vec![
+                opt!(PushIntoScan),
                 // Project & Extend & Rename.
-                opt!(PushEitherProjectExtendRenameIntoScan),
                 opt!(ProjectPropagationWithEnd),
                 opt!(ProjectPropagationWithoutEnd),
                 opt!(RemoveRedundantEmptySteps),
                 // Filter.
                 opt!(ReorderFilterBeforeSort),
-                opt!(PushFilterIntoScan),
                 // Limit.
                 opt!(PushLimitIntoLimit),
                 opt!(ConvertSortLimitToTopN),
                 opt!(PushLimitIntoTopN),
-                opt!(PushLimitIntoScan),
-                opt!(PushTopNIntoScan),
                 // Count.
-                opt!(PushCountIntoScan),
                 opt!(RemoveRedundantSortsBeforeCount),
                 opt!(RemoveRedundantStepsBeforeCount),
-                // Summarize.
-                opt!(PushSummarizeIntoScan),
                 // Union.
                 opt!(PushUnionIntoScan),
                 opt!(PushStepsIntoUnion),
