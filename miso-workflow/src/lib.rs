@@ -23,6 +23,7 @@ use tracing::{debug, info, instrument};
 
 use crate::{
     count::CountIter,
+    expand::ExpandIter,
     filter::FilterIter,
     join::{DynamicFilterTx, join_rx},
     limit::LimitIter,
@@ -41,6 +42,7 @@ use self::{cancel_iter::CancelIter, send_once::SendOnce};
 mod cancel_iter;
 mod count;
 pub mod display;
+mod expand;
 pub mod filter;
 pub mod interpreter;
 pub mod join;
@@ -83,6 +85,9 @@ pub enum WorkflowStep {
     /// Rename some of the fields in the input.
     /// Basically the same as Project, but keeps unspecified fields unaltered and can only rename.
     Rename(Vec<(/*from=*/ Field, /*to=*/ Field)>),
+
+    /// Expand arrays / objects into multiple records.
+    Expand(Vec<Field>),
 
     /// Limit to X amount of records.
     Limit(u32),
@@ -216,6 +221,7 @@ impl WorkflowStep {
                 Box::new(ProjectIter::new_extend(rx.into_iter(), fields))
             }
             WorkflowStep::Rename(renames) => Box::new(RenameIter::new(rx.into_iter(), renames)),
+            WorkflowStep::Expand(fields) => Box::new(ExpandIter::new(rx.into_iter(), fields)),
             WorkflowStep::Limit(limit) | WorkflowStep::MuxLimit(limit) => {
                 Box::new(LimitIter::new(rx.into_iter(), limit))
             }
@@ -310,6 +316,7 @@ impl WorkflowStep {
             | Self::Project(..)
             | Self::Extend(..)
             | Self::Rename(..)
+            | Self::Expand(..)
             | Self::Limit(..)
             | Self::MuxLimit(..)
             | Self::TopN(..)

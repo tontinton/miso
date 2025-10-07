@@ -542,7 +542,7 @@ pub fn rename_field(log: &mut Log, from: &Field, to: &Field) -> bool {
     true
 }
 
-fn extract_field(log: &mut Log, field: &Field) -> Option<Value> {
+pub fn extract_field(log: &mut Log, field: &Field) -> Option<Value> {
     let mut obj = log;
     for key in &field[..field.len() - 1] {
         obj = match follow_key_mut(obj, key) {
