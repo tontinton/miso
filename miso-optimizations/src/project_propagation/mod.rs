@@ -292,6 +292,7 @@ fn rewrite_summarize(
         summarize_output_fields.extend(e.fields());
     }
 
+    let expr_subst = ExprSubstitute::new(renames, literals);
     let mut new_aggs = HashMap::new();
 
     for (k, agg) in sum.aggs {
@@ -300,6 +301,9 @@ fn rewrite_summarize(
         match &agg {
             Aggregation::Count => {
                 new_aggs.insert(k, agg);
+            }
+            Aggregation::Countif(e) => {
+                new_aggs.insert(k, Aggregation::Countif(expr_subst.substitute(e.clone())));
             }
             Aggregation::DCount(f) => {
                 if literals.contains_key(f) {

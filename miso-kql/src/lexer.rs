@@ -142,6 +142,8 @@ pub enum Token {
     Union,
     #[token("count")]
     Count,
+    #[token("countif")]
+    Countif,
     #[token("dcount")]
     DCount,
     #[token("sum")]

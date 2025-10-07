@@ -12,6 +12,7 @@ pub const MUX_AVG_COUNT_SUFFIX: &str = "_num";
 #[serde(rename_all = "snake_case")]
 pub enum Aggregation {
     Count,
+    Countif(Expr),
     #[serde(rename = "dcount")]
     DCount(Field),
     Sum(Field),
@@ -24,6 +25,7 @@ impl fmt::Display for Aggregation {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Aggregation::Count => write!(f, "Count"),
+            Aggregation::Countif(x) => write!(f, "Countif({x})"),
             Aggregation::DCount(x) => write!(f, "DCount({x})"),
             Aggregation::Sum(x) => write!(f, "Sum({x})"),
             Aggregation::Avg(x) => write!(f, "Avg({x})"),
@@ -38,6 +40,7 @@ impl Aggregation {
     pub fn convert_to_mux(self, field: &Field) -> Self {
         match self {
             Aggregation::Count => Aggregation::Sum(field.clone()),
+            Aggregation::Countif(..) => Aggregation::Sum(field.clone()),
             Aggregation::Sum(..) => Aggregation::Sum(field.clone()),
             Aggregation::Avg(..) => Aggregation::Avg(field.clone()),
             Aggregation::Min(..) => Aggregation::Min(field.clone()),
@@ -79,6 +82,7 @@ impl Summarize {
         for (field, agg) in self.aggs {
             match agg {
                 Aggregation::Count
+                | Aggregation::Countif(..)
                 | Aggregation::Sum(..)
                 | Aggregation::Min(..)
                 | Aggregation::Max(..) => {
@@ -93,9 +97,12 @@ impl Summarize {
                 Aggregation::Avg(input_field) => {
                     aggs.insert(
                         field.clone().with_suffix(MUX_AVG_SUM_SUFFIX),
-                        Aggregation::Sum(input_field),
+                        Aggregation::Sum(input_field.clone()),
                     );
-                    aggs.insert(field.with_suffix(MUX_AVG_COUNT_SUFFIX), Aggregation::Count);
+                    aggs.insert(
+                        field.with_suffix(MUX_AVG_COUNT_SUFFIX),
+                        Aggregation::Countif(Expr::Exists(input_field)),
+                    );
                 }
             }
         }

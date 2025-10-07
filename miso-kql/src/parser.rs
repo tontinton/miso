@@ -172,6 +172,7 @@ where
         Token::On => "on".to_string(),
         Token::Union => "union".to_string(),
         Token::Count => "count".to_string(),
+        Token::Countif => "countif".to_string(),
         Token::DCount => "dcount".to_string(),
         Token::Sum => "sum".to_string(),
         Token::Min => "min".to_string(),
@@ -632,6 +633,18 @@ where
         .or(agg_single_param!(field; Avg => Avg))
         .or(agg_single_param!(field; Min => Min))
         .or(agg_single_param!(field; Max => Max))
+        .or(just(Token::Countif)
+            .ignore_then(
+                expr.clone()
+                    .delimited_by(just(Token::LParen), just(Token::RParen))
+                    .recover_with(via_parser(nested_delimiters(
+                        Token::LParen,
+                        Token::RParen,
+                        [(Token::LBracket, Token::RBracket)],
+                        |_| Expr::Literal(Value::Null),
+                    ))),
+            )
+            .map(Aggregation::Countif))
         .labelled("summarize aggregation")
         .boxed();
 

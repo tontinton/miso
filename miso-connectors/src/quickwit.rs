@@ -1272,6 +1272,9 @@ impl Connector for QuickwitConnector {
                 Aggregation::Max(agg_field) => agg_json("max", agg_field, &handle.timestamp_field),
                 Aggregation::Sum(agg_field) => agg_json("sum", agg_field, &handle.timestamp_field),
                 Aggregation::Avg(agg_field) => agg_json("avg", agg_field, &handle.timestamp_field),
+                Aggregation::Countif(Expr::Exists(agg_field)) => {
+                    agg_json("value_count", agg_field, &handle.timestamp_field)
+                }
                 Aggregation::Count => {
                     // Count is always returned in doc_count.
                     count_fields.push(output_field.to_string());
@@ -1280,6 +1283,7 @@ impl Connector for QuickwitConnector {
 
                 // Currently unsupported.
                 Aggregation::DCount(..) => return None,
+                Aggregation::Countif(..) => return None,
             };
 
             if is_timestamp {

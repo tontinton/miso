@@ -35,6 +35,37 @@ impl Aggregate for Count {
     }
 }
 
+struct Countif {
+    expr: Expr,
+    value: u64,
+}
+
+impl Countif {
+    fn new(expr: Expr) -> Self {
+        Self { expr, value: 0 }
+    }
+}
+
+impl Aggregate for Countif {
+    fn input(&mut self, log: &Log) {
+        let interpreter = LogInterpreter { log };
+        let keep = match interpreter.eval(&self.expr) {
+            Ok(v) => v.to_bool(),
+            Err(e) => {
+                warn!("Countif failed: {e}");
+                false
+            }
+        };
+        if keep {
+            self.value += 1;
+        }
+    }
+
+    fn value(&self) -> Value {
+        Value::from(self.value)
+    }
+}
+
 struct DCount {
     field: Field,
     seen: HashSet<Value>,
@@ -222,6 +253,7 @@ impl Aggregate for MinMax {
 fn create_aggregate(aggregation: Aggregation, is_mux: bool) -> Box<dyn Aggregate> {
     match aggregation {
         Aggregation::Count => Box::new(Count::default()),
+        Aggregation::Countif(expr) => Box::new(Countif::new(expr)),
         Aggregation::DCount(field) => Box::new(DCount::new(field)),
         Aggregation::Sum(field) => Box::new(Sum::new(field)),
         Aggregation::Avg(field) if is_mux => Box::new(MuxAvg::new(field)),
