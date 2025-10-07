@@ -543,7 +543,6 @@ pub fn rename_field(log: &mut Log, from: &Field, to: &Field) -> bool {
 }
 
 fn extract_field(log: &mut Log, field: &Field) -> Option<Value> {
-    // Navigate to the parent object
     let mut obj = log;
     for key in &field[..field.len() - 1] {
         obj = match follow_key_mut(obj, key) {
@@ -553,28 +552,16 @@ fn extract_field(log: &mut Log, field: &Field) -> Option<Value> {
     }
 
     let last = field.last().unwrap();
-
-    // Extract from the final location
     if last.arr_indices.is_empty() {
-        // Simple key removal
-        obj.remove(&last.name)
-    } else {
-        // Navigate through array indices except the last one
-        let mut val = obj.get_mut(&last.name)?;
-        for &idx in &last.arr_indices[..last.arr_indices.len() - 1] {
-            val = val.as_array_mut()?.get_mut(idx)?;
-        }
-
-        // Extract from the final array
-        let final_idx = *last.arr_indices.last()?;
-        if let Some(arr) = val.as_array_mut() {
-            if final_idx < arr.len() {
-                Some(arr.remove(final_idx))
-            } else {
-                None
-            }
-        } else {
-            None
-        }
+        return obj.remove(&last.name);
     }
+
+    let mut val = obj.get_mut(&last.name)?;
+    for &idx in &last.arr_indices[..last.arr_indices.len() - 1] {
+        val = val.as_array_mut()?.get_mut(idx)?;
+    }
+
+    let final_idx = *last.arr_indices.last()?;
+    let arr = val.as_array_mut()?;
+    (final_idx < arr.len()).then(|| arr.remove(final_idx))
 }
