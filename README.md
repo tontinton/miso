@@ -19,7 +19,10 @@ curl -N -H 'Content-Type: application/json' localhost:8080/query -d '{
     localqw.hdfs1
     | union (localqw.hdfs2)
     | where @time > now() - 1d
-    | summarize minTid = min(tenant_id), maxTid = max(tenant_id), count = count()
+    | summarize
+        minTid = min(tenant_id),
+        maxTid = max(tenant_id),
+        count = countif(severity == 100)
       by severity_text
     | join (
         localqw.stackoverflow
