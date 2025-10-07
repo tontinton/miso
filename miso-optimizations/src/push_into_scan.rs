@@ -9,7 +9,7 @@ pub struct PushIntoScan;
 
 impl Optimization for PushIntoScan {
     fn pattern(&self) -> Pattern {
-        pattern!(Scan [Project Extend Rename Limit TopN Filter Summarize Count])
+        pattern!(Scan [Project Extend Rename Expand Limit TopN Filter Summarize Count])
     }
 
     fn apply(&self, steps: &[WorkflowStep], _groups: &[Group]) -> Option<Vec<WorkflowStep>> {
@@ -38,6 +38,13 @@ impl Optimization for PushIntoScan {
                 .connector
                 .apply_rename(
                     &replacer.transform_rename(renames.to_vec()),
+                    scan.handle.as_ref(),
+                )?
+                .into(),
+            WorkflowStep::Expand(fields) => scan
+                .connector
+                .apply_expand(
+                    &replacer.transform_expand(fields.to_vec()),
                     scan.handle.as_ref(),
                 )?
                 .into(),

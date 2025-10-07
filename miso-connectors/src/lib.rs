@@ -187,6 +187,16 @@ pub trait Connector: Debug + Send + Sync {
         None
     }
 
+    /// Returns the handle with expand pushdown.
+    /// None means it can't predicate pushdown the provided expand.
+    fn apply_expand(
+        &self,
+        _fields: &[Field],
+        _handle: &dyn QueryHandle,
+    ) -> Option<Box<dyn QueryHandle>> {
+        None
+    }
+
     /// Returns the handle with limit to predicate pushdown.
     /// None means it can't predicate pushdown limit.
     fn apply_limit(&self, _max: u32, _handle: &dyn QueryHandle) -> Option<Box<dyn QueryHandle>> {

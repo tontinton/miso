@@ -50,6 +50,10 @@ impl FieldReplacer<'_> {
             .collect()
     }
 
+    pub fn transform_expand(&self, fields: Vec<Field>) -> Vec<Field> {
+        fields.into_iter().map(|f| self.replace(f)).collect()
+    }
+
     pub fn transform_sort(&self, sorts: Vec<Sort>) -> Vec<Sort> {
         sorts
             .into_iter()
