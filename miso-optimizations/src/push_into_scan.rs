@@ -1,12 +1,13 @@
 use miso_workflow::WorkflowStep;
+use miso_workflow_types::expr_visitor::ExprTransformer;
 
 use crate::{field_replacer::FieldReplacer, pattern};
 
 use super::{Group, Optimization, Pattern};
 
-pub struct PushEitherProjectExtendRenameIntoScan;
+pub struct PushIntoScan;
 
-impl Optimization for PushEitherProjectExtendRenameIntoScan {
+impl Optimization for PushIntoScan {
     fn pattern(&self) -> Pattern {
         pattern!(Scan [Project Extend Rename])
     }
@@ -45,6 +46,40 @@ impl Optimization for PushEitherProjectExtendRenameIntoScan {
                         scan.handle.as_ref(),
                     )?
                     .into();
+            }
+            WorkflowStep::Limit(max) => {
+                scan.handle = scan
+                    .connector
+                    .apply_limit(*max, scan.handle.as_ref())?
+                    .into();
+            }
+            WorkflowStep::TopN(sorts, max) => {
+                scan.handle = scan
+                    .connector
+                    .apply_topn(
+                        &replacer.transform_sort(sorts.to_vec()),
+                        *max,
+                        scan.handle.as_ref(),
+                    )?
+                    .into();
+            }
+            WorkflowStep::Filter(ast) => {
+                scan.handle = scan
+                    .connector
+                    .apply_filter(&replacer.transform(ast.clone()), scan.handle.as_ref())?
+                    .into();
+            }
+            WorkflowStep::Summarize(summarize) => {
+                scan.handle = scan
+                    .connector
+                    .apply_summarize(
+                        &replacer.transform_summarize(summarize.clone()),
+                        scan.handle.as_ref(),
+                    )?
+                    .into();
+            }
+            WorkflowStep::Count => {
+                scan.handle = scan.connector.apply_count(scan.handle.as_ref())?.into();
             }
             _ => return None,
         }
