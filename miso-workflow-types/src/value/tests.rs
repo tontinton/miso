@@ -19,7 +19,7 @@ fn test_integer() {
 
 #[test]
 fn test_float() {
-    assert_eq!(json!(3.14), Value::Float(3.14));
+    assert_eq!(json!(3.17), Value::Float(3.17));
     assert_eq!(json!(-2.5), Value::Float(-2.5));
 }
 
