@@ -241,13 +241,14 @@ impl WorkflowStep {
             }
             WorkflowStep::MuxSummarize(config) if partial_stream.is_some() => {
                 Box::new(PartialStreamIter::new(
-                    create_summarize_iter(rx.into_iter(), config),
+                    create_summarize_iter(rx.into_iter(), config, true),
                     partial_stream.unwrap(),
                 ))
             }
-            WorkflowStep::Summarize(config) | WorkflowStep::MuxSummarize(config) => {
-                create_summarize_iter(rx.into_iter(), config)
+            WorkflowStep::MuxSummarize(config) => {
+                create_summarize_iter(rx.into_iter(), config, true)
             }
+            WorkflowStep::Summarize(config) => create_summarize_iter(rx.into_iter(), config, false),
             WorkflowStep::Join(join, workflow) if workflow.steps.is_empty() => {
                 if matches!(join.type_, JoinType::Left | JoinType::Outer) {
                     rx.into_iter()

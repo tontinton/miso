@@ -76,6 +76,7 @@ impl FieldReplacer<'_> {
                         match agg {
                             Aggregation::Count => Aggregation::Count,
                             Aggregation::Sum(f) => Aggregation::Sum(self.replace(f)),
+                            Aggregation::Avg(f) => Aggregation::Avg(self.replace(f)),
                             Aggregation::Min(f) => Aggregation::Min(self.replace(f)),
                             Aggregation::Max(f) => Aggregation::Max(self.replace(f)),
                             Aggregation::DCount(f) => Aggregation::DCount(self.replace(f)),

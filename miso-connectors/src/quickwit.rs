@@ -1271,6 +1271,7 @@ impl Connector for QuickwitConnector {
                 Aggregation::Min(agg_field) => agg_json("min", agg_field, &handle.timestamp_field),
                 Aggregation::Max(agg_field) => agg_json("max", agg_field, &handle.timestamp_field),
                 Aggregation::Sum(agg_field) => agg_json("sum", agg_field, &handle.timestamp_field),
+                Aggregation::Avg(agg_field) => agg_json("avg", agg_field, &handle.timestamp_field),
                 Aggregation::Count => {
                     // Count is always returned in doc_count.
                     count_fields.push(output_field.to_string());

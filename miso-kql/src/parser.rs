@@ -629,6 +629,7 @@ where
     let summarize_agg = agg_zero_param!(Count => Count)
         .or(agg_single_param!(field; DCount => DCount))
         .or(agg_single_param!(field; Sum => Sum))
+        .or(agg_single_param!(field; Avg => Avg))
         .or(agg_single_param!(field; Min => Min))
         .or(agg_single_param!(field; Max => Max))
         .labelled("summarize aggregation")

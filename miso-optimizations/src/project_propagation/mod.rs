@@ -330,6 +330,19 @@ fn rewrite_summarize(
                     new_aggs.insert(k, agg);
                 }
             }
+            Aggregation::Avg(f) => {
+                if let Some(lit) = literals.get(f) {
+                    // avg(literal) is always the literal value itself.
+                    project_fields.push(ProjectField {
+                        from: Expr::Literal(lit.clone()),
+                        to: k,
+                    });
+                } else if let Some(new_f) = renames.get(f) {
+                    new_aggs.insert(k, Aggregation::Avg(new_f.clone()));
+                } else {
+                    new_aggs.insert(k, agg);
+                }
+            }
             Aggregation::Min(f) | Aggregation::Max(f) => {
                 if let Some(lit) = literals.get(f) {
                     project_fields.push(ProjectField {

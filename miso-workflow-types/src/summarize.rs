@@ -5,6 +5,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::{expr::Expr, field::Field};
 
+pub const MUX_AVG_SUM_SUFFIX: &str = "_sum";
+pub const MUX_AVG_COUNT_SUFFIX: &str = "_num";
+
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum Aggregation {
@@ -12,6 +15,7 @@ pub enum Aggregation {
     #[serde(rename = "dcount")]
     DCount(Field),
     Sum(Field),
+    Avg(Field),
     Min(Field),
     Max(Field),
 }
@@ -22,6 +26,7 @@ impl fmt::Display for Aggregation {
             Aggregation::Count => write!(f, "Count"),
             Aggregation::DCount(x) => write!(f, "DCount({x})"),
             Aggregation::Sum(x) => write!(f, "Sum({x})"),
+            Aggregation::Avg(x) => write!(f, "Avg({x})"),
             Aggregation::Min(x) => write!(f, "Min({x})"),
             Aggregation::Max(x) => write!(f, "Max({x})"),
         }
@@ -34,6 +39,7 @@ impl Aggregation {
         match self {
             Aggregation::Count => Aggregation::Sum(field.clone()),
             Aggregation::Sum(..) => Aggregation::Sum(field.clone()),
+            Aggregation::Avg(..) => Aggregation::Avg(field.clone()),
             Aggregation::Min(..) => Aggregation::Min(field.clone()),
             Aggregation::Max(..) => Aggregation::Max(field.clone()),
             Aggregation::DCount(field) => Aggregation::DCount(field),
@@ -78,11 +84,18 @@ impl Summarize {
                 | Aggregation::Max(..) => {
                     aggs.insert(field, agg);
                 }
-                Aggregation::DCount(field) => {
-                    let new_by = Expr::Field(field);
+                Aggregation::DCount(input_field) => {
+                    let new_by = Expr::Field(input_field);
                     if !self.by.contains(&new_by) {
                         self.by.push(new_by);
                     }
+                }
+                Aggregation::Avg(input_field) => {
+                    aggs.insert(
+                        field.clone().with_suffix(MUX_AVG_SUM_SUFFIX),
+                        Aggregation::Sum(input_field),
+                    );
+                    aggs.insert(field.with_suffix(MUX_AVG_COUNT_SUFFIX), Aggregation::Count);
                 }
             }
         }

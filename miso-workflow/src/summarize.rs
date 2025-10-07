@@ -6,7 +6,7 @@ use miso_workflow_types::{
     expr::Expr,
     field::Field,
     log::{Log, LogItem, LogIter},
-    summarize::{Aggregation, Summarize},
+    summarize::{Aggregation, MUX_AVG_COUNT_SUFFIX, MUX_AVG_SUM_SUFFIX, Summarize},
     value::Value,
 };
 use tracing::warn;
@@ -89,6 +89,85 @@ impl Aggregate for Sum {
     }
 }
 
+struct Avg {
+    field: Field,
+    value: f64,
+    count: u64,
+}
+
+impl Avg {
+    fn new(field: Field) -> Self {
+        Self {
+            field,
+            value: 0.0,
+            count: 0,
+        }
+    }
+}
+
+impl Aggregate for Avg {
+    fn input(&mut self, log: &Log) {
+        let Some(value) = get_field_value(log, &self.field) else {
+            return;
+        };
+        let Some(x) = value.as_f64() else {
+            return;
+        };
+        self.value += x;
+        self.count += 1;
+    }
+
+    fn value(&self) -> Value {
+        Value::from(self.value / self.count as f64)
+    }
+}
+
+struct MuxAvg {
+    sum_field: Field,
+    count_field: Field,
+    value: f64,
+    count: f64,
+}
+
+impl MuxAvg {
+    fn new(field: Field) -> Self {
+        Self {
+            sum_field: field.clone().with_suffix(MUX_AVG_SUM_SUFFIX),
+            count_field: field.with_suffix(MUX_AVG_COUNT_SUFFIX),
+            value: 0.0,
+            count: 0.0,
+        }
+    }
+}
+
+impl Aggregate for MuxAvg {
+    fn input(&mut self, log: &Log) {
+        let Some(sum_value) = get_field_value(log, &self.sum_field) else {
+            return;
+        };
+        let Some(count_value) = get_field_value(log, &self.count_field) else {
+            return;
+        };
+        let (Some(sum), Some(count)) = (sum_value.as_f64(), count_value.as_f64()) else {
+            return;
+        };
+
+        if count <= 0.0 {
+            return;
+        }
+
+        let new_count = self.count + count;
+        let new_avg = self.value + (sum / count - self.value) * (count / new_count);
+
+        self.value = new_avg;
+        self.count = new_count;
+    }
+
+    fn value(&self) -> Value {
+        Value::from(self.value)
+    }
+}
+
 struct MinMax {
     /// The field in the logs to aggregate.
     field: Field,
@@ -140,11 +219,13 @@ impl Aggregate for MinMax {
     }
 }
 
-fn create_aggregate(aggregation: Aggregation) -> Box<dyn Aggregate> {
+fn create_aggregate(aggregation: Aggregation, is_mux: bool) -> Box<dyn Aggregate> {
     match aggregation {
         Aggregation::Count => Box::new(Count::default()),
         Aggregation::DCount(field) => Box::new(DCount::new(field)),
         Aggregation::Sum(field) => Box::new(Sum::new(field)),
+        Aggregation::Avg(field) if is_mux => Box::new(MuxAvg::new(field)),
+        Aggregation::Avg(field) => Box::new(Avg::new(field)),
         Aggregation::Min(field) => Box::new(MinMax::new_min(field)),
         Aggregation::Max(field) => Box::new(MinMax::new_max(field)),
     }
@@ -159,9 +240,16 @@ pub struct SummarizeAllIter {
 }
 
 impl SummarizeAllIter {
-    fn new(input: LogIter, output_fields: Vec<Field>, aggregations: Vec<Aggregation>) -> Self {
-        let aggregates: Vec<Box<dyn Aggregate>> =
-            aggregations.into_iter().map(create_aggregate).collect();
+    fn new(
+        input: LogIter,
+        output_fields: Vec<Field>,
+        aggregations: Vec<Aggregation>,
+        is_mux: bool,
+    ) -> Self {
+        let aggregates: Vec<Box<dyn Aggregate>> = aggregations
+            .into_iter()
+            .map(|a| create_aggregate(a, is_mux))
+            .collect();
         Self {
             input,
             output_fields,
@@ -210,6 +298,7 @@ pub struct SummarizeGroupByIter {
     group_by: Vec<Expr>,
     output_fields: Vec<Field>,
     aggregations: Vec<Aggregation>,
+    is_mux: bool,
     tracked_types: Vec<Option<Discriminant<Value>>>,
 
     // All of HashMap, HashSet, BTreeMap and BtreeSet rely on either the hash or the order of keys
@@ -228,6 +317,7 @@ impl SummarizeGroupByIter {
         group_by: Vec<Expr>,
         output_fields: Vec<Field>,
         aggregations: Vec<Aggregation>,
+        is_mux: bool,
     ) -> Self {
         let tracked_types = vec![None; group_by.len()];
         Self {
@@ -235,6 +325,7 @@ impl SummarizeGroupByIter {
             group_by,
             output_fields,
             aggregations,
+            is_mux,
             tracked_types,
             group_aggregates: GroupAggregates::new(),
             output: Box::new(iter::empty()),
@@ -320,7 +411,7 @@ impl Iterator for SummarizeGroupByIter {
                 self.aggregations
                     .iter()
                     .cloned()
-                    .map(create_aggregate)
+                    .map(|a| create_aggregate(a, self.is_mux))
                     .collect()
             });
 
@@ -341,18 +432,28 @@ impl Iterator for SummarizeGroupByIter {
     }
 }
 
-pub fn create_summarize_iter(input: LogIter, config: Summarize) -> Box<dyn PartialLogIter> {
+pub fn create_summarize_iter(
+    input: LogIter,
+    config: Summarize,
+    is_mux: bool,
+) -> Box<dyn PartialLogIter> {
     let (output_fields, aggregations): (Vec<Field>, Vec<Aggregation>) =
         config.aggs.into_iter().unzip();
 
     if config.by.is_empty() {
-        Box::new(SummarizeAllIter::new(input, output_fields, aggregations))
+        Box::new(SummarizeAllIter::new(
+            input,
+            output_fields,
+            aggregations,
+            is_mux,
+        ))
     } else {
         Box::new(SummarizeGroupByIter::new(
             input,
             config.by,
             output_fields,
             aggregations,
+            is_mux,
         ))
     }
 }
