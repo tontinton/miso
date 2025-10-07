@@ -777,15 +777,16 @@ async fn summarize() -> Result<()> {
         | summarize max_x=max(x),
                     min_x=min(x),
                     sum_x=sum(x),
+                    avg_x=avg(x),
                     dcount_z=dcount(z),
-                    c=count(),
+                    cnt=count(),
                     cif=countif(z == 2)
           by y
         "#,
         r#"[{"x": 3, "y": 3, "z": 2}, {"x": 5, "y": 6, "z": 1}, {"x": 1, "y": 3, "z": 2}, {"x": 9, "y": 6, "z": 3}]"#,
         r#"[
-            {"max_x": 3, "min_x": 1, "sum_x": 4.0, "dcount_z": 1, "c": 2, "cif": 2, "y": 3},
-            {"max_x": 9, "min_x": 5, "sum_x": 14.0, "dcount_z": 2, "c": 2, "cif": 0, "y": 6}
+            {"max_x": 3, "min_x": 1, "sum_x": 4.0, "avg_x": 2.0, "dcount_z": 1, "cnt": 2, "cif": 2, "y": 3},
+            {"max_x": 9, "min_x": 5, "sum_x": 14.0, "avg_x": 7.0, "dcount_z": 2, "cnt": 2, "cif": 0, "y": 6}
         ]"#,
     )
     .await
@@ -800,6 +801,7 @@ async fn project_summarize() -> Result<()> {
         | summarize max_x=max(x),
                     min_x=min(x),
                     sum_x=sum(x),
+                    avg_x=avg(x),
                     dcount_z=dcount(z),
                     cnt=count(),
                     cif=countif(z == 2)
@@ -807,8 +809,8 @@ async fn project_summarize() -> Result<()> {
         "#,
         r#"[{"a": 3, "b": 3, "c": 2}, {"a": 5, "b": 6, "c": 1}, {"a": 1, "b": 3, "c": 2}, {"a": 9, "b": 6, "c": 3}]"#,
         r#"[
-            {"max_x": 3, "min_x": 1, "sum_x": 4.0, "dcount_z": 1, "cnt": 2, "cif": 2, "y": 3},
-            {"max_x": 9, "min_x": 5, "sum_x": 14.0, "dcount_z": 2, "cnt": 2, "cif": 0, "y": 6}
+            {"max_x": 3, "min_x": 1, "sum_x": 4.0, "avg_x": 2.0, "dcount_z": 1, "cnt": 2, "cif": 2, "y": 3},
+            {"max_x": 9, "min_x": 5, "sum_x": 14.0, "avg_x": 7.0, "dcount_z": 2, "cnt": 2, "cif": 0, "y": 6}
         ]"#,
     )
     .await
