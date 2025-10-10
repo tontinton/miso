@@ -138,6 +138,10 @@ pub enum Token {
     Right,
     #[token("on")]
     On,
+    #[token("bag")]
+    Bag,
+    #[token("array")]
+    Array,
     #[token("union")]
     Union,
     #[token("count")]

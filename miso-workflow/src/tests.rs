@@ -1235,3 +1235,106 @@ async fn expand_object_zip_unequal_lengths() -> Result<()> {
     )
     .await
 }
+
+#[tokio::test]
+async fn expand_object_array_kind() -> Result<()> {
+    check(
+        r#"test.c | mv-expand kind=array metadata"#,
+        r#"[{"id": 1, "metadata": {"env": "prod", "region": "us-east"}}]"#,
+        r#"[
+            {"id": 1, "metadata": "env"},
+            {"id": 1, "metadata": "prod"},
+            {"id": 1, "metadata": "region"},
+            {"id": 1, "metadata": "us-east"}
+        ]"#,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn expand_object_array_kind_with_numbers() -> Result<()> {
+    check(
+        r#"test.c | mv-expand kind=array config"#,
+        r#"[{"id": 1, "config": {"timeout": 30, "retries": 3}}]"#,
+        r#"[
+            {"id": 1, "config": "timeout"},
+            {"id": 1, "config": 30},
+            {"id": 1, "config": "retries"},
+            {"id": 1, "config": 3}
+        ]"#,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn expand_object_array_kind_with_nested_values() -> Result<()> {
+    check(
+        r#"test.c | mv-expand kind=array data"#,
+        r#"[{"id": 1, "data": {"name": "test", "options": {"nested": true}}}]"#,
+        r#"[
+            {"id": 1, "data": "name"},
+            {"id": 1, "data": "test"},
+            {"id": 1, "data": "options"},
+            {"id": 1, "data": {"nested": true}}
+        ]"#,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn expand_object_array_kind_empty() -> Result<()> {
+    check(
+        r#"test.c | mv-expand kind=array tags"#,
+        r#"[{"id": 1, "tags": {}}]"#,
+        r#"[]"#,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn expand_object_array_kind_multiple_records() -> Result<()> {
+    check(
+        r#"test.c | mv-expand kind=array props"#,
+        r#"[
+            {"name": "item1", "props": {"a": 1, "b": 2}},
+            {"name": "item2", "props": {"x": "hello"}}
+        ]"#,
+        r#"[
+            {"name": "item1", "props": "a"},
+            {"name": "item1", "props": 1},
+            {"name": "item1", "props": "b"},
+            {"name": "item1", "props": 2},
+            {"name": "item2", "props": "x"},
+            {"name": "item2", "props": "hello"}
+        ]"#,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn expand_object_array_kind_zip_with_regular_array() -> Result<()> {
+    check(
+        r#"test.c | mv-expand kind=array metadata, items"#,
+        r#"[{"id": 1, "metadata": {"a": 1, "b": 2}, "items": ["x", "y", "z"]}]"#,
+        r#"[
+            {"id": 1, "metadata": "a", "items": "x"},
+            {"id": 1, "metadata": 1, "items": "y"},
+            {"id": 1, "metadata": "b", "items": "z"},
+            {"id": 1, "metadata": 2, "items": null}
+        ]"#,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn expand_object_array_kind_single_entry() -> Result<()> {
+    check(
+        r#"test.c | mv-expand kind=array data"#,
+        r#"[{"id": 1, "data": {"only": "one"}}]"#,
+        r#"[
+            {"id": 1, "data": "only"},
+            {"id": 1, "data": "one"}
+        ]"#,
+    )
+    .await
+}

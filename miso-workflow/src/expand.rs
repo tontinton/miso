@@ -1,7 +1,7 @@
 use std::{collections::BTreeMap, vec};
 
 use miso_workflow_types::{
-    expand::Expand,
+    expand::{Expand, ExpandKind},
     field::Field,
     log::{Log, LogItem, LogIter},
     value::Value,
@@ -97,14 +97,24 @@ impl ExpandIter {
                     output_values.push(arr);
                 }
                 Some(Value::Object(obj)) => {
-                    let expanded: Vec<Value> = obj
-                        .into_iter()
-                        .map(|(k, v)| {
-                            let mut record = BTreeMap::new();
-                            record.insert(k, v);
-                            Value::Object(record)
-                        })
-                        .collect();
+                    let expanded: Vec<Value> = match self.config.kind {
+                        ExpandKind::Array => {
+                            let mut arr = Vec::with_capacity(obj.len() * 2);
+                            for (k, v) in obj {
+                                arr.push(Value::String(k));
+                                arr.push(v);
+                            }
+                            arr
+                        }
+                        ExpandKind::Bag => obj
+                            .into_iter()
+                            .map(|(k, v)| {
+                                let mut record = BTreeMap::new();
+                                record.insert(k, v);
+                                Value::Object(record)
+                            })
+                            .collect(),
+                    };
 
                     output_fields.push(field.clone());
                     output_values.push(expanded);

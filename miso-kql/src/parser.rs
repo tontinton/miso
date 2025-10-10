@@ -7,7 +7,7 @@ use chumsky::{
 use hashbrown::HashMap;
 use logos::Logos;
 use miso_workflow_types::{
-    expand::Expand,
+    expand::{Expand, ExpandKind},
     expr::{CastType, Expr},
     field::{Field, FieldAccess},
     join::{Join, JoinType},
@@ -171,6 +171,8 @@ where
         Token::Left => "left".to_string(),
         Token::Right => "right".to_string(),
         Token::On => "on".to_string(),
+        Token::Bag => "bag".to_string(),
+        Token::Array => "array".to_string(),
         Token::Union => "union".to_string(),
         Token::Count => "count".to_string(),
         Token::Countif => "countif".to_string(),
@@ -556,11 +558,20 @@ where
         .collect::<Vec<_>>();
 
     let mv_expand_step = just(Token::MvExpand)
-        .ignore_then(mv_expand_exprs)
-        .map(|fields| {
+        .ignore_then(
+            just(Token::Kind)
+                .ignore_then(just(Token::Eq))
+                .ignore_then(select! {
+                    Token::Bag => ExpandKind::Bag,
+                    Token::Array => ExpandKind::Array,
+                })
+                .or_not(),
+        )
+        .then(mv_expand_exprs)
+        .map(|(kind, fields)| {
             QueryStep::Expand(Expand {
                 fields,
-                ..Default::default()
+                kind: kind.unwrap_or_default(),
             })
         })
         .labelled("mv-expand")
