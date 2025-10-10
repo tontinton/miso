@@ -100,8 +100,8 @@ pub fn to_workflow_steps(
             QueryStep::Rename(renames) => {
                 steps.push(WorkflowStep::Rename(renames));
             }
-            QueryStep::Expand(fields) => {
-                steps.push(WorkflowStep::Expand(fields));
+            QueryStep::Expand(expand) => {
+                steps.push(WorkflowStep::Expand(expand));
             }
             QueryStep::Limit(max) => {
                 steps.push(WorkflowStep::Limit(max));

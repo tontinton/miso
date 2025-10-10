@@ -4,7 +4,8 @@ use axum::http::StatusCode;
 use hashbrown::HashMap;
 use miso_workflow::{Workflow, WorkflowStep, scan::Scan};
 use miso_workflow_types::{
-    expr::Expr, field::Field, project::ProjectField, query::QueryStep, summarize::Summarize,
+    expr::Expr, field::Field, project::ProjectField, query::QueryStep,
+    summarize::Summarize,
 };
 use tracing::info;
 
@@ -94,16 +95,16 @@ impl QueryToWorkflowTranspiler {
                         ));
                     };
 
-                        let renames = collection
-                            .field_replacements
-                            .into_iter()
-                            .map(|(to, from)| {
-                                Ok(ProjectField {
-                                    from: Expr::Field(parse_field(&from)?),
-                                    to: parse_field(&to)?,
-                                })
+                    let renames = collection
+                        .field_replacements
+                        .into_iter()
+                        .map(|(to, from)| {
+                            Ok(ProjectField {
+                                from: Expr::Field(parse_field(&from)?),
+                                to: parse_field(&to)?,
                             })
-                            .collect::<Result<Vec<_>, HttpError>>()?;
+                        })
+                        .collect::<Result<Vec<_>, HttpError>>()?;
 
                     steps.push(WorkflowStep::Scan(
                         Scan::from_connector_state(

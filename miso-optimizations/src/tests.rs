@@ -4,6 +4,7 @@ use hashbrown::HashMap;
 use miso_common::hashmap;
 use miso_workflow::{Workflow, WorkflowStep as S, display::DisplayableWorkflowSteps};
 use miso_workflow_types::{
+    expand::Expand,
     expr::Expr,
     field::Field,
     field_unwrap, json,
@@ -53,6 +54,13 @@ fn rename_project(to: &str, from: &str) -> ProjectField {
 
 fn noop_project(to: &str) -> ProjectField {
     project_field(to, Expr::Field(field(to)))
+}
+
+fn expand(fields: Vec<Field>) -> Expand {
+    Expand {
+        fields,
+        ..Default::default()
+    }
 }
 
 fn string_val(s: &str) -> Value {
@@ -945,11 +953,11 @@ fn test_project_propagation_summarize_variants(
 #[test_case(
     vec![
         S::Project(vec![rename_project("a", "b")]),
-        S::Expand(vec![field("a")]),
+        S::Expand(expand(vec![field("a")])),
         S::Sort(vec![sort_desc(field("a"))])
     ],
     vec![
-        S::Expand(vec![field("b")]),
+        S::Expand(expand(vec![field("b")])),
         S::Sort(vec![sort_desc(field("b"))]),
         S::Project(vec![rename_project("a", "b")])
     ]
@@ -958,11 +966,11 @@ fn test_project_propagation_summarize_variants(
 #[test_case(
     vec![
         S::Rename(vec![(field("b"), field("a"))]),
-        S::Expand(vec![field("a")]),
+        S::Expand(expand(vec![field("a")])),
         S::Sort(vec![sort_asc(field("a"))])
     ],
     vec![
-        S::Expand(vec![field("b")]),
+        S::Expand(expand(vec![field("b")])),
         S::Sort(vec![sort_asc(field("b"))]),
         S::Rename(vec![(field("b"), field("a"))])
     ]
@@ -972,12 +980,12 @@ fn test_project_propagation_summarize_variants(
     vec![
         S::Project(vec![rename_project("a", "b")]),
         S::Filter(Expr::Eq(Box::new(Expr::Field(field("a"))), Box::new(Expr::Literal(int_val(10))))),
-        S::Expand(vec![field("a")]),
+        S::Expand(expand(vec![field("a")])),
         S::Limit(2)
     ],
     vec![
         S::Filter(Expr::Eq(Box::new(Expr::Field(field("b"))), Box::new(Expr::Literal(int_val(10))))),
-        S::Expand(vec![field("b")]),
+        S::Expand(expand(vec![field("b")])),
         S::Limit(2),
         S::Project(vec![rename_project("a", "b")])
     ]
@@ -987,12 +995,12 @@ fn test_project_propagation_summarize_variants(
     vec![
         S::Rename(vec![(field("b"), field("a"))]),
         S::Filter(Expr::Eq(Box::new(Expr::Field(field("a"))), Box::new(Expr::Literal(int_val(10))))),
-        S::Expand(vec![field("a")]),
+        S::Expand(expand(vec![field("a")])),
         S::Limit(2)
     ],
     vec![
         S::Filter(Expr::Eq(Box::new(Expr::Field(field("b"))), Box::new(Expr::Literal(int_val(10))))),
-        S::Expand(vec![field("b")]),
+        S::Expand(expand(vec![field("b")])),
         S::Limit(2),
         S::Rename(vec![(field("b"), field("a"))])
     ]
@@ -1001,7 +1009,7 @@ fn test_project_propagation_summarize_variants(
 #[test_case(
     vec![
         S::Project(vec![literal_project("x", int_val(50))]),
-        S::Expand(vec![field("x")]),
+        S::Expand(expand(vec![field("x")])),
         S::Filter(Expr::Eq(Box::new(Expr::Field(field("x"))), Box::new(Expr::Literal(int_val(50))))),
     ],
     vec![

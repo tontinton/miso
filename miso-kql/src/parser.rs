@@ -7,6 +7,7 @@ use chumsky::{
 use hashbrown::HashMap;
 use logos::Logos;
 use miso_workflow_types::{
+    expand::Expand,
     expr::{CastType, Expr},
     field::{Field, FieldAccess},
     join::{Join, JoinType},
@@ -556,7 +557,12 @@ where
 
     let mv_expand_step = just(Token::MvExpand)
         .ignore_then(mv_expand_exprs)
-        .map(QueryStep::Expand)
+        .map(|fields| {
+            QueryStep::Expand(Expand {
+                fields,
+                ..Default::default()
+            })
+        })
         .labelled("mv-expand")
         .boxed();
 

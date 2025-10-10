@@ -11,7 +11,8 @@ use color_eyre::eyre::Result;
 use hashbrown::HashMap;
 use miso_workflow_types::field::Field;
 use miso_workflow_types::{
-    expr::Expr, log::LogTryStream, project::ProjectField, sort::Sort, summarize::Summarize,
+    expand::Expand, expr::Expr, log::LogTryStream, project::ProjectField, sort::Sort,
+    summarize::Summarize,
 };
 use parking_lot::Mutex;
 use thiserror::Error;
@@ -191,7 +192,7 @@ pub trait Connector: Debug + Send + Sync {
     /// None means it can't predicate pushdown the provided expand.
     fn apply_expand(
         &self,
-        _fields: &[Field],
+        _expand: &Expand,
         _handle: &dyn QueryHandle,
     ) -> Option<Box<dyn QueryHandle>> {
         None

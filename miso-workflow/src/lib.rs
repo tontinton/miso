@@ -9,6 +9,7 @@ use futures_util::{
 };
 use kinded::Kinded;
 use miso_workflow_types::{
+    expand::Expand,
     expr::Expr,
     field::Field,
     join::{Join, JoinType},
@@ -87,7 +88,7 @@ pub enum WorkflowStep {
     Rename(Vec<(/*from=*/ Field, /*to=*/ Field)>),
 
     /// Expand arrays / objects into multiple records.
-    Expand(Vec<Field>),
+    Expand(Expand),
 
     /// Limit to X amount of records.
     Limit(u32),
@@ -221,7 +222,7 @@ impl WorkflowStep {
                 Box::new(ProjectIter::new_extend(rx.into_iter(), fields))
             }
             WorkflowStep::Rename(renames) => Box::new(RenameIter::new(rx.into_iter(), renames)),
-            WorkflowStep::Expand(fields) => Box::new(ExpandIter::new(rx.into_iter(), fields)),
+            WorkflowStep::Expand(expand) => Box::new(ExpandIter::new(rx.into_iter(), expand)),
             WorkflowStep::Limit(limit) | WorkflowStep::MuxLimit(limit) => {
                 Box::new(LimitIter::new(rx.into_iter(), limit))
             }

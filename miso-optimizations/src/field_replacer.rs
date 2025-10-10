@@ -1,5 +1,6 @@
 use hashbrown::HashMap;
 use miso_workflow_types::{
+    expand::Expand,
     expr::Expr,
     expr_visitor::ExprTransformer,
     field::Field,
@@ -50,8 +51,9 @@ impl FieldReplacer<'_> {
             .collect()
     }
 
-    pub fn transform_expand(&self, fields: Vec<Field>) -> Vec<Field> {
-        fields.into_iter().map(|f| self.replace(f)).collect()
+    pub fn transform_expand(&self, mut expand: Expand) -> Expand {
+        expand.fields = expand.fields.into_iter().map(|f| self.replace(f)).collect();
+        expand
     }
 
     pub fn transform_sort(&self, sorts: Vec<Sort>) -> Vec<Sort> {

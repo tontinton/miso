@@ -153,12 +153,12 @@ fn apply(
                     WorkflowStep::Extend(new_fields)
                 }
 
-                WorkflowStep::Expand(fields) => {
-                    let new_fields = rewrite_expand(fields, &renames, &literals);
-                    if new_fields.is_empty() {
+                WorkflowStep::Expand(mut expand) => {
+                    expand.fields = rewrite_expand(expand.fields, &renames, &literals);
+                    if expand.fields.is_empty() {
                         continue;
                     }
-                    WorkflowStep::Expand(new_fields)
+                    WorkflowStep::Expand(expand)
                 }
 
                 _ => unreachable!("not in middle pattern"),

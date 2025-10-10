@@ -1,6 +1,7 @@
 use std::{collections::BTreeMap, vec};
 
 use miso_workflow_types::{
+    expand::Expand,
     field::Field,
     log::{Log, LogItem, LogIter},
     value::Value,
@@ -72,24 +73,24 @@ enum OutputState {
 
 pub struct ExpandIter {
     input: LogIter,
-    fields: Vec<Field>,
+    config: Expand,
     state: OutputState,
 }
 
 impl ExpandIter {
-    pub fn new(input: LogIter, fields: Vec<Field>) -> Self {
+    pub fn new(input: LogIter, config: Expand) -> Self {
         Self {
             input,
-            fields,
+            config,
             state: OutputState::None,
         }
     }
 
     fn log_to_output_iter(&self, mut log: Log) -> OutputIter {
-        let mut output_fields = Vec::with_capacity(self.fields.len());
-        let mut output_values = Vec::with_capacity(self.fields.len());
+        let mut output_fields = Vec::with_capacity(self.config.fields.len());
+        let mut output_values = Vec::with_capacity(self.config.fields.len());
 
-        for field in &self.fields {
+        for field in &self.config.fields {
             match extract_field(&mut log, field) {
                 Some(Value::Array(arr)) => {
                     output_fields.push(field.clone());

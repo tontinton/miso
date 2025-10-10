@@ -1,3 +1,4 @@
+pub mod expand;
 pub mod expr;
 pub mod expr_visitor;
 pub mod field;

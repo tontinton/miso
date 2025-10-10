@@ -41,10 +41,10 @@ impl Optimization for PushIntoScan {
                     scan.handle.as_ref(),
                 )?
                 .into(),
-            WorkflowStep::Expand(fields) => scan
+            WorkflowStep::Expand(expand) => scan
                 .connector
                 .apply_expand(
-                    &replacer.transform_expand(fields.to_vec()),
+                    &replacer.transform_expand(expand.clone()),
                     scan.handle.as_ref(),
                 )?
                 .into(),
