@@ -1155,3 +1155,83 @@ async fn expand_non_existent_field() -> Result<()> {
     )
     .await
 }
+
+#[tokio::test]
+async fn expand_object() -> Result<()> {
+    check(
+        r#"test.c | mv-expand metadata"#,
+        r#"[{"id": 1, "metadata": {"env": "prod", "region": "us-east"}}]"#,
+        r#"[
+            {"id": 1, "metadata": {"env": "prod"}},
+            {"id": 1, "metadata": {"region": "us-east"}}
+        ]"#,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn expand_object_multiple_records() -> Result<()> {
+    check(
+        r#"test.c | mv-expand tags"#,
+        r#"[
+            {"name": "item1", "tags": {"color": "red", "size": "large"}},
+            {"name": "item2", "tags": {"priority": "high"}}
+        ]"#,
+        r#"[
+            {"name": "item1", "tags": {"color": "red"}},
+            {"name": "item1", "tags": {"size": "large"}},
+            {"name": "item2", "tags": {"priority": "high"}}
+        ]"#,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn expand_object_with_nested_values() -> Result<()> {
+    check(
+        r#"test.c | mv-expand config"#,
+        r#"[{"id": 1, "config": {"timeout": 30, "options": {"retry": true}}}]"#,
+        r#"[
+            {"id": 1, "config": {"timeout": 30}},
+            {"id": 1, "config": {"options": {"retry": true}}}
+        ]"#,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn expand_empty_object() -> Result<()> {
+    check(
+        r#"test.c | mv-expand data"#,
+        r#"[{"id": 1, "data": {}}]"#,
+        r#"[]"#,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn expand_mixed_array_and_object() -> Result<()> {
+    check(
+        r#"test.c | mv-expand items, metadata"#,
+        r#"[{"id": 1, "items": ["a", "b"], "metadata": {"env": "prod", "version": "2.0"}}]"#,
+        r#"[
+            {"id": 1, "items": "a", "metadata": {"env": "prod"}},
+            {"id": 1, "items": "b", "metadata": {"version": "2.0"}}
+        ]"#,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn expand_object_zip_unequal_lengths() -> Result<()> {
+    check(
+        r#"test.c | mv-expand tags, flags"#,
+        r#"[{"id": 1, "tags": {"a": 1, "b": 2, "c": 3}, "flags": {"x": true}}]"#,
+        r#"[
+            {"id": 1, "tags": {"a": 1}, "flags": {"x": true}},
+            {"id": 1, "tags": {"b": 2}, "flags": null},
+            {"id": 1, "tags": {"c": 3}, "flags": null}
+        ]"#,
+    )
+    .await
+}

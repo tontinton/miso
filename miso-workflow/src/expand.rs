@@ -1,4 +1,4 @@
-use std::vec;
+use std::{collections::BTreeMap, vec};
 
 use miso_workflow_types::{
     field::Field,
@@ -94,6 +94,19 @@ impl ExpandIter {
                 Some(Value::Array(arr)) => {
                     output_fields.push(field.clone());
                     output_values.push(arr);
+                }
+                Some(Value::Object(obj)) => {
+                    let expanded: Vec<Value> = obj
+                        .into_iter()
+                        .map(|(k, v)| {
+                            let mut record = BTreeMap::new();
+                            record.insert(k, v);
+                            Value::Object(record)
+                        })
+                        .collect();
+
+                    output_fields.push(field.clone());
+                    output_values.push(expanded);
                 }
                 Some(other) => {
                     // Get it back in.
