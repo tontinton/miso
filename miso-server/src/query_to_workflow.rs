@@ -1,7 +1,11 @@
 use axum::http::StatusCode;
 use hashbrown::HashMap;
 use miso_workflow::{Workflow, WorkflowStep, scan::Scan};
-use miso_workflow_types::{expr::Expr, query::QueryStep, summarize::Summarize};
+use miso_workflow_types::{
+    expr::Expr,
+    query::{QueryStep, ScanKind},
+    summarize::Summarize,
+};
 use tracing::info;
 
 use crate::{
@@ -39,7 +43,16 @@ pub fn to_workflow_steps(
                     "scan can only be the first step of a query".to_string(),
                 ));
             }
-            QueryStep::Scan(connector_name, view) if connector_name == VIEWS_CONNECTOR_NAME => {
+            QueryStep::Scan(ScanKind::Var(..)) => {
+                return Err(HttpError::from_string(
+                    StatusCode::BAD_REQUEST,
+                    "referencing let is not yet supported".to_string(),
+                ));
+            }
+            QueryStep::Scan(ScanKind::Collection {
+                connector: connector_name,
+                collection: view,
+            }) if connector_name == VIEWS_CONNECTOR_NAME => {
                 let Some(view_steps) = views.get(&view).cloned() else {
                     return Err(HttpError::from_string(
                         StatusCode::NOT_FOUND,
@@ -49,7 +62,10 @@ pub fn to_workflow_steps(
 
                 steps.extend(to_workflow_steps(connectors, views, view_steps)?);
             }
-            QueryStep::Scan(connector_name, collection_name) => {
+            QueryStep::Scan(ScanKind::Collection {
+                connector: connector_name,
+                collection: collection_name,
+            }) => {
                 let Some(connector_state) = connectors.get(&connector_name).cloned() else {
                     return Err(HttpError::from_string(
                         StatusCode::NOT_FOUND,

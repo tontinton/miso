@@ -5,7 +5,7 @@ use miso_workflow_types::{
     field::Field,
     field_unwrap,
     join::JoinType,
-    query::QueryStep,
+    query::{QueryStep, ScanKind},
     sort::{NullsOrder, SortOrder},
     summarize::Aggregation,
     value::Value,
@@ -34,9 +34,12 @@ fn test_simple_scan() {
 
     assert_eq!(result.len(), 1);
     match &result[0] {
-        QueryStep::Scan(connector, table) => {
+        QueryStep::Scan(ScanKind::Collection {
+            connector,
+            collection,
+        }) => {
             assert_eq!(connector, "connector");
-            assert_eq!(table, "table");
+            assert_eq!(collection, "table");
         }
         _ => panic!("Expected Scan step"),
     }
@@ -50,9 +53,12 @@ fn test_scan_with_filter() {
     assert_eq!(result.len(), 2);
 
     match &result[0] {
-        QueryStep::Scan(connector, table) => {
+        QueryStep::Scan(ScanKind::Collection {
+            connector,
+            collection,
+        }) => {
             assert_eq!(connector, "connector");
-            assert_eq!(table, "table");
+            assert_eq!(collection, "table");
         }
         _ => panic!("Expected Scan step"),
     }
@@ -417,8 +423,8 @@ fn test_union() {
     match &result[1] {
         QueryStep::Union(sub_query) => {
             assert_eq!(sub_query.len(), 2);
-            assert!(matches!(sub_query[0], QueryStep::Scan(_, _)));
-            assert!(matches!(sub_query[1], QueryStep::Filter(_)));
+            assert!(matches!(sub_query[0], QueryStep::Scan(..)));
+            assert!(matches!(sub_query[1], QueryStep::Filter(..)));
         }
         _ => panic!("Expected Union step"),
     }
@@ -441,7 +447,7 @@ fn test_join(join: &str, expected_left: &str, expected_right: &str) {
             assert_eq!(join.on.0, field_unwrap!(expected_left));
             assert_eq!(join.on.1, field_unwrap!(expected_right));
             assert_eq!(sub_query.len(), 1);
-            assert!(matches!(sub_query[0], QueryStep::Scan(_, _)));
+            assert!(matches!(sub_query[0], QueryStep::Scan(..)));
         }
         _ => panic!("Expected Join step"),
     }
@@ -531,7 +537,7 @@ fn test_complex_pipeline() {
     let result = parse_unwrap!(query);
     assert_eq!(result.len(), 6);
 
-    assert!(matches!(result[0], QueryStep::Scan(_, _)));
+    assert!(matches!(result[0], QueryStep::Scan(..)));
     assert!(matches!(result[1], QueryStep::Filter(_)));
     assert!(matches!(result[2], QueryStep::Extend(_)));
     assert!(matches!(result[3], QueryStep::Project(_)));
@@ -806,7 +812,7 @@ fn test_datetime_in_complex_expression() {
     let result = parse_unwrap!(query);
 
     assert_eq!(result.len(), 3);
-    assert!(matches!(result[0], QueryStep::Scan(_, _)));
+    assert!(matches!(result[0], QueryStep::Scan(..)));
     assert!(matches!(result[1], QueryStep::Filter(_)));
     assert!(matches!(result[2], QueryStep::Project(_)));
 

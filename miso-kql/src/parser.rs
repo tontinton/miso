@@ -13,7 +13,7 @@ use miso_workflow_types::{
     join::{Join, JoinType},
     json,
     project::ProjectField,
-    query::QueryStep,
+    query::{QueryStep, ScanKind},
     sort::{NullsOrder, Sort, SortOrder},
     summarize::{Aggregation, Summarize},
     value::Value,
@@ -830,7 +830,12 @@ where
             .clone()
             .then_ignore(just(Token::Dot))
             .then(ident)
-            .map(|(connector, collection)| QueryStep::Scan(connector, collection))
+            .map(|(connector, collection)| {
+                QueryStep::Scan(ScanKind::Collection {
+                    connector,
+                    collection,
+                })
+            })
             .labelled("scan")
             .boxed();
 

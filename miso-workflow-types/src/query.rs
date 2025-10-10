@@ -7,7 +7,7 @@ use crate::{
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum QueryStep {
-    Scan(/*connector=*/ String, /*collection=*/ String),
+    Scan(ScanKind),
     Filter(Expr),
     Project(Vec<ProjectField>),
     Extend(Vec<ProjectField>),
@@ -21,4 +21,13 @@ pub enum QueryStep {
     Union(Vec<QueryStep>),
     Join(Join, Vec<QueryStep>),
     Count,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum ScanKind {
+    Var(String),
+    Collection {
+        connector: String,
+        collection: String,
+    },
 }
