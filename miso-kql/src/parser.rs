@@ -801,7 +801,10 @@ where
         .labelled("join")
         .boxed();
 
-    let count_step = just(Token::Count).to(QueryStep::Count).labelled("count");
+    let count_step = just(Token::Count)
+        .to(QueryStep::Count)
+        .labelled("count")
+        .boxed();
 
     filter_step
         .or(project_step)
