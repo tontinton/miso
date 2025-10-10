@@ -182,6 +182,7 @@ where
         Token::Max => "max".to_string(),
         Token::Avg => "avg".to_string(),
         Token::Bin => "bin".to_string(),
+        Token::Let => "let".to_string(),
     }
 }
 
@@ -829,14 +830,25 @@ where
     recursive(|query_expr| {
         let ident = ident_parser();
 
+        let let_step = just(Token::Let)
+            .ignore_then(ident.clone())
+            .then_ignore(just(Token::Eq))
+            .then(query_expr.clone())
+            .then_ignore(just(Token::Semicolon))
+            .map(|(name, steps)| QueryStep::Let(name, steps))
+            .labelled("let")
+            .boxed();
+
         let scan_step = ident
             .clone()
-            .then_ignore(just(Token::Dot))
-            .then(ident)
+            .then(just(Token::Dot).ignore_then(ident).or_not())
             .map(|(connector, collection)| {
-                QueryStep::Scan(ScanKind::Collection {
-                    connector,
-                    collection,
+                QueryStep::Scan(match collection {
+                    Some(collection) => ScanKind::Collection {
+                        connector,
+                        collection,
+                    },
+                    None => ScanKind::Var(connector),
                 })
             })
             .labelled("scan")
@@ -847,12 +859,18 @@ where
             .collect::<Vec<_>>()
             .boxed();
 
-        scan_step
+        let_step
+            .repeated()
+            .collect::<Vec<_>>()
+            .then(scan_step)
             .then(just(Token::Pipe).ignore_then(pipeline).or_not())
-            .map(|(scan, steps)| {
-                let mut steps = steps.unwrap_or_default();
-                steps.insert(0, scan);
-                steps
+            .map(|((lets, scan), steps)| {
+                let mut all_steps = lets;
+                all_steps.push(scan);
+                if let Some(mut pipeline_steps) = steps {
+                    all_steps.append(&mut pipeline_steps);
+                }
+                all_steps
             })
             .recover_with(skip_then_retry_until(any().ignored(), end()))
             .labelled("query")

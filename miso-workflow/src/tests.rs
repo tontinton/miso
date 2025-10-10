@@ -1338,3 +1338,67 @@ async fn expand_object_array_kind_single_entry() -> Result<()> {
     )
     .await
 }
+
+#[tokio::test]
+async fn let_simple_variable() -> Result<()> {
+    check(
+        r#"
+            let x = test.c | where id > 5;
+            x
+        "#,
+        r#"[
+            {"id": 1, "name": "alice"},
+            {"id": 6, "name": "bob"},
+            {"id": 10, "name": "charlie"}
+        ]"#,
+        r#"[
+            {"id": 6, "name": "bob"},
+            {"id": 10, "name": "charlie"}
+        ]"#,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn let_chained_variables() -> Result<()> {
+    check(
+        r#"
+        let filtered = test.c | where age > 20;
+        let sorted = filtered | sort by age;
+        sorted
+        "#,
+        r#"[
+            {"name": "alice", "age": 25},
+            {"name": "bob", "age": 35},
+            {"name": "charlie", "age": 15}
+        ]"#,
+        r#"[
+            {"name": "alice", "age": 25},
+            {"name": "bob", "age": 35}
+        ]"#,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn let_variable_in_union() -> Result<()> {
+    check(
+        r#"
+            let set1 = test.c | where id < 3;
+            test.c | union (set1)
+        "#,
+        r#"[
+            {"id": 1, "value": "a"},
+            {"id": 2, "value": "b"},
+            {"id": 3, "value": "c"}
+        ]"#,
+        r#"[
+            {"id": 1, "value": "a"},
+            {"id": 2, "value": "b"},
+            {"id": 3, "value": "c"},
+            {"id": 1, "value": "a"},
+            {"id": 2, "value": "b"}
+        ]"#,
+    )
+    .await
+}

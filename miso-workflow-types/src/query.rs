@@ -7,6 +7,7 @@ use crate::{
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum QueryStep {
+    Let(String, Vec<QueryStep>),
     Scan(ScanKind),
     Filter(Expr),
     Project(Vec<ProjectField>),

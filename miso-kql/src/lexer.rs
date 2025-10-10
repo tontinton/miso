@@ -41,6 +41,8 @@ pub enum Token {
     Minus,
     #[token("@")]
     At,
+    #[token(";")]
+    Semicolon,
 
     #[token("or")]
     Or,
@@ -160,6 +162,8 @@ pub enum Token {
     Avg,
     #[token("bin")]
     Bin,
+    #[token("let")]
+    Let,
 
     #[token(",")]
     Comma,

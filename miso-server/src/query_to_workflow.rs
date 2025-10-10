@@ -18,6 +18,15 @@ pub fn to_workflow_steps(
     views: &ViewsMap,
     query_steps: Vec<QueryStep>,
 ) -> Result<Vec<WorkflowStep>, HttpError> {
+    to_workflow_steps_inner(connectors, views, query_steps, HashMap::new())
+}
+
+fn to_workflow_steps_inner(
+    connectors: &ConnectorsMap,
+    views: &ViewsMap,
+    query_steps: Vec<QueryStep>,
+    mut let_views: HashMap<String, Vec<WorkflowStep>>,
+) -> Result<Vec<WorkflowStep>, HttpError> {
     if query_steps.is_empty() {
         return Err(HttpError::from_string(
             StatusCode::BAD_REQUEST,
@@ -25,7 +34,7 @@ pub fn to_workflow_steps(
         ));
     }
 
-    let QueryStep::Scan(..) = query_steps[0] else {
+    if !matches!(query_steps[0], QueryStep::Scan(..) | QueryStep::Let(..)) {
         return Err(HttpError::from_string(
             StatusCode::NOT_FOUND,
             "first step must be scan".to_string(),
@@ -35,19 +44,23 @@ pub fn to_workflow_steps(
     let num_steps = query_steps.len();
     let mut steps = Vec::with_capacity(num_steps);
 
-    for (i, step) in query_steps.into_iter().enumerate() {
+    for step in query_steps {
         match step {
-            QueryStep::Scan(..) if i > 0 => {
-                return Err(HttpError::from_string(
-                    StatusCode::BAD_REQUEST,
-                    "scan can only be the first step of a query".to_string(),
-                ));
+            QueryStep::Let(name, var_steps) => {
+                let_views.insert(
+                    name,
+                    to_workflow_steps_inner(connectors, views, var_steps, let_views.clone())?,
+                );
             }
-            QueryStep::Scan(ScanKind::Var(..)) => {
-                return Err(HttpError::from_string(
-                    StatusCode::BAD_REQUEST,
-                    "referencing let is not yet supported".to_string(),
-                ));
+            QueryStep::Scan(ScanKind::Var(name)) => {
+                let Some(view_steps) = let_views.get(&name).cloned() else {
+                    return Err(HttpError::from_string(
+                        StatusCode::NOT_FOUND,
+                        format!("variable named '{name}' not found"),
+                    ));
+                };
+
+                steps.extend(view_steps);
             }
             QueryStep::Scan(ScanKind::Collection {
                 connector: connector_name,
@@ -60,7 +73,12 @@ pub fn to_workflow_steps(
                     ));
                 };
 
-                steps.extend(to_workflow_steps(connectors, views, view_steps)?);
+                steps.extend(to_workflow_steps_inner(
+                    connectors,
+                    views,
+                    view_steps,
+                    let_views.clone(),
+                )?);
             }
             QueryStep::Scan(ScanKind::Collection {
                 connector: connector_name,
@@ -138,16 +156,22 @@ pub fn to_workflow_steps(
                 }));
             }
             QueryStep::Union(inner_steps) => {
-                steps.push(WorkflowStep::Union(Workflow::new(to_workflow_steps(
+                steps.push(WorkflowStep::Union(Workflow::new(to_workflow_steps_inner(
                     connectors,
                     views,
                     inner_steps,
+                    let_views.clone(),
                 )?)));
             }
             QueryStep::Join(config, inner_steps) => {
                 steps.push(WorkflowStep::Join(
                     config,
-                    Workflow::new(to_workflow_steps(connectors, views, inner_steps)?),
+                    Workflow::new(to_workflow_steps_inner(
+                        connectors,
+                        views,
+                        inner_steps,
+                        let_views.clone(),
+                    )?),
                 ));
             }
             QueryStep::Count => {
