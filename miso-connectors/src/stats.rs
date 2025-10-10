@@ -11,7 +11,7 @@ pub type CollectionStats = BTreeMap<String, FieldStats>;
 
 #[derive(Debug, Default, Clone)]
 pub struct FieldStats {
-    pub distinct_count: Option<u32>,
+    pub distinct_count: Option<u64>,
 }
 
 async fn refetch_stats_at_interval(

@@ -149,7 +149,7 @@ impl Connector for TestConnector {
     async fn close(&self) {}
 }
 
-fn distinct_field_values(logs: Vec<Log>) -> Vec<(String, u32)> {
+fn distinct_field_values(logs: Vec<Log>) -> Vec<(String, u64)> {
     let mut field_values: BTreeMap<String, BTreeSet<Value>> = BTreeMap::new();
 
     for log in logs {
@@ -160,7 +160,7 @@ fn distinct_field_values(logs: Vec<Log>) -> Vec<(String, u32)> {
 
     field_values
         .into_iter()
-        .map(|(k, v)| (k, v.len() as u32))
+        .map(|(k, v)| (k, v.len() as u64))
         .collect()
 }
 

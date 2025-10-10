@@ -577,19 +577,7 @@ where
         .labelled("mv-expand")
         .boxed();
 
-    let limit_int = select! { Token::Integer(x) => x }
-        .validate(|x, e, emitter| {
-            if x >= 0 && x <= u32::MAX as i64 {
-                x as u32
-            } else {
-                emitter.emit(Rich::custom(
-                    e.span(),
-                    "limit must be a non-negative integer less than 2^32",
-                ));
-                0
-            }
-        })
-        .labelled("limit value");
+    let limit_int = select! { Token::Integer(x) => x as u64 }.labelled("limit value");
 
     let limit_step = just(Token::Limit)
         .or(just(Token::Take))

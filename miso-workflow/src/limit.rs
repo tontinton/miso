@@ -5,13 +5,13 @@ use crate::{log_utils::PartialStreamItem, try_next_with_partial_stream};
 
 pub struct LimitIter {
     input: LogIter,
-    limit: u32,
-    streamed: u32,
-    partial_limits: HashMap<usize, u32>,
+    limit: u64,
+    streamed: u64,
+    partial_limits: HashMap<usize, u64>,
 }
 
 impl LimitIter {
-    pub fn new(input: LogIter, limit: u32) -> Self {
+    pub fn new(input: LogIter, limit: u64) -> Self {
         Self {
             input,
             limit,

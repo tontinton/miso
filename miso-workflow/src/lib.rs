@@ -91,15 +91,15 @@ pub enum WorkflowStep {
     Expand(Expand),
 
     /// Limit to X amount of records.
-    Limit(u32),
-    MuxLimit(u32),
+    Limit(u64),
+    MuxLimit(u64),
 
     /// Sort records.
     Sort(Vec<Sort>),
 
     /// Basically like Sort -> Limit, but more memory efficient (holding only N records).
-    TopN(Vec<Sort>, u32),
-    MuxTopN(Vec<Sort>, u32),
+    TopN(Vec<Sort>, u64),
+    MuxTopN(Vec<Sort>, u64),
 
     /// Group records by fields, and aggregate the grouped buckets.
     Summarize(Summarize),

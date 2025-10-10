@@ -6,11 +6,11 @@ use crate::pattern;
 use super::{Group, Optimization, Pattern};
 
 pub struct DynamicFilter {
-    max_distinct_values: u32,
+    max_distinct_values: u64,
 }
 
 impl DynamicFilter {
-    pub fn new(max_distinct_values: u32) -> Self {
+    pub fn new(max_distinct_values: u64) -> Self {
         Self {
             max_distinct_values,
         }
@@ -96,9 +96,9 @@ fn calculate_max_distinct_count(
     join_field: String,
     scan: &Scan,
     steps_after_scan: &[WorkflowStep],
-) -> Option<u32> {
-    let mut dcount: Option<u32> = None;
-    let mut prev_dcount: Option<u32> = None;
+) -> Option<u64> {
+    let mut dcount: Option<u64> = None;
+    let mut prev_dcount: Option<u64> = None;
     let mut fields = vec![join_field];
 
     for step in steps_after_scan.iter().rev() {
@@ -106,7 +106,7 @@ fn calculate_max_distinct_count(
             WorkflowStep::Count => dcount = Some(1),
 
             WorkflowStep::Limit(limit) | WorkflowStep::TopN(.., limit) => {
-                dcount = Some(dcount.map_or(*limit, |d: u32| d.min(*limit)));
+                dcount = Some(dcount.map_or(*limit, |d: u64| d.min(*limit)));
             }
 
             WorkflowStep::Summarize(summarize) => {
@@ -133,7 +133,7 @@ fn calculate_max_distinct_count(
     if dcounts.len() == fields.len() {
         dcount = dcounts
             .into_iter()
-            .try_fold(1u32, |acc, x| acc.checked_mul(x))
+            .try_fold(1u64, |acc, x| acc.checked_mul(x))
             .map(|summarize_dc| dcount.map_or(summarize_dc, |limit_dc| summarize_dc.min(limit_dc)))
             .or(dcount);
     }

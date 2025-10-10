@@ -26,7 +26,7 @@ pub struct Args {
         help = "Max distinct values of a field to be considered for dynamic filtering.",
         default_value = "10000"
     )]
-    pub dynamic_filter_max_distinct_values: u32,
+    pub dynamic_filter_max_distinct_values: u64,
 }
 
 #[must_use]

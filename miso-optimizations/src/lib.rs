@@ -63,7 +63,7 @@ macro_rules! opt_once {
 }
 
 /// Like dynamic-filtering.small.max-distinct-values-per-driver in trino.
-const DEFAULT_MAX_DISTINCT_COUNT_FOR_DYNAMIC_FILTER: u32 = 10000;
+const DEFAULT_MAX_DISTINCT_COUNT_FOR_DYNAMIC_FILTER: u64 = 10000;
 
 pub trait Optimization: Send + Sync {
     fn pattern(&self) -> Pattern;
@@ -94,7 +94,7 @@ impl Optimizer {
         }
     }
 
-    pub fn with_dynamic_filtering(max_distinct_values: u32) -> Self {
+    pub fn with_dynamic_filtering(max_distinct_values: u64) -> Self {
         Self::new(vec![
             // Pre predicate pushdowns.
             vec![

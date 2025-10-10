@@ -392,7 +392,7 @@ async fn metrics() -> Result<Response, HttpError> {
 pub enum OptimizationConfig {
     NoOptimizations,
     WithOptimizations {
-        dynamic_filter_max_distinct_values: u32,
+        dynamic_filter_max_distinct_values: u64,
     },
 }
 

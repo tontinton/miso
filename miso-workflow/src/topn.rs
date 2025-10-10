@@ -166,7 +166,7 @@ pub struct PartialTopNIter {
 }
 
 impl PartialTopNIter {
-    pub fn new(input: LogIter, sorts: Vec<Sort>, limit: u32) -> Self {
+    pub fn new(input: LogIter, sorts: Vec<Sort>, limit: u64) -> Self {
         Self {
             input,
             state: Some(TopNState::new(

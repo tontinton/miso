@@ -271,7 +271,7 @@ fn test_extend() {
 
 #[test_case("connector.table | limit 100", 100)]
 #[test_case("connector.table | take 50", 50)]
-fn test_limit(query: &str, expected_limit: u32) {
+fn test_limit(query: &str, expected_limit: u64) {
     let result = parse_unwrap!(query);
 
     match &result[1] {

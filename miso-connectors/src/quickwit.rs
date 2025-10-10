@@ -78,7 +78,7 @@ struct QuickwitHandle {
     group_by: Vec<String>,
     count_fields: Vec<String>,
     agg_timestamp_fields: HashSet<String>,
-    limit: Option<u32>,
+    limit: Option<u64>,
     count: bool,
     collections: Vec<String>,
 }
@@ -104,13 +104,13 @@ impl QuickwitHandle {
         handle
     }
 
-    fn with_limit(&self, limit: u32) -> QuickwitHandle {
+    fn with_limit(&self, limit: u64) -> QuickwitHandle {
         let mut handle = self.clone();
         handle.limit = Some(limit);
         handle
     }
 
-    fn with_topn(&self, sort: Value, limit: u32) -> QuickwitHandle {
+    fn with_topn(&self, sort: Value, limit: u64) -> QuickwitHandle {
         let mut handle = self.clone();
         handle.limit = Some(limit);
         handle.sorts = Some(sort);
@@ -772,7 +772,7 @@ impl QuickwitConnector {
         query: Option<Value>,
         scroll_timeout: Duration,
         scroll_size: u16,
-        limit: Option<u32>,
+        limit: Option<u64>,
         timestamp_field: Option<String>,
     ) -> Result<LogTryStream> {
         let start = Instant::now();
@@ -961,7 +961,7 @@ impl QuickwitConnector {
         url: String,
         index: String,
         query: Option<Value>,
-        limit: Option<u32>,
+        limit: Option<u64>,
         group_by: Vec<String>,
         count_fields: Vec<String>,
         agg_timestamp_fields: HashSet<String>,
@@ -1064,7 +1064,7 @@ impl Connector for QuickwitConnector {
         let handle = downcast_unwrap!(handle, QuickwitHandle);
         let limit = handle.limit;
         let scroll_size = limit.map_or(self.config.scroll_size, |l| {
-            l.min(self.config.scroll_size as u32) as u16
+            l.min(self.config.scroll_size as u64) as u16
         });
         let timestamp_field = handle.timestamp_field.clone();
 
@@ -1123,7 +1123,7 @@ impl Connector for QuickwitConnector {
         if handle.count {
             let mut result = count(&self.client, &url, &collections, query).await?;
             if let Some(limit) = limit {
-                result = (limit as u64).min(result);
+                result = limit.min(result);
             }
             return Ok(QueryResponse::Count(result));
         }
@@ -1175,7 +1175,7 @@ impl Connector for QuickwitConnector {
         Some(Box::new(handle.with_filter(compile_filter_ast(ast)?)))
     }
 
-    fn apply_limit(&self, mut max: u32, handle: &dyn QueryHandle) -> Option<Box<dyn QueryHandle>> {
+    fn apply_limit(&self, mut max: u64, handle: &dyn QueryHandle) -> Option<Box<dyn QueryHandle>> {
         let handle = downcast_unwrap!(handle, QuickwitHandle);
         if let Some(limit) = handle.limit
             && limit < max
@@ -1188,7 +1188,7 @@ impl Connector for QuickwitConnector {
     fn apply_topn(
         &self,
         sorts: &[Sort],
-        mut max: u32,
+        mut max: u64,
         handle: &dyn QueryHandle,
     ) -> Option<Box<dyn QueryHandle>> {
         let handle = downcast_unwrap!(handle, QuickwitHandle);
