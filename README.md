@@ -20,16 +20,15 @@ curl -N -H 'Content-Type: application/json' localhost:8080/query -d '{
     | union (localqw.hdfs2)
     | where @time > now() - 1d
     | summarize
-        minTid = min(tenant_id),
-        maxTid = max(tenant_id),
-        count = countif(severity == 100)
-      by severity_text
+        minTenant = min(tenant_id),
+        maxTenant = max(tenant_id),
+        count = countif(severity between (50 .. 100))
+      by bin(@time, 1h)
     | join (
         localqw.stackoverflow
         | where questionId > 80
-      ) on $left.minTid == $right.questionId
+      ) on $left.minTenant == $right.questionId
     | top 10 by count desc
-    | project-rename minimumTenantID = minTid
   "
 }'
 ```
