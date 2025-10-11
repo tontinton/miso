@@ -837,6 +837,68 @@ async fn project_summarize() -> Result<()> {
 }
 
 #[tokio::test]
+async fn summarize_without_by() -> Result<()> {
+    check(
+        r#"
+        test.c
+        | summarize max_x=max(x),
+                    min_x=min(x),
+                    sum_x=sum(x),
+                    avg_x=avg(x),
+                    dcount_z=dcount(z),
+                    cnt=count(),
+                    cif=countif(z == 2)
+        "#,
+        r#"[{"x": 3, "y": 3, "z": 2}, {"x": 5, "y": 6, "z": 1}, {"x": 1, "y": 3, "z": 2}, {"x": 9, "y": 6, "z": 3}]"#,
+        r#"[
+            {"max_x": 9, "min_x": 1, "sum_x": 18.0, "avg_x": 4.5, "dcount_z": 3, "cnt": 4, "cif": 2}
+        ]"#,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn project_summarize_without_by() -> Result<()> {
+    check(
+        r#"
+        test.c
+        | project x=a, y=b, z=c
+        | summarize max_x=max(x),
+                    min_x=min(x),
+                    sum_x=sum(x),
+                    avg_x=avg(x),
+                    dcount_z=dcount(z),
+                    cnt=count(),
+                    cif=countif(z == 2)
+        "#,
+        r#"[{"a": 3, "b": 3, "c": 2}, {"a": 5, "b": 6, "c": 1}, {"a": 1, "b": 3, "c": 2}, {"a": 9, "b": 6, "c": 3}]"#,
+        r#"[
+            {"max_x": 9, "min_x": 1, "sum_x": 18.0, "avg_x": 4.5, "dcount_z": 3, "cnt": 4, "cif": 2}
+        ]"#,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn summarize_without_by_single_row() -> Result<()> {
+    check(
+        r#"
+        test.c
+        | summarize max_x=max(x),
+                    min_x=min(x),
+                    sum_x=sum(x),
+                    avg_x=avg(x),
+                    cnt=count()
+        "#,
+        r#"[{"x": 42, "y": 1}]"#,
+        r#"[
+            {"max_x": 42, "min_x": 42, "sum_x": 42.0, "avg_x": 42.0, "cnt": 1}
+        ]"#,
+    )
+    .await
+}
+
+#[tokio::test]
 async fn summarize_bin() -> Result<()> {
     check(
         r#"
