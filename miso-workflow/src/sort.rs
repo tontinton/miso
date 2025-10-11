@@ -23,7 +23,7 @@ use crate::{
 
 /// If the sorting set is smaller than this, just sort immediately without building a thread pool
 /// to sort in parallel.
-const PARALLEL_SORT_THREASHOLD: usize = 5000;
+const PARALLEL_SORT_THRESHOLD: usize = 5000;
 const SORT_THREAD_TAG: &str = "sort";
 
 #[derive(Debug)]
@@ -170,7 +170,7 @@ pub fn sort_rx(
             let config = SortConfig::new(sorts);
             let mut logs = collect_logs(&config.by, CancelIter::new(input.take(), cancel.clone()))?;
 
-            let sorted = if logs.len() < PARALLEL_SORT_THREASHOLD {
+            let sorted = if logs.len() < PARALLEL_SORT_THRESHOLD {
                 logs.sort_unstable_by(|a, b| cmp_logs(a, b, &config));
                 logs
             } else {
