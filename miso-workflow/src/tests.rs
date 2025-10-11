@@ -652,6 +652,16 @@ async fn filter_not_exists() -> Result<()> {
 }
 
 #[tokio::test]
+async fn filter_between() -> Result<()> {
+    check(
+        r#"test.c | where value between (10 .. 20)"#,
+        r#"[{"value": 5}, {"value": 9}, {"value": 10}, {"value": 15}, {"value": 20}, {"value": 21}, {"value": 25}]"#,
+        r#"[{"value": 10}, {"value": 15}, {"value": 20}]"#,
+    )
+    .await
+}
+
+#[tokio::test]
 async fn project_add() -> Result<()> {
     check(
         r#"test.c | project world=world, test=toreal(world) + 2"#,

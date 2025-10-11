@@ -15,6 +15,8 @@ pub enum Token {
 
     #[token("|")]
     Pipe,
+    #[token("..")]
+    DotDot,
     #[token(".")]
     Dot,
     #[token("==")]
@@ -164,6 +166,8 @@ pub enum Token {
     Bin,
     #[token("let")]
     Let,
+    #[token("between")]
+    Between,
 
     #[token(",")]
     Comma,

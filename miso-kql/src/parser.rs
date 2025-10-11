@@ -451,7 +451,32 @@ where
             ))
             .boxed();
 
-        let expr_list = bin_op_expr
+        let range = bin_op_expr
+            .clone()
+            .then_ignore(just(Token::DotDot))
+            .then(bin_op_expr.clone())
+            .delimited_by(just(Token::LParen), just(Token::RParen))
+            .recover_with(via_parser(nested_delimiters(
+                Token::LParen,
+                Token::RParen,
+                [(Token::LBracket, Token::RBracket)],
+                |_| (Expr::Literal(Value::Null), Expr::Literal(Value::Null)),
+            )))
+            .boxed();
+
+        let between_expr = bin_op_expr
+            .clone()
+            .then(just(Token::Between).ignore_then(range).or_not())
+            .map(|(left, maybe_range)| match maybe_range {
+                Some((start, end)) => Expr::And(
+                    Box::new(Expr::Gte(Box::new(left.clone()), Box::new(start))),
+                    Box::new(Expr::Lte(Box::new(left), Box::new(end))),
+                ),
+                None => left,
+            })
+            .boxed();
+
+        let expr_list = between_expr
             .clone()
             .separated_by(just(Token::Comma))
             .collect::<Vec<_>>()
@@ -464,7 +489,7 @@ where
             )))
             .boxed();
 
-        let in_expr = bin_op_expr
+        let in_expr = between_expr
             .clone()
             .then(just(Token::In).ignore_then(expr_list).or_not())
             .map(|(left, maybe_list)| match maybe_list {

@@ -97,6 +97,69 @@ fn test_filter_with_different_operators(query: &str, op_name: &str) {
     }
 }
 
+#[test]
+fn test_filter_with_between_operator() {
+    let query = "connector.table | where field1 between (50 .. 55)";
+    let result = parse_unwrap!(query);
+    assert_eq!(result.len(), 2);
+
+    match &result[1] {
+        QueryStep::Filter(expr) => match expr {
+            Expr::And(left, right) => {
+                match left.as_ref() {
+                    Expr::Gte(field, val) => {
+                        assert!(matches!(field.as_ref(), Expr::Field(_)));
+                        assert!(matches!(val.as_ref(), Expr::Literal(_)));
+                    }
+                    _ => panic!("Expected Gte expression on left side of And"),
+                }
+
+                match right.as_ref() {
+                    Expr::Lte(field, val) => {
+                        assert!(matches!(field.as_ref(), Expr::Field(_)));
+                        assert!(matches!(val.as_ref(), Expr::Literal(_)));
+                    }
+                    _ => panic!("Expected Lte expression on right side of And"),
+                }
+            }
+            _ => panic!("Expected And expression for between query: {}", query),
+        },
+        _ => panic!("Expected Filter step for query: {}", query),
+    }
+}
+
+#[test]
+fn test_filter_with_between_float_range() {
+    let query = "connector.table | where temperature between (98.6 .. 102.5)";
+    let result = parse_unwrap!(query);
+    assert_eq!(result.len(), 2);
+
+    match &result[1] {
+        QueryStep::Filter(expr) => {
+            assert!(matches!(expr, Expr::And(_, _)));
+        }
+        _ => panic!("Expected Filter step with between expression"),
+    }
+}
+
+#[test]
+fn test_filter_with_between_and_other_conditions() {
+    let query = "connector.table | where field1 between (10 .. 20) and field2 == 5";
+    let result = parse_unwrap!(query);
+    assert_eq!(result.len(), 2);
+
+    match &result[1] {
+        QueryStep::Filter(expr) => match expr {
+            Expr::And(left, right) => {
+                assert!(matches!(left.as_ref(), Expr::And(_, _)));
+                assert!(matches!(right.as_ref(), Expr::Eq(_, _)));
+            }
+            _ => panic!("Expected nested And expression"),
+        },
+        _ => panic!("Expected Filter step"),
+    }
+}
+
 #[test_case("connector.table | where field1 contains \"test\"", "contains")]
 #[test_case("connector.table | where field1 startswith \"test\"", "startswith")]
 #[test_case("connector.table | where field1 endswith \"test\"", "endswith")]
