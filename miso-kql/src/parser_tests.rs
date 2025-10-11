@@ -160,6 +160,37 @@ fn test_filter_with_between_and_other_conditions() {
     }
 }
 
+#[test]
+fn test_filter_with_not_between_operator() {
+    let query = "connector.table | where field1 !between (50 .. 55)";
+    let result = parse_unwrap!(query);
+    assert_eq!(result.len(), 2);
+
+    match &result[1] {
+        QueryStep::Filter(expr) => match expr {
+            Expr::Or(left, right) => {
+                match left.as_ref() {
+                    Expr::Lt(field, val) => {
+                        assert!(matches!(field.as_ref(), Expr::Field(_)));
+                        assert!(matches!(val.as_ref(), Expr::Literal(_)));
+                    }
+                    _ => panic!("Expected Lt expression on left side of Or"),
+                }
+
+                match right.as_ref() {
+                    Expr::Gt(field, val) => {
+                        assert!(matches!(field.as_ref(), Expr::Field(_)));
+                        assert!(matches!(val.as_ref(), Expr::Literal(_)));
+                    }
+                    _ => panic!("Expected Gt expression on right side of Or"),
+                }
+            }
+            _ => panic!("Expected Or expression for !between query: {}", query),
+        },
+        _ => panic!("Expected Filter step for query: {}", query),
+    }
+}
+
 #[test_case("connector.table | where field1 contains \"test\"", "contains")]
 #[test_case("connector.table | where field1 startswith \"test\"", "startswith")]
 #[test_case("connector.table | where field1 endswith \"test\"", "endswith")]

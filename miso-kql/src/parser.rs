@@ -466,12 +466,28 @@ where
 
         let between_expr = bin_op_expr
             .clone()
-            .then(just(Token::Between).ignore_then(range).or_not())
+            .then(
+                choice((
+                    just(Token::Between).to(true),
+                    just(Token::NotBetween).to(false),
+                ))
+                .then(range)
+                .or_not(),
+            )
             .map(|(left, maybe_range)| match maybe_range {
-                Some((start, end)) => Expr::And(
-                    Box::new(Expr::Gte(Box::new(left.clone()), Box::new(start))),
-                    Box::new(Expr::Lte(Box::new(left), Box::new(end))),
-                ),
+                Some((is_between, (start, end))) => {
+                    if is_between {
+                        Expr::And(
+                            Box::new(Expr::Gte(Box::new(left.clone()), Box::new(start))),
+                            Box::new(Expr::Lte(Box::new(left), Box::new(end))),
+                        )
+                    } else {
+                        Expr::Or(
+                            Box::new(Expr::Lt(Box::new(left.clone()), Box::new(start))),
+                            Box::new(Expr::Gt(Box::new(left), Box::new(end))),
+                        )
+                    }
+                }
                 None => left,
             })
             .boxed();

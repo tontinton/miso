@@ -168,6 +168,8 @@ pub enum Token {
     Let,
     #[token("between")]
     Between,
+    #[token("!between")]
+    NotBetween,
 
     #[token(",")]
     Comma,
