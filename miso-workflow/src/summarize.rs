@@ -149,7 +149,11 @@ impl Aggregate for Avg {
     }
 
     fn value(&self) -> Value {
-        Value::from(self.value / self.count as f64)
+        Value::from(if self.count == 0 {
+            0.0
+        } else {
+            self.value / self.count as f64
+        })
     }
 }
 

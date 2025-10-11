@@ -880,6 +880,25 @@ async fn project_summarize_without_by() -> Result<()> {
 }
 
 #[tokio::test]
+async fn summarize_without_by_empty_data() -> Result<()> {
+    check(
+        r#"
+        test.c
+        | summarize max_x=max(x),
+                    min_x=min(x),
+                    sum_x=sum(x),
+                    avg_x=avg(x),
+                    cnt=count()
+        "#,
+        r#"[]"#,
+        r#"[
+            {"max_x": null, "min_x": null, "sum_x": 0.0, "avg_x": 0.0, "cnt": 0}
+        ]"#,
+    )
+    .await
+}
+
+#[tokio::test]
 async fn summarize_without_by_single_row() -> Result<()> {
     check(
         r#"
