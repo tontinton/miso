@@ -1,6 +1,6 @@
 use color_eyre::Result;
 use miso_workflow::interpreter::{ExprEvaluator, Val};
-use miso_workflow_types::{expr::Expr, field::Field};
+use miso_workflow_types::{expr::Expr, field::Field, value::Value};
 
 /// Partial eval a binop.
 macro_rules! partial_eval_lr {
@@ -60,8 +60,34 @@ pub fn partial_eval(expr: &Expr) -> Result<Expr> {
             Box::new(partial_eval(default)?),
         ),
 
-        Expr::Or(l, r) => partial_eval_lr!(Or, l, r),
-        Expr::And(l, r) => partial_eval_lr!(And, l, r),
+        Expr::And(l, r) => {
+            let l = partial_eval(l)?;
+            let r = partial_eval(r)?;
+
+            match (&l, &r) {
+                (Expr::Literal(Value::Bool(false)), _) | (_, Expr::Literal(Value::Bool(false))) => {
+                    Expr::Literal(Value::Bool(false))
+                }
+                (Expr::Literal(Value::Bool(true)), _) => r,
+                (_, Expr::Literal(Value::Bool(true))) => l,
+                _ => Expr::And(Box::new(l), Box::new(r)),
+            }
+        }
+
+        Expr::Or(l, r) => {
+            let l = partial_eval(l)?;
+            let r = partial_eval(r)?;
+
+            match (&l, &r) {
+                (Expr::Literal(Value::Bool(true)), _) | (_, Expr::Literal(Value::Bool(true))) => {
+                    Expr::Literal(Value::Bool(true))
+                }
+                (Expr::Literal(Value::Bool(false)), _) => r,
+                (_, Expr::Literal(Value::Bool(false))) => l,
+                _ => Expr::Or(Box::new(l), Box::new(r)),
+            }
+        }
+
         Expr::Plus(l, r) => partial_eval_lr!(Plus, l, r),
         Expr::Minus(l, r) => partial_eval_lr!(Minus, l, r),
         Expr::Mul(l, r) => partial_eval_lr!(Mul, l, r),
@@ -164,6 +190,53 @@ mod tests {
                 assert_eq!(s, "yes");
             }
             other => panic!("Expected \"yes\" literal, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_partial_eval_and_or_short_circuit() {
+        // true AND x -> x
+        let expr = Expr::And(
+            Box::new(Expr::Literal(Value::Bool(true))),
+            Box::new(Expr::Field(field_unwrap!("x"))),
+        );
+        let result = partial_eval(&expr).unwrap();
+        match result {
+            Expr::Field(f) => assert_eq!(&f.to_string(), "x"),
+            _ => panic!("Expected field x, got {:?}", result),
+        }
+
+        // false AND x -> false
+        let expr = Expr::And(
+            Box::new(Expr::Literal(Value::Bool(false))),
+            Box::new(Expr::Field(field_unwrap!("x"))),
+        );
+        let result = partial_eval(&expr).unwrap();
+        match result {
+            Expr::Literal(Value::Bool(false)) => (),
+            _ => panic!("Expected false, got {:?}", result),
+        }
+
+        // true OR x -> true
+        let expr = Expr::Or(
+            Box::new(Expr::Literal(Value::Bool(true))),
+            Box::new(Expr::Field(field_unwrap!("x"))),
+        );
+        let result = partial_eval(&expr).unwrap();
+        match result {
+            Expr::Literal(Value::Bool(true)) => (),
+            _ => panic!("Expected true, got {:?}", result),
+        }
+
+        // false OR x -> x
+        let expr = Expr::Or(
+            Box::new(Expr::Literal(Value::Bool(false))),
+            Box::new(Expr::Field(field_unwrap!("x"))),
+        );
+        let result = partial_eval(&expr).unwrap();
+        match result {
+            Expr::Field(f) => assert_eq!(&f.to_string(), "x"),
+            _ => panic!("Expected field x, got {:?}", result),
         }
     }
 }
