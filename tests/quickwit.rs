@@ -471,6 +471,15 @@ async fn predicate_pushdown_same_results(
 #[test_case(
     r#"
     test.stack
+    | where case(acceptedAnswerId > 50, "big", acceptedAnswerId > 10, "medium", "small") == "medium"
+    "#,
+    r#"test.stack"#,
+    2;
+    "filter_case"
+)]
+#[test_case(
+    r#"
+    test.stack
     | summarize minQuestionId=min(questionId),
                 maxQuestionId=max(questionId),
                 sumQuestionId=sum(questionId),
