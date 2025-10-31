@@ -36,6 +36,13 @@ pub trait ExprTransformer {
                 Box::new(self.transform(*e)),
                 arr.into_iter().map(|a| self.transform(a)).collect(),
             ),
+            Expr::Case(predicates, default) => Expr::Case(
+                predicates
+                    .into_iter()
+                    .map(|(p, t)| (self.transform(p), self.transform(t)))
+                    .collect(),
+                Box::new(self.transform(*default)),
+            ),
 
             Expr::Bin(l, r) => transform_binop!(Expr::Bin, self, l, r),
             Expr::Or(l, r) => transform_binop!(Expr::Or, self, l, r),

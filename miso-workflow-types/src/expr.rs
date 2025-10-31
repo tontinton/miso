@@ -25,6 +25,7 @@ pub enum Expr {
 
     In(Box<Expr>, Vec<Expr>), // like python's in
     Bin(Box<Expr>, Box<Expr>),
+    Case(Vec<(Expr, Expr)>, Box<Expr>), // switch case default
 
     Contains(Box<Expr>, Box<Expr>),   // string - left.contains(right)
     StartsWith(Box<Expr>, Box<Expr>), // string - left.starts_with(right)
@@ -92,6 +93,18 @@ impl fmt::Display for Expr {
             Expr::Bin(lhs, rhs) => {
                 write!(f, "({lhs} bin by {rhs})")
             }
+            Expr::Case(predicates, default) => {
+                write!(f, "case(")?;
+                let mut first = true;
+                for (predicate, then) in predicates {
+                    if !first {
+                        write!(f, ", ")?;
+                    }
+                    first = false;
+                    write!(f, "{predicate}, {then}")?;
+                }
+                write!(f, ", {default})")
+            }
 
             Expr::Contains(lhs, rhs) => write!(f, "({lhs} contains {rhs})"),
             Expr::StartsWith(lhs, rhs) => write!(f, "({lhs} starts_with {rhs})"),
@@ -130,6 +143,13 @@ impl Expr {
                 for item in arr {
                     item._fields(out);
                 }
+            }
+            Expr::Case(predicates, default) => {
+                for (predicate, then) in predicates {
+                    predicate._fields(out);
+                    then._fields(out);
+                }
+                default._fields(out);
             }
 
             Expr::Bin(l, r) => fields_binop!(l, r, out),
