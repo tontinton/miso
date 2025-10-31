@@ -106,23 +106,21 @@ impl fmt::Display for Expr {
                 write!(f, ", {default})")
             }
 
-            Expr::Contains(lhs, rhs) => write!(f, "({lhs} contains {rhs})"),
-            Expr::StartsWith(lhs, rhs) => write!(f, "({lhs} starts_with {rhs})"),
-            Expr::EndsWith(lhs, rhs) => write!(f, "({lhs} ends_with {rhs})"),
-            Expr::Has(lhs, rhs) => write!(f, "({lhs} has {rhs})"),
-            Expr::HasCs(lhs, rhs) => write!(f, "({lhs} has_cs {rhs})"),
-
-            Expr::Eq(lhs, rhs) => write!(f, "({lhs} == {rhs})"),
-            Expr::Ne(lhs, rhs) => write!(f, "({lhs} != {rhs})"),
-            Expr::Gt(lhs, rhs) => write!(f, "({lhs} > {rhs})"),
-            Expr::Gte(lhs, rhs) => write!(f, "({lhs} >= {rhs})"),
-            Expr::Lt(lhs, rhs) => write!(f, "({lhs} < {rhs})"),
-            Expr::Lte(lhs, rhs) => write!(f, "({lhs} <= {rhs})"),
-
-            Expr::Mul(lhs, rhs) => write!(f, "({lhs} * {rhs})"),
-            Expr::Div(lhs, rhs) => write!(f, "({lhs} / {rhs})"),
-            Expr::Plus(lhs, rhs) => write!(f, "({lhs} + {rhs})"),
-            Expr::Minus(lhs, rhs) => write!(f, "({lhs} - {rhs})"),
+            Expr::Contains(lhs, rhs) => write!(f, "{lhs} contains {rhs}"),
+            Expr::StartsWith(lhs, rhs) => write!(f, "{lhs} starts_with {rhs}"),
+            Expr::EndsWith(lhs, rhs) => write!(f, "{lhs} ends_with {rhs}"),
+            Expr::Has(lhs, rhs) => write!(f, "{lhs} has {rhs}"),
+            Expr::HasCs(lhs, rhs) => write!(f, "{lhs} has_cs {rhs}"),
+            Expr::Eq(lhs, rhs) => write!(f, "{lhs} == {rhs}"),
+            Expr::Ne(lhs, rhs) => write!(f, "{lhs} != {rhs}"),
+            Expr::Gt(lhs, rhs) => write!(f, "{lhs} > {rhs}"),
+            Expr::Gte(lhs, rhs) => write!(f, "{lhs} >= {rhs}"),
+            Expr::Lt(lhs, rhs) => write!(f, "{lhs} < {rhs}"),
+            Expr::Lte(lhs, rhs) => write!(f, "{lhs} <= {rhs}"),
+            Expr::Mul(lhs, rhs) => write!(f, "{lhs} * {rhs}"),
+            Expr::Div(lhs, rhs) => write!(f, "{lhs} / {rhs}"),
+            Expr::Plus(lhs, rhs) => write!(f, "{lhs} + {rhs}"),
+            Expr::Minus(lhs, rhs) => write!(f, "{lhs} - {rhs}"),
         }
     }
 }
