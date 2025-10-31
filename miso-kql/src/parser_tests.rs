@@ -926,6 +926,71 @@ fn test_datetime_in_complex_expression() {
 }
 
 #[test_case(
+    "case(x > 10, \"high\", x > 5, \"medium\", \"low\")";
+    "basic_case_with_three_clauses"
+)]
+#[test_case(
+    "case(a == 1, \"one\", a == 2, \"two\", \"other\")";
+    "integer_comparisons"
+)]
+#[test_case(
+    "case(field1 == true, \"yes\", field1 == false, \"no\", \"unknown\")";
+    "boolean_case"
+)]
+#[test_case(
+    "case(field1 > datetime(2020-01-01), \"recent\", field1 > datetime(2010-01-01), \"old\", \"ancient\")";
+    "datetime_case"
+)]
+fn test_case_expression(expr_str: &str) {
+    let query = format!("connector.table | extend result = {}", expr_str);
+    let result = parse_unwrap!(&query);
+
+    match &result[1] {
+        QueryStep::Extend(fields) => {
+            assert_eq!(fields.len(), 1, "Expected one field in extend");
+            match &fields[0].from {
+                Expr::Case(arms, else_expr) => {
+                    assert!(
+                        !arms.is_empty(),
+                        "Expected at least one (predicate, then) pair"
+                    );
+
+                    for (pred, then_expr) in arms {
+                        assert!(
+                            matches!(
+                                pred,
+                                Expr::Gt(_, _)
+                                    | Expr::Lt(_, _)
+                                    | Expr::Eq(_, _)
+                                    | Expr::Ne(_, _)
+                                    | Expr::Gte(_, _)
+                                    | Expr::Lte(_, _)
+                                    | Expr::Literal(_)
+                                    | Expr::Field(_)
+                            ),
+                            "Invalid predicate expression in CASE: {:?}",
+                            pred
+                        );
+                        assert!(
+                            matches!(then_expr, Expr::Literal(_)),
+                            "THEN expression must be a literal, got: {:?}",
+                            then_expr
+                        );
+                    }
+
+                    assert!(
+                        matches!(&**else_expr, Expr::Literal(_)),
+                        "Expected else expression to be a literal"
+                    );
+                }
+                other => panic!("Expected Expr::Case, got {:?}", other),
+            }
+        }
+        _ => panic!("Expected Extend step"),
+    }
+}
+
+#[test_case(
     "connector.table1 | join (connector.table2 | where) on $left. == $right.field2 | project field1",
     3;
     "malformed join subquery and condition"

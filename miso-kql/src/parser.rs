@@ -183,6 +183,8 @@ where
         Token::Avg => "avg".to_string(),
         Token::Bin => "bin".to_string(),
         Token::Let => "let".to_string(),
+        Token::Between => "between".to_string(),
+        Token::Case => "case".to_string(),
     }
 }
 
@@ -348,6 +350,48 @@ where
             .labelled("exists")
             .boxed();
 
+        let case = just(Token::Case)
+            .ignore_then(
+                expr.clone()
+                    .separated_by(just(Token::Comma))
+                    .collect::<Vec<_>>()
+                    .delimited_by(just(Token::LParen), just(Token::RParen))
+                    .recover_with(via_parser(nested_delimiters(
+                        Token::LParen,
+                        Token::RParen,
+                        [(Token::LBracket, Token::RBracket)],
+                        |_| vec![],
+                    ))),
+            )
+            .validate(|mut items, e, emitter| {
+                if items.len() < 3 {
+                    emitter.emit(Rich::custom(
+                        e.span(),
+                        "case() must have at least one predicate, one then, and an else expression",
+                    ));
+                    return Expr::Literal(Value::Null);
+                }
+
+                let else_expr = items.pop().unwrap();
+                let mut pairs = Vec::new();
+                let mut iter = items.into_iter();
+
+                while let (Some(pred), Some(then)) = (iter.next(), iter.next()) {
+                    pairs.push((pred, then));
+                }
+
+                if iter.next().is_some() {
+                    emitter.emit(Rich::custom(
+                        e.span(),
+                        "case() must have an even number of predicate/then expressions before the else",
+                    ));
+                }
+
+                Expr::Case(pairs, Box::new(else_expr))
+            })
+            .labelled("case")
+            .boxed();
+
         let bin = just(Token::Bin)
             .ignore_then(
                 expr.clone()
@@ -399,6 +443,7 @@ where
             .or(not)
             .or(cast)
             .or(exists)
+            .or(case)
             .or(datetime)
             // Must be last (fields can contain tokens that are keywords).
             .or(field.map(Expr::Field))
