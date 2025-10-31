@@ -1,6 +1,8 @@
+mod expr_eval;
 mod log_interpreter;
 mod string_ops;
 
+pub use expr_eval::ExprEvaluator;
 pub use log_interpreter::LogInterpreter;
 
 #[cfg(test)]

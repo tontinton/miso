@@ -1,31 +1,6 @@
 use color_eyre::Result;
-use miso_workflow::interpreter::Val;
-use miso_workflow_types::expr::Expr;
-
-/// Eval left and right and run some function like so: func(left, right).
-macro_rules! eval_lr {
-    ($func:ident, $l:expr, $r:expr) => {
-        eval($l)?.$func(&eval($r)?)?.into()
-    };
-}
-
-/// Eval expression and check if it exists, return not_exist if it doesn't.
-macro_rules! eval_exist {
-    ($eval:expr, $expr:expr) => {{
-        let val = $eval($expr)?;
-        if !val.is_exist() {
-            return Ok(val);
-        }
-        val
-    }};
-}
-
-/// Eval expression, check existence, and convert to bool.
-macro_rules! eval_to_bool {
-    ($eval:expr, $expr:expr) => {
-        eval_exist!($eval, $expr).to_bool()
-    };
-}
+use miso_workflow::interpreter::{ExprEvaluator, Val};
+use miso_workflow_types::{expr::Expr, field::Field};
 
 /// Partial eval a binop.
 macro_rules! partial_eval_lr {
@@ -36,44 +11,32 @@ macro_rules! partial_eval_lr {
     }};
 }
 
-/// Const evaluation (for expressions without fields)
-fn eval(expr: &Expr) -> Result<Val<'static>> {
-    Ok(match expr {
-        Expr::Literal(value) => Val::owned(value.clone()),
-        Expr::Field(_) | Expr::Exists(_) => Val::not_exist(),
-        Expr::Cast(ty, expr) => eval(expr)?.cast(*ty)?,
-        Expr::Or(left, right) => Val::bool(eval_to_bool!(eval, left) || eval_to_bool!(eval, right)),
-        Expr::And(left, right) => {
-            Val::bool(eval_to_bool!(eval, left) && eval_to_bool!(eval, right))
+/// Const evaluation (for expressions without fields).
+pub struct ConstEvaluator;
+
+impl<'a> ExprEvaluator<'a> for ConstEvaluator {
+    fn eval_field(&self, _field: &'a Field) -> Result<Val<'a>> {
+        Ok(Val::not_exist())
+    }
+
+    fn eval_exists(&self, _field: &'a Field) -> Result<Val<'a>> {
+        Ok(Val::not_exist())
+    }
+
+    fn eval_to_bool(&self, expr: &'a Expr) -> Result<Option<bool>> {
+        let val = self.eval(expr)?;
+        if !val.is_exist() {
+            return Ok(None);
         }
-        Expr::Not(expr) => Val::bool(!eval_to_bool!(eval, expr)),
-        Expr::Bin(expr, by) => eval(expr)?.bin(&eval(by)?)?.into(),
-        Expr::In(l, r) => eval(l)?
-            .is_in(&r.iter().map(eval).collect::<Result<Vec<_>>>()?)?
-            .into(),
-        Expr::Plus(l, r) => eval_lr!(add, l, r),
-        Expr::Minus(l, r) => eval_lr!(sub, l, r),
-        Expr::Mul(l, r) => eval_lr!(mul, l, r),
-        Expr::Div(l, r) => eval_lr!(div, l, r),
-        Expr::Eq(l, r) => eval_lr!(eq, l, r),
-        Expr::Ne(l, r) => eval_lr!(ne, l, r),
-        Expr::Gt(l, r) => eval_lr!(gt, l, r),
-        Expr::Gte(l, r) => eval_lr!(gte, l, r),
-        Expr::Lt(l, r) => eval_lr!(lt, l, r),
-        Expr::Lte(l, r) => eval_lr!(lte, l, r),
-        Expr::Contains(l, r) => eval_lr!(contains, l, r),
-        Expr::StartsWith(l, r) => eval_lr!(starts_with, l, r),
-        Expr::EndsWith(l, r) => eval_lr!(ends_with, l, r),
-        Expr::Has(l, r) => eval_lr!(has, l, r),
-        Expr::HasCs(l, r) => eval_lr!(has_cs, l, r),
-    })
+        Ok(Some(val.to_bool()))
+    }
 }
 
 /// Partially evaluate an expression, const-folding where possible.
 pub fn partial_eval(expr: &Expr) -> Result<Expr> {
     // Try to evaluate into a constant literal expression.
     // If unable, try to partially evaluate the inner expressions.
-    match eval(expr) {
+    match ConstEvaluator.eval(expr) {
         Ok(val) if val.is_exist() => {
             return Ok(Expr::Literal(val.0.unwrap().into_owned()));
         }
@@ -85,11 +48,17 @@ pub fn partial_eval(expr: &Expr) -> Result<Expr> {
 
         Expr::Cast(ty, inner) => Expr::Cast(*ty, Box::new(partial_eval(inner)?)),
         Expr::Not(inner) => Expr::Not(Box::new(partial_eval(inner)?)),
-        Expr::In(l, r) => {
-            let left_opt = partial_eval(l)?;
-            let right_opt: Result<Vec<_>> = r.iter().map(partial_eval).collect();
-            Expr::In(Box::new(left_opt), right_opt?)
-        }
+        Expr::In(l, r) => Expr::In(
+            Box::new(partial_eval(l)?),
+            r.iter().map(partial_eval).collect::<Result<Vec<_>>>()?,
+        ),
+        Expr::Case(predicates, default) => Expr::Case(
+            predicates
+                .iter()
+                .map(|(p, t)| Ok((partial_eval(p)?, partial_eval(t)?)))
+                .collect::<Result<Vec<_>>>()?,
+            Box::new(partial_eval(default)?),
+        ),
 
         Expr::Or(l, r) => partial_eval_lr!(Or, l, r),
         Expr::And(l, r) => partial_eval_lr!(And, l, r),
@@ -153,6 +122,48 @@ mod tests {
                 assert!(matches!(*right, Expr::Literal(Value::Int(100))));
             }
             _ => panic!("Expected x > 100, got {:?}", result),
+        }
+    }
+
+    #[test]
+    fn test_partial_eval_case_with_constants_and_field() {
+        // CASE
+        //   WHEN 1 + 1 = 2 THEN "yes"
+        //   WHEN x > 10 THEN "maybe"
+        //   ELSE "no"
+        // =>
+        // "yes"
+
+        let expr = Expr::Case(
+            vec![
+                (
+                    Expr::Eq(
+                        Box::new(Expr::Plus(
+                            Box::new(Expr::Literal(Value::Int(1))),
+                            Box::new(Expr::Literal(Value::Int(1))),
+                        )),
+                        Box::new(Expr::Literal(Value::Int(2))),
+                    ),
+                    Expr::Literal(Value::from("yes")),
+                ),
+                (
+                    Expr::Gt(
+                        Box::new(Expr::Field(field_unwrap!("x"))),
+                        Box::new(Expr::Literal(Value::Int(10))),
+                    ),
+                    Expr::Literal(Value::from("maybe")),
+                ),
+            ],
+            Box::new(Expr::Literal(Value::from("no"))),
+        );
+
+        let result = partial_eval(&expr).unwrap();
+
+        match result {
+            Expr::Literal(Value::String(s)) => {
+                assert_eq!(s, "yes");
+            }
+            other => panic!("Expected \"yes\" literal, got {:?}", other),
         }
     }
 }
