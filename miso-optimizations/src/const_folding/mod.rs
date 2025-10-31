@@ -1,4 +1,4 @@
-mod partial_evaluator;
+pub mod partial_evaluator;
 
 use miso_workflow::WorkflowStep;
 use miso_workflow_types::project::ProjectField;

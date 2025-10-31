@@ -2,10 +2,7 @@ use crate::{expr::Expr, field::Field, value::Value};
 
 macro_rules! transform_binop {
     ($binop:expr, $self:expr, $l:expr, $r:expr) => {
-        $binop(
-            Box::new($self.transform(*$l)),
-            Box::new($self.transform(*$r)),
-        )
+        $self.transform_binop(*$l, *$r, |a, b| $binop(Box::new(a), Box::new(b)))
     };
 }
 
@@ -23,26 +20,40 @@ pub trait ExprTransformer {
         Expr::Literal(value)
     }
 
+    fn transform_in(&self, expr: Expr, arr: Vec<Expr>) -> Expr {
+        Expr::In(
+            Box::new(self.transform(expr)),
+            arr.into_iter().map(|a| self.transform(a)).collect(),
+        )
+    }
+
+    fn transform_case(&self, predicates: Vec<(Expr, Expr)>, default: Expr) -> Expr {
+        Expr::Case(
+            predicates
+                .into_iter()
+                .map(|(p, t)| (self.transform(p), self.transform(t)))
+                .collect(),
+            Box::new(self.transform(default)),
+        )
+    }
+
+    fn transform_binop<F>(&self, left: Expr, right: Expr, rebuild: F) -> Expr
+    where
+        F: Fn(Expr, Expr) -> Expr,
+    {
+        rebuild(self.transform(left), self.transform(right))
+    }
+
     fn transform(&self, expr: Expr) -> Expr {
         match expr {
             Expr::Field(f) => self.transform_field(f),
             Expr::Literal(v) => self.transform_literal(v),
             Expr::Exists(f) => self.transform_exists(f),
+            Expr::In(e, arr) => self.transform_in(*e, arr),
+            Expr::Case(predicates, default) => self.transform_case(predicates, *default),
 
             Expr::Not(e) => Expr::Not(Box::new(self.transform(*e))),
             Expr::Cast(ty, e) => Expr::Cast(ty, Box::new(self.transform(*e))),
-
-            Expr::In(e, arr) => Expr::In(
-                Box::new(self.transform(*e)),
-                arr.into_iter().map(|a| self.transform(a)).collect(),
-            ),
-            Expr::Case(predicates, default) => Expr::Case(
-                predicates
-                    .into_iter()
-                    .map(|(p, t)| (self.transform(p), self.transform(t)))
-                    .collect(),
-                Box::new(self.transform(*default)),
-            ),
 
             Expr::Bin(l, r) => transform_binop!(Expr::Bin, self, l, r),
             Expr::Or(l, r) => transform_binop!(Expr::Or, self, l, r),
