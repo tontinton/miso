@@ -1503,3 +1503,77 @@ async fn let_variable_in_union() -> Result<()> {
     )
     .await
 }
+
+#[tokio::test]
+async fn case_simple_conditions() -> Result<()> {
+    check(
+        r#"
+            test.c
+            | project result = case(x > 10, "big", x > 5, "medium", "small")
+        "#,
+        r#"[{"x": 3}, {"x": 6}, {"x": 12}]"#,
+        r#"[
+            {"result": "small"},
+            {"result": "medium"},
+            {"result": "big"}
+        ]"#,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn case_with_null_and_boolean() -> Result<()> {
+    check(
+        r#"
+            test.c
+            | project result = case(flag == true, "yes", flag == false, "no", "unknown")
+        "#,
+        r#"[{"flag": true}, {"flag": false}, {"flag": null}]"#,
+        r#"[
+            {"result": "yes"},
+            {"result": "no"},
+            {"result": "unknown"}
+        ]"#,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn case_nested() -> Result<()> {
+    check(
+        r#"
+            test.c
+            | project label = case(
+                score >= 90, "A",
+                score >= 80, "B",
+                case(score >= 70, "C", "F")
+            )
+        "#,
+        r#"[{"score": 95}, {"score": 83}, {"score": 76}, {"score": 60}]"#,
+        r#"[
+            {"label": "A"},
+            {"label": "B"},
+            {"label": "C"},
+            {"label": "F"}
+        ]"#,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn case_chained_with_other_ops() -> Result<()> {
+    check(
+        r#"
+            test.c
+            | project category = case(x < 0, "negative", x == 0, "zero", "positive")
+            | summarize c=count() by category
+        "#,
+        r#"[{"x": -1}, {"x": -2}, {"x": 0}, {"x": 1}, {"x": 2}]"#,
+        r#"[
+            {"category": "negative", "c": 2},
+            {"category": "zero", "c": 1},
+            {"category": "positive", "c": 2}
+        ]"#,
+    )
+    .await
+}
