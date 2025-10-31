@@ -88,10 +88,49 @@ pub fn partial_eval(expr: &Expr) -> Result<Expr> {
             }
         }
 
-        Expr::Plus(l, r) => partial_eval_lr!(Plus, l, r),
-        Expr::Minus(l, r) => partial_eval_lr!(Minus, l, r),
-        Expr::Mul(l, r) => partial_eval_lr!(Mul, l, r),
-        Expr::Div(l, r) => partial_eval_lr!(Div, l, r),
+        Expr::Plus(l, r) => {
+            let l = partial_eval(l)?;
+            let r = partial_eval(r)?;
+            match (&l, &r) {
+                (Expr::Literal(a), _) if a.as_f64() == Some(0.0) => r,
+                (_, Expr::Literal(b)) if b.as_f64() == Some(0.0) => l,
+                _ => Expr::Plus(Box::new(l), Box::new(r)),
+            }
+        }
+
+        Expr::Minus(l, r) => {
+            let l = partial_eval(l)?;
+            let r = partial_eval(r)?;
+            match &r {
+                Expr::Literal(b) if b.as_f64() == Some(0.0) => l,
+                _ => Expr::Minus(Box::new(l), Box::new(r)),
+            }
+        }
+
+        Expr::Mul(l, r) => {
+            let l = partial_eval(l)?;
+            let r = partial_eval(r)?;
+            match (&l, &r) {
+                (Expr::Literal(a), _) if a.as_f64() == Some(0.0) => Expr::Literal(Value::Int(0)),
+                (_, Expr::Literal(b)) if b.as_f64() == Some(0.0) => Expr::Literal(Value::Int(0)),
+                (Expr::Literal(a), _) if a.as_f64() == Some(1.0) => r,
+                (_, Expr::Literal(b)) if b.as_f64() == Some(1.0) => l,
+                _ => Expr::Mul(Box::new(l), Box::new(r)),
+            }
+        }
+
+        Expr::Div(l, r) => {
+            let l = partial_eval(l)?;
+            let r = partial_eval(r)?;
+            match (&l, &r) {
+                (Expr::Literal(a), _) if a.as_f64() == Some(0.0) => {
+                    Expr::Literal(Value::Float(0.0))
+                }
+                (_, Expr::Literal(b)) if b.as_f64() == Some(1.0) => l,
+                _ => Expr::Div(Box::new(l), Box::new(r)),
+            }
+        }
+
         Expr::Eq(l, r) => partial_eval_lr!(Eq, l, r),
         Expr::Ne(l, r) => partial_eval_lr!(Ne, l, r),
         Expr::Gt(l, r) => partial_eval_lr!(Gt, l, r),
@@ -232,6 +271,86 @@ mod tests {
         let expr = Expr::Or(
             Box::new(Expr::Literal(Value::Bool(false))),
             Box::new(Expr::Field(field_unwrap!("x"))),
+        );
+        let result = partial_eval(&expr).unwrap();
+        match result {
+            Expr::Field(f) => assert_eq!(&f.to_string(), "x"),
+            _ => panic!("Expected field x, got {:?}", result),
+        }
+    }
+
+    #[test]
+    fn test_partial_eval_arithmetic_folding() {
+        // x + 0 -> x
+        let expr = Expr::Plus(
+            Box::new(Expr::Field(field_unwrap!("x"))),
+            Box::new(Expr::Literal(Value::Int(0))),
+        );
+        let result = partial_eval(&expr).unwrap();
+        match result {
+            Expr::Field(f) => assert_eq!(&f.to_string(), "x"),
+            _ => panic!("Expected field x, got {:?}", result),
+        }
+
+        // 0 + x -> x
+        let expr = Expr::Plus(
+            Box::new(Expr::Literal(Value::Int(0))),
+            Box::new(Expr::Field(field_unwrap!("x"))),
+        );
+        let result = partial_eval(&expr).unwrap();
+        match result {
+            Expr::Field(f) => assert_eq!(&f.to_string(), "x"),
+            _ => panic!("Expected field x, got {:?}", result),
+        }
+
+        // x * 1 -> x
+        let expr = Expr::Mul(
+            Box::new(Expr::Field(field_unwrap!("x"))),
+            Box::new(Expr::Literal(Value::Int(1))),
+        );
+        let result = partial_eval(&expr).unwrap();
+        match result {
+            Expr::Field(f) => assert_eq!(&f.to_string(), "x"),
+            _ => panic!("Expected field x, got {:?}", result),
+        }
+
+        // 1 * x -> x
+        let expr = Expr::Mul(
+            Box::new(Expr::Literal(Value::Int(1))),
+            Box::new(Expr::Field(field_unwrap!("x"))),
+        );
+        let result = partial_eval(&expr).unwrap();
+        match result {
+            Expr::Field(f) => assert_eq!(&f.to_string(), "x"),
+            _ => panic!("Expected field x, got {:?}", result),
+        }
+
+        // x * 0 -> 0
+        let expr = Expr::Mul(
+            Box::new(Expr::Field(field_unwrap!("x"))),
+            Box::new(Expr::Literal(Value::Int(0))),
+        );
+        let result = partial_eval(&expr).unwrap();
+        match result {
+            Expr::Literal(Value::Int(0)) => (),
+            _ => panic!("Expected 0, got {:?}", result),
+        }
+
+        // 0 / x -> 0
+        let expr = Expr::Div(
+            Box::new(Expr::Literal(Value::Int(0))),
+            Box::new(Expr::Field(field_unwrap!("x"))),
+        );
+        let result = partial_eval(&expr).unwrap();
+        match result {
+            Expr::Literal(Value::Float(0.0)) => (),
+            _ => panic!("Expected 0, got {:?}", result),
+        }
+
+        // x / 1 -> x
+        let expr = Expr::Div(
+            Box::new(Expr::Field(field_unwrap!("x"))),
+            Box::new(Expr::Literal(Value::Int(1))),
         );
         let result = partial_eval(&expr).unwrap();
         match result {
