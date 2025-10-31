@@ -19,7 +19,7 @@ impl DynamicFilter {
 
 impl Optimization for DynamicFilter {
     fn pattern(&self) -> Pattern {
-        pattern!(Scan [^Union Project Extend Rename]*? Join)
+        pattern!(Scan [Count Limit TopN Summarize Sort Filter]*? Join)
     }
 
     fn apply(&self, steps: &[WorkflowStep], _groups: &[Group]) -> Option<Vec<WorkflowStep>> {
