@@ -170,6 +170,8 @@ pub enum Token {
     Between,
     #[token("!between")]
     NotBetween,
+    #[token("case")]
+    Case,
 
     #[token(",")]
     Comma,
