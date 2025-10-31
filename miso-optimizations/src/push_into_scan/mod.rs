@@ -1,7 +1,12 @@
+mod case_transformer;
+
 use miso_workflow::WorkflowStep;
 use miso_workflow_types::expr_visitor::ExprTransformer;
 
-use crate::{field_replacer::FieldReplacer, pattern};
+use crate::{
+    const_folding::partial_evaluator::partial_eval, field_replacer::FieldReplacer, pattern,
+    push_into_scan::case_transformer::case_transform,
+};
 
 use super::{Group, Optimization, Pattern};
 
@@ -60,10 +65,20 @@ impl Optimization for PushIntoScan {
                     scan.handle.as_ref(),
                 )?
                 .into(),
-            WorkflowStep::Filter(ast) => scan
-                .connector
-                .apply_filter(&replacer.transform(ast.clone()), scan.handle.as_ref())?
-                .into(),
+            WorkflowStep::Filter(ast) => {
+                let ast = &replacer.transform(ast.clone());
+                scan.connector
+                    .apply_filter(ast, scan.handle.as_ref())
+                    .or_else(|| {
+                        // If case is unsupported (cannot be pushdown to connector via apply_filter),
+                        // replace it with ORs and ANDs, and try again.
+                        let ast_without_case = case_transform(ast.clone());
+                        let final_ast = partial_eval(&ast_without_case).ok()?;
+                        scan.connector
+                            .apply_filter(&final_ast, scan.handle.as_ref())
+                    })?
+                    .into()
+            }
             WorkflowStep::Summarize(summarize) => scan
                 .connector
                 .apply_summarize(
