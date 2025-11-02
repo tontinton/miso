@@ -784,7 +784,7 @@ async fn sort_limit_count() -> Result<()> {
     check(
         r#"test.c | sort by world, test desc | take 2 | count"#,
         r#"[{"world": 3, "test": 1}, {"world": 2, "test": 3}, {"world": 2, "test": 6}]"#,
-        r#"[{"count": 2}]"#,
+        r#"[{"Count": 2}]"#,
     )
     .await
 }
@@ -1102,7 +1102,7 @@ async fn count() -> Result<()> {
     check(
         r#"test.c | count"#,
         r#"[{"world": 3}, {"test": 1}, {"world": 2, "test": 3}, {"world": 2, "test": 6}]"#,
-        r#"[{"count": 4}]"#,
+        r#"[{"Count": 4}]"#,
     )
     .await
 }
@@ -1112,7 +1112,7 @@ async fn count_on_count() -> Result<()> {
     check(
         r#"test.c | count | count"#,
         r#"[{"world": 3}, {"test": 1}, {"world": 2, "test": 3}, {"world": 2, "test": 6}]"#,
-        r#"[{"count": 1}]"#,
+        r#"[{"Count": 1}]"#,
     )
     .await
 }
@@ -1200,7 +1200,7 @@ async fn union_count() -> Result<()> {
             "x" => r#"[{"x": 0}, {"x": 1}, {"x": 2}]"#,
             "y" => r#"[{"x": 3}, {"x": 4}, {"x": 5}, {"x": 6}]"#,
         })
-        .expect(r#"[{"count": 7}]"#)
+        .expect(r#"[{"Count": 7}]"#)
         .call()
         .await
 }

@@ -10,7 +10,7 @@ use super::{
     log_utils::PartialStreamItem, partial_stream::PartialLogIter, try_next_with_partial_stream,
 };
 
-pub const COUNT_LOG_FIELD_NAME: &str = "count";
+pub const COUNT_LOG_FIELD_NAME: &str = "Count";
 
 pub fn count_to_log(count: u64) -> Log {
     let mut log = Log::new();
