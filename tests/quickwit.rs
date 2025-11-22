@@ -478,6 +478,24 @@ async fn predicate_pushdown_same_results(
     "filter_case"
 )]
 #[test_case(
+    r#"test.stack | project acceptedAnswerId"#,
+    r#"test.stack"#,
+    10;
+    "project_one_field"
+)]
+#[test_case(
+    r#"test.stack | project acceptedAnswerId | count"#,
+    r#"test.stack"#,
+    1;
+    "project_count"
+)]
+#[test_case(
+    r#"test.stack | project acceptedAnswerId | summarize c=count()"#,
+    r#"test.stack"#,
+    1;
+    "project_summarize"
+)]
+#[test_case(
     r#"test.stack | summarize c=count()"#,
     r#"test.stack"#,
     1;

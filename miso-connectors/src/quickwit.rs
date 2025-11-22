@@ -22,6 +22,7 @@ use miso_workflow_types::{
     field::Field,
     json,
     log::{Log, LogTryStream},
+    project::ProjectField,
     sort::Sort,
     summarize::{Aggregation, Summarize},
     value::{Map, Value},
@@ -78,6 +79,7 @@ impl Split for QuickwitSplit {
 struct QuickwitHandle {
     timestamp_field: Option<String>,
     queries: Vec<Value>,
+    source_includes: Vec<String>,
     sorts: Option<Value>,
     aggs: Option<Value>,
     group_by: Vec<String>,
@@ -109,6 +111,12 @@ impl QuickwitHandle {
         handle
     }
 
+    fn with_source_includes(&self, fields: Vec<String>) -> QuickwitHandle {
+        let mut handle = self.clone();
+        handle.source_includes = fields;
+        handle
+    }
+
     fn with_limit(&self, limit: u64) -> QuickwitHandle {
         let mut handle = self.clone();
         handle.limit = Some(limit);
@@ -125,6 +133,7 @@ impl QuickwitHandle {
     fn with_count(&self) -> QuickwitHandle {
         let mut handle = self.clone();
         handle.count = true;
+        handle.source_includes.clear(); // Output fields are changed.
         handle
     }
 
@@ -140,6 +149,7 @@ impl QuickwitHandle {
         handle.group_by = group_by;
         handle.count_fields = count_fields;
         handle.agg_timestamp_fields = agg_timestamp_fields;
+        handle.source_includes.clear(); // Output fields are changed.
         handle
     }
 
@@ -608,13 +618,21 @@ async fn begin_search(
     base_url: &str,
     index: &str,
     query: Option<Value>,
+    source_includes: Vec<String>,
     scroll_timeout: &Duration,
     scroll_size: u16,
 ) -> Result<(Vec<Log>, String)> {
+    let source_includes = if source_includes.is_empty() {
+        "".to_string()
+    } else {
+        format!("_source_includes={}&", source_includes.join(","))
+    };
+
     let url = format!(
-        "{}/api/v1/_elastic/{}/_search?scroll={}ms&size={}",
+        "{}/api/v1/_elastic/{}/_search?{}scroll={}ms&size={}",
         base_url,
         index,
+        source_includes,
         scroll_timeout.as_millis(),
         scroll_size,
     );
@@ -681,7 +699,7 @@ async fn search_aggregation(
     index: &str,
     query: Option<Value>,
 ) -> Result<SearchAggregationResponse> {
-    let url = format!("{base_url}/api/v1/_elastic/{index}/_search",);
+    let url = format!("{base_url}/api/v1/_elastic/{index}/_search");
 
     let mut req = client.get(&url);
     if let Some(query) = query {
@@ -779,11 +797,20 @@ impl QuickwitConnector {
         scroll_size: u16,
         limit: Option<u64>,
         timestamp_field: Option<String>,
+        source_includes: Vec<String>,
     ) -> Result<LogTryStream> {
         let start = Instant::now();
 
-        let (mut logs, mut scroll_id) =
-            begin_search(&client, &url, &index, query, &scroll_timeout, scroll_size).await?;
+        let (mut logs, mut scroll_id) = begin_search(
+            &client,
+            &url,
+            &index,
+            query,
+            source_includes,
+            &scroll_timeout,
+            scroll_size,
+        )
+        .await?;
 
         let duration = start.elapsed();
         debug!(elapsed_time = ?duration, "Begin search time");
@@ -1069,6 +1096,7 @@ impl Connector for QuickwitConnector {
 
         let handle = downcast_unwrap!(handle, QuickwitHandle);
         let limit = handle.limit;
+        let source_includes = handle.source_includes.clone();
         let scroll_size = limit.map_or(self.config.scroll_size, |l| {
             l.min(self.config.scroll_size as u64) as u16
         });
@@ -1121,6 +1149,7 @@ impl Connector for QuickwitConnector {
             ?handle.count,
             ?scroll_size,
             ?limit,
+            ?source_includes,
             "Quickwit search '{}': {}",
             collections,
             serde_json::to_string(&query)?
@@ -1167,6 +1196,7 @@ impl Connector for QuickwitConnector {
                 scroll_size,
                 limit,
                 timestamp_field,
+                source_includes,
             )
             .await?,
         ))
@@ -1179,6 +1209,29 @@ impl Connector for QuickwitConnector {
             return None;
         }
         Some(Box::new(handle.with_filter(compile_filter_ast(ast)?)))
+    }
+
+    fn apply_project(
+        &self,
+        projections: &[ProjectField],
+        handle: &dyn QueryHandle,
+    ) -> Option<Box<dyn QueryHandle>> {
+        let handle = downcast_unwrap!(handle, QuickwitHandle);
+        if handle.count || !handle.group_by.is_empty() {
+            return None;
+        }
+
+        let mut source_includes = Vec::with_capacity(projections.len());
+        for project in projections {
+            let Expr::Field(field) = &project.from else {
+                return None;
+            };
+            if field != &project.to {
+                return None;
+            }
+            source_includes.push(field.into());
+        }
+        Some(Box::new(handle.with_source_includes(source_includes)))
     }
 
     fn apply_limit(&self, mut max: u64, handle: &dyn QueryHandle) -> Option<Box<dyn QueryHandle>> {
