@@ -478,6 +478,12 @@ async fn predicate_pushdown_same_results(
     "filter_case"
 )]
 #[test_case(
+    r#"test.stack | summarize c=count()"#,
+    r#"test.stack"#,
+    1;
+    "summarize_only_count"
+)]
+#[test_case(
     r#"
     test.stack
     | summarize minQuestionId=min(questionId),

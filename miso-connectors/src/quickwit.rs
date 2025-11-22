@@ -39,6 +39,11 @@ use super::{Connector, ConnectorError, QueryHandle, QueryResponse, Split, downca
 
 const AGGREGATION_RESULTS_NAME: &str = "summarize";
 
+/// Used on aggregation queries where there's only count, and no other aggregations.
+/// In that case we add another aggregation on this field name, just so we can get the
+/// doc_count for each bucket.
+const ONLY_COUNT_AGG_FIELD_NAME: &str = "_remove_me";
+
 /// Quickwit doesn't yet support pagination over aggregation queries.
 /// This will be the max amount of groups we pull from it (taken from quickwit's code).
 const MAX_NUM_GROUPS: usize = 65000;
@@ -1006,7 +1011,8 @@ impl QuickwitConnector {
             }
 
             let mut streamed = 0;
-            for log in logs {
+            for mut log in logs {
+                log.remove(ONLY_COUNT_AGG_FIELD_NAME);
                 yield log;
                 increment_and_ret_on_limit!(streamed, limit);
             }
@@ -1290,6 +1296,13 @@ impl Connector for QuickwitConnector {
                 agg_timestamp_fields.insert(output_field.to_string());
             }
             inner_aggs.insert(output_field.to_string(), value);
+        }
+
+        if !count_fields.is_empty() && inner_aggs.is_empty() {
+            inner_aggs.insert(
+                ONLY_COUNT_AGG_FIELD_NAME.to_string(),
+                json!({"max": {"field": "a"}}),
+            );
         }
 
         let mut aggs = Map::new();
