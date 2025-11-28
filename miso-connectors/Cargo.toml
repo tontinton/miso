@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 async-stream.workspace = true
 axum.workspace = true
+base64.workspace = true
 bytes.workspace = true
 color-eyre.workspace = true
 futures-util.workspace = true
