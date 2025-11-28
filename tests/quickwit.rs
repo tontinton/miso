@@ -1,8 +1,4 @@
-use std::{
-    collections::BTreeMap,
-    sync::{Arc, Weak},
-    time::Duration,
-};
+use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
 use collection_macros::btreemap;
 use color_eyre::{
@@ -22,15 +18,13 @@ use miso_workflow::Workflow;
 use miso_workflow_types::value::Value;
 use reqwest::{header::CONTENT_TYPE, Client, Response};
 use serde::Serialize;
-use test_case::test_case;
 use testcontainers::{
     core::{IntoContainerPort, WaitFor},
     runners::AsyncRunner,
     ContainerAsync, GenericImage, ImageExt,
 };
-use tokio::{sync::OnceCell, task::spawn_blocking};
+use tokio::task::spawn_blocking;
 use tokio_retry::{strategy::FixedInterval, Retry};
-use tokio_test::block_on;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
@@ -53,8 +47,6 @@ const INDEXES: [(&str, &str); 3] = [
 ];
 
 const QUICKWIT_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
-static TEST_RESOURCES_WEAK: OnceCell<tokio::sync::Mutex<Weak<(QuickwitImage, ConnectorsMap)>>> =
-    OnceCell::const_new();
 
 struct QuickwitImage {
     _container: ContainerAsync<GenericImage>,
@@ -156,27 +148,6 @@ async fn get_quickwit_connector_map(image: &QuickwitImage) -> Result<ConnectorsM
     .await?;
 
     Ok(btreemap! { "test".to_string() => connector_state })
-}
-
-async fn get_test_resources() -> Arc<(QuickwitImage, ConnectorsMap)> {
-    let weak_cell = TEST_RESOURCES_WEAK
-        .get_or_init(|| async { tokio::sync::Mutex::new(Weak::new()) })
-        .await;
-
-    let mut weak_lock = weak_cell.lock().await;
-    if let Some(existing) = weak_lock.upgrade() {
-        return existing;
-    }
-
-    let image = run_quickwit_image().await;
-    let connectors = get_quickwit_connector_map(&image)
-        .await
-        .expect("get quickwit connector");
-
-    let resources = Arc::new((image, connectors));
-    *weak_lock = Arc::downgrade(&resources);
-
-    resources
 }
 
 fn default_version() -> String {
@@ -322,14 +293,20 @@ async fn write_to_index(
     Ok(())
 }
 
+#[derive(Clone, Copy)]
+struct TestCase {
+    query: &'static str,
+    expected: &'static str,
+    count: usize,
+    name: &'static str,
+}
+
 async fn predicate_pushdown_same_results(
+    connectors: &ConnectorsMap,
     query: &str,
     query_after_optimizations: &str,
     count: usize,
 ) -> Result<()> {
-    let resources = get_test_resources().await;
-    let connectors = resources.1.clone();
-
     let steps = to_workflow_steps(
         &connectors,
         &BTreeMap::new(),
@@ -432,77 +409,78 @@ async fn predicate_pushdown_same_results(
     Ok(())
 }
 
-#[test_case(
-    r#"test.stack | sort by @time | take 3"#,
-    r#"test.stack"#,
-    3;
-    "top_n"
-)]
-#[test_case(
-    r#"test.stack | where acceptedAnswerId == 12446"#,
-    r#"test.stack"#,
-    1;
-    "filter_eq"
-)]
-#[test_case(
-    r#"test.stack | where body has_cs "VB.NET""#,
-    r#"test.stack"#,
-    1;
-    "filter_has_cs"
-)]
-#[test_case(
-    r#"test.stack | where acceptedAnswerId in (12446, 31)"#,
-    r#"test.stack"#,
-    2;
-    "filter_in"
-)]
-#[test_case(
-    r#"test.stack | where questionId == 11 and exists(answerId)"#,
-    r#"test.stack"#,
-    1;
-    "filter_eq_and_exists"
-)]
-#[test_case(
-    r#"test.stack | where @time == datetime(2008-07-31 22:17:57)"#,
-    r#"test.stack"#,
-    1;
-    "filter_eq_timestamp"
-)]
-#[test_case(
-    r#"
+const PREDICATE_PUSHDOWN_TESTS: &[TestCase] = &[
+    TestCase {
+        query: r#"test.stack | sort by @time | take 3"#,
+        expected: r#"test.stack"#,
+        count: 3,
+        name: "top_n",
+    },
+    TestCase {
+        query: r#"test.stack | where acceptedAnswerId == 12446"#,
+        expected: r#"test.stack"#,
+        count: 1,
+        name: "filter_eq",
+    },
+    TestCase {
+        query: r#"test.stack | where body has_cs "VB.NET""#,
+        expected: r#"test.stack"#,
+        count: 1,
+        name: "filter_has_cs",
+    },
+    TestCase {
+        query: r#"test.stack | where acceptedAnswerId in (12446, 31)"#,
+        expected: r#"test.stack"#,
+        count: 2,
+        name: "filter_in",
+    },
+    TestCase {
+        query: r#"test.stack | where questionId == 11 and exists(answerId)"#,
+        expected: r#"test.stack"#,
+        count: 1,
+        name: "filter_eq_and_exists",
+    },
+    TestCase {
+        query: r#"test.stack | where @time == datetime(2008-07-31 22:17:57)"#,
+        expected: r#"test.stack"#,
+        count: 1,
+        name: "filter_eq_timestamp",
+    },
+    TestCase {
+        query: r#"
     test.stack
     | where case(acceptedAnswerId > 50, "big", acceptedAnswerId > 10, "medium", "small") == "medium"
     "#,
-    r#"test.stack"#,
-    2;
-    "filter_case"
-)]
-#[test_case(
-    r#"test.stack | project acceptedAnswerId"#,
-    r#"test.stack"#,
-    10;
-    "project_one_field"
-)]
-#[test_case(
-    r#"test.stack | project acceptedAnswerId | count"#,
-    r#"test.stack"#,
-    1;
-    "project_count"
-)]
-#[test_case(
-    r#"test.stack | project acceptedAnswerId | summarize c=count()"#,
-    r#"test.stack"#,
-    1;
-    "project_summarize"
-)]
-#[test_case(
-    r#"test.stack | summarize c=count()"#,
-    r#"test.stack"#,
-    1;
-    "summarize_only_count"
-)]
-#[test_case(
-    r#"
+        expected: r#"test.stack"#,
+        count: 2,
+        name: "filter_case",
+    },
+    TestCase {
+        query: r#"test.stack | project acceptedAnswerId"#,
+        expected: r#"test.stack"#,
+        count: 10,
+        name: "project_one_field",
+    },
+    TestCase {
+        query: r#"test.stack | project acceptedAnswerId | count"#,
+        expected: r#"test.stack"#,
+        count: 1,
+        name: "project_count",
+    },
+    TestCase {
+        query: r#"test.stack | project acceptedAnswerId | summarize c=count()"#,
+        expected: r#"test.stack"#,
+        count: 1,
+        name: "project_summarize",
+    },
+    TestCase {
+        query: r#"test.stack | summarize c=count()"#,
+        expected: r#"test.stack"#,
+        count: 1,
+        name: "summarize_only_count",
+    },
+    TestCase {
+        query: r#"
     test.stack
     | summarize minQuestionId=min(questionId),
                 maxQuestionId=max(questionId),
@@ -512,12 +490,12 @@ async fn predicate_pushdown_same_results(
                 c=count()
       by user
     "#,
-    r#"test.stack"#,
-    5;
-    "summarize_min_max_count"
-)]
-#[test_case(
-    r#"
+        expected: r#"test.stack"#,
+        count: 5,
+        name: "summarize_min_max_count",
+    },
+    TestCase {
+        query: r#"
     test.stack
     | summarize minQuestionId=min(questionId),
                 maxQuestionId=max(questionId),
@@ -529,12 +507,12 @@ async fn predicate_pushdown_same_results(
                 c=count()
       by bin(answerId, 5)
     "#,
-    r#"test.stack"#,
-    2;
-    "summarize_min_max_count_by_bin"
-)]
-#[test_case(
-    r#"
+        expected: r#"test.stack"#,
+        count: 2,
+        name: "summarize_min_max_count_by_bin",
+    },
+    TestCase {
+        query: r#"
     test.stack
     | summarize minQuestionId=min(questionId),
                 maxQuestionId=max(questionId),
@@ -544,77 +522,114 @@ async fn predicate_pushdown_same_results(
                 c=count()
       by bin(@time, 1h)
     "#,
-    r#"test.stack"#,
-    6;
-    "summarize_min_max_count_by_bin_timestamp"
-)]
-#[test_case(
-    r#"test.stack | summarize by user"#,
-    r#"test.stack"#,
-    5;
-    "summarize_distinct"
-)]
-#[test_case(
-    r#"test.stack | distinct user"#,
-    r#"test.stack"#,
-    5;
-    "distinct"
-)]
-#[test_case(
-    r#"test.stack | distinct @time"#,
-    r#"test.stack"#,
-    10;
-    "distinct_timestamp"
-)]
-#[test_case(
-    r#"test.stack | summarize minQuestionId=min(questionId) by user | top 3 by minQuestionId"#,
-    r#"test.stack | top 3 by minQuestionId"#,
-    3;
-    "summarize_then_topn"
-)]
-#[test_case(
-    r#"test.stack | top 5 by questionId | summarize minQuestionId=min(questionId) by user"#,
-    r#"test.stack | summarize minQuestionId=min(questionId) by user"#,
-    3;
-    "topn_then_summarize"
-)]
-#[test_case(
-    r#"test.stack | count"#,
-    r#"test.stack"#,
-    1;
-    "count"
-)]
-#[test_case(
-    r#"test.stack | union (test.stack_mirror)"#,
-    r#"test.stack"#,
-    20;
-    "union"
-)]
-#[test_case(
-    r#"test.stack | union (test.hdfs)"#,
-    r#"test.stack | union (test.hdfs)"#,
-    20;
-    "union_not_same_timestamp_field"
-)]
-#[test_case(
-    r#"
+        expected: r#"test.stack"#,
+        count: 6,
+        name: "summarize_min_max_count_by_bin_timestamp",
+    },
+    TestCase {
+        query: r#"test.stack | summarize by user"#,
+        expected: r#"test.stack"#,
+        count: 5,
+        name: "summarize_distinct",
+    },
+    TestCase {
+        query: r#"test.stack | distinct user"#,
+        expected: r#"test.stack"#,
+        count: 5,
+        name: "distinct",
+    },
+    TestCase {
+        query: r#"test.stack | distinct @time"#,
+        expected: r#"test.stack"#,
+        count: 10,
+        name: "distinct_timestamp",
+    },
+    TestCase {
+        query: r#"test.stack | summarize minQuestionId=min(questionId) by user | top 3 by minQuestionId"#,
+        expected: r#"test.stack | top 3 by minQuestionId"#,
+        count: 3,
+        name: "summarize_then_topn",
+    },
+    TestCase {
+        query: r#"test.stack | top 5 by questionId | summarize minQuestionId=min(questionId) by user"#,
+        expected: r#"test.stack | summarize minQuestionId=min(questionId) by user"#,
+        count: 3,
+        name: "topn_then_summarize",
+    },
+    TestCase {
+        query: r#"test.stack | count"#,
+        expected: r#"test.stack"#,
+        count: 1,
+        name: "count",
+    },
+    TestCase {
+        query: r#"test.stack | union (test.stack_mirror)"#,
+        expected: r#"test.stack"#,
+        count: 20,
+        name: "union",
+    },
+    TestCase {
+        query: r#"test.stack | union (test.hdfs)"#,
+        expected: r#"test.stack | union (test.hdfs)"#,
+        count: 20,
+        name: "union_not_same_timestamp_field",
+    },
+    TestCase {
+        query: r#"
     test.stack
     | union (test.stack_mirror)
     | where acceptedAnswerId < 100
     | top 1 by acceptedAnswerId
     "#,
-    r#"test.stack"#,
-    1;
-    "union_filter_topn"
-)]
-fn quickwit_predicate_pushdown(
-    query: &str,
-    query_after_optimizations: &str,
-    count: usize,
-) -> Result<()> {
-    block_on(predicate_pushdown_same_results(
-        query,
-        query_after_optimizations,
-        count,
-    ))
+        expected: r#"test.stack"#,
+        count: 1,
+        name: "union_filter_topn",
+    },
+];
+
+#[tokio::test]
+async fn test_quickwit_predicate_pushdown() -> Result<()> {
+    let image = run_quickwit_image().await;
+    let connectors = get_quickwit_connector_map(&image).await?;
+    let connectors = Arc::new(connectors);
+
+    let test_filter = std::env::var("TEST_FILTER").ok();
+    let tests_to_run: Vec<_> = PREDICATE_PUSHDOWN_TESTS
+        .iter()
+        .filter(|tc| {
+            if let Some(ref filter) = test_filter {
+                tc.name.contains(filter)
+            } else {
+                true
+            }
+        })
+        .collect();
+
+    info!("Running {} test cases", tests_to_run.len());
+
+    let handles: Vec<_> = tests_to_run
+        .into_iter()
+        .map(|tc| {
+            let connectors = Arc::clone(&connectors);
+            tokio::spawn(async move {
+                info!("Running test: {}", tc.name);
+                predicate_pushdown_same_results(&connectors, tc.query, tc.expected, tc.count)
+                    .await
+                    .map_err(|e| format!("Test '{}' failed: {}", tc.name, e))
+            })
+        })
+        .collect();
+
+    let mut errors = Vec::new();
+    for handle in handles {
+        if let Err(e) = handle.await? {
+            errors.push(e);
+        }
+    }
+
+    if !errors.is_empty() {
+        bail!("Test failures:\n{}", errors.join("\n"));
+    }
+
+    Ok(())
 }

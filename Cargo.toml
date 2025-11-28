@@ -98,7 +98,6 @@ miso-workflow.workspace = true
 miso-workflow-types.workspace = true
 reqwest.workspace = true
 serde.workspace = true
-test-case.workspace = true
 serde_json.workspace = true
 testcontainers.workspace = true
 tokio-retry.workspace = true
