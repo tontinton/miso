@@ -181,6 +181,24 @@ pub const BASE_PREDICATE_PUSHDOWN_TESTS: &[TestCase] = &[
         count: 3,
         name: "top_n_timestamp",
     },
+    TestCase {
+        query: r#"
+    test.stack
+    | summarize minQuestionId=min(questionId),
+                maxQuestionId=max(questionId),
+                avgQuestionId=avg(questionId),
+                dcountUser=dcount(user),
+                cifQuestionId=countif(exists(questionId)),
+                sumQuestionId=sum(questionId),
+                minTimestamp=min(@time),
+                maxTimestamp=max(@time),
+                c=count()
+      by bin(answerId, 5)
+    "#,
+        expected: r#"test.stack"#,
+        count: 2,
+        name: "summarize_min_max_count_by_bin_with_dcount",
+    },
 ];
 
 #[derive(Clone, Copy)]

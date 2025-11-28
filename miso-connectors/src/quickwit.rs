@@ -1339,9 +1339,11 @@ impl Connector for QuickwitConnector {
                     count_fields.push(output_field.to_string());
                     continue;
                 }
+                Aggregation::DCount(agg_field) => {
+                    agg_json("cardinality", agg_field, &handle.timestamp_field)
+                }
 
                 // Currently unsupported.
-                Aggregation::DCount(..) => return None,
                 Aggregation::Countif(..) => return None,
             };
 

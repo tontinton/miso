@@ -24,7 +24,7 @@ use testcontainers::{
 use tokio_retry::{strategy::FixedInterval, Retry};
 use tracing::info;
 
-use common::{run_predicate_pushdown_tests, TestCase, BASE_PREDICATE_PUSHDOWN_TESTS};
+use common::{run_predicate_pushdown_tests, BASE_PREDICATE_PUSHDOWN_TESTS};
 
 #[ctor]
 fn init() {
@@ -246,35 +246,9 @@ async fn write_to_index(
     Ok(())
 }
 
-const ELASTICSEARCH_SPECIFIC_TESTS: &[TestCase] = &[
-    // dcount() aggregation uses ES cardinality, not supported in Quickwit.
-    TestCase {
-        query: r#"
-    test.stack
-    | summarize minQuestionId=min(questionId),
-                maxQuestionId=max(questionId),
-                avgQuestionId=avg(questionId),
-                dcountUser=dcount(user),
-                cifQuestionId=countif(exists(questionId)),
-                sumQuestionId=sum(questionId),
-                minTimestamp=min(@time),
-                maxTimestamp=max(@time),
-                c=count()
-      by bin(answerId, 5)
-    "#,
-        expected: r#"test.stack"#,
-        count: 2,
-        name: "summarize_min_max_count_by_bin_with_dcount",
-    },
-];
-
 #[tokio::test]
 async fn elasticsearch_predicate_pushdown() -> Result<()> {
     let image = run_elasticsearch_image().await;
     let connectors = Arc::new(get_elasticsearch_connector_map(&image).await?);
-    run_predicate_pushdown_tests(
-        connectors,
-        &[BASE_PREDICATE_PUSHDOWN_TESTS, ELASTICSEARCH_SPECIFIC_TESTS],
-    )
-    .await
+    run_predicate_pushdown_tests(connectors, &[BASE_PREDICATE_PUSHDOWN_TESTS]).await
 }
