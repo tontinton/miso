@@ -20,6 +20,7 @@ members = [
 arboard = "3.6.1"
 async-stream = "0.3.6"
 axum = { version = "0.7.7", features = ["macros"] }
+base64 = "0.22.1"
 bon = "3.6.3"
 bytes = "1.10.1"
 chumsky = "0.10.1"
@@ -98,6 +99,7 @@ miso-workflow-types.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 test-case.workspace = true
+serde_json.workspace = true
 testcontainers.workspace = true
 tokio-retry.workspace = true
 tokio-test.workspace = true
