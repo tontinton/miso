@@ -1,34 +1,30 @@
-use std::{collections::BTreeMap, time::Duration};
+mod common;
+
+use std::{sync::Arc, time::Duration};
 
 use collection_macros::btreemap;
 use color_eyre::{
-    eyre::{bail, Context, OptionExt},
+    eyre::{bail, OptionExt, WrapErr},
     Result,
 };
 use ctor::ctor;
-use futures_util::{future::try_join_all, TryStreamExt};
+use futures_util::future::try_join_all;
 use miso_connectors::{
     elasticsearch::{ElasticsearchConfig, ElasticsearchConnector},
     Connector, ConnectorState,
 };
-use miso_kql::parse;
-use miso_optimizations::Optimizer;
-use miso_server::{http_server::ConnectorsMap, query_to_workflow::to_workflow_steps};
-use miso_workflow::Workflow;
-use miso_workflow_types::value::Value;
+use miso_server::http_server::ConnectorsMap;
 use reqwest::{header::CONTENT_TYPE, Client, Response};
 use serde::Serialize;
-use std::sync::Arc;
 use testcontainers::{
     core::{IntoContainerPort, WaitFor},
     runners::AsyncRunner,
     ContainerAsync, GenericImage, ImageExt,
 };
-
-use tokio::task::spawn_blocking;
 use tokio_retry::{strategy::FixedInterval, Retry};
-use tokio_util::sync::CancellationToken;
 use tracing::info;
+
+use common::{run_predicate_pushdown_tests, TestCase, BASE_PREDICATE_PUSHDOWN_TESTS};
 
 #[ctor]
 fn init() {
@@ -97,16 +93,9 @@ async fn get_elasticsearch_connector_map(image: &ElasticsearchImage) -> Result<C
         let mut properties = serde_json::Map::new();
         properties.insert(
             "creationDate".to_string(),
-            serde_json::json!({
-                "type": "date"
-            }),
+            serde_json::json!({"type": "date"}),
         );
-        properties.insert(
-            "user".to_string(),
-            serde_json::json!({
-                "type": "keyword"
-            }),
-        );
+        properties.insert("user".to_string(), serde_json::json!({"type": "keyword"}));
 
         let mapping = IndexMapping {
             mappings: IndexProperties { properties },
@@ -117,13 +106,7 @@ async fn get_elasticsearch_connector_map(image: &ElasticsearchImage) -> Result<C
     }
 
     let mut properties = serde_json::Map::new();
-    properties.insert(
-        "timestamp".to_string(),
-        serde_json::json!({
-            "type": "date"
-            // No explicit format - ES will auto-detect including epoch formats
-        }),
-    );
+    properties.insert("timestamp".to_string(), serde_json::json!({"type": "date"}));
 
     let mapping = IndexMapping {
         mappings: IndexProperties { properties },
@@ -156,7 +139,6 @@ async fn get_elasticsearch_connector_map(image: &ElasticsearchImage) -> Result<C
             let connector = connector.clone();
             async move {
                 for (index_name, expected_count) in INDEXES.iter().map(|(name, data)| (name, data.lines().count())) {
-                    // Check collection exists
                     connector
                         .does_collection_exist(index_name)
                         .then_some(())
@@ -164,7 +146,6 @@ async fn get_elasticsearch_connector_map(image: &ElasticsearchImage) -> Result<C
                             "timeout waiting for '{index_name}' collection to exist"
                         ))?;
 
-                    // Verify data is searchable by checking document count
                     let count_url = format!("{url}/{index_name}/_count");
                     let response = client
                         .get(&count_url)
@@ -187,14 +168,6 @@ async fn get_elasticsearch_connector_map(image: &ElasticsearchImage) -> Result<C
     .await?;
 
     Ok(btreemap! { "test".to_string() => connector_state })
-}
-
-#[derive(Clone, Copy)]
-struct TestCase {
-    query: &'static str,
-    expected: &'static str,
-    count: usize,
-    name: &'static str,
 }
 
 async fn void_response_to_err(url: &str, response: Response) -> Result<()> {
@@ -261,7 +234,6 @@ async fn write_to_index(
         bail!("Bulk ingest into '{index_name}' failed with status {status}: {text}");
     }
 
-    // Parse bulk response to check for errors
     let bulk_response: serde_json::Value = response.json().await?;
     if let Some(errors) = bulk_response.get("errors") {
         if errors.as_bool().unwrap_or(false) {
@@ -274,190 +246,8 @@ async fn write_to_index(
     Ok(())
 }
 
-async fn predicate_pushdown_same_results(
-    connectors: &ConnectorsMap,
-    query: &str,
-    query_after_optimizations: &str,
-    count: usize,
-) -> Result<()> {
-    let steps = to_workflow_steps(
-        connectors,
-        &BTreeMap::new(),
-        parse(query).expect("parse KQL"),
-    )
-    .expect("to workflow steps");
-
-    let expected_after_optimizations_steps = to_workflow_steps(
-        connectors,
-        &BTreeMap::new(),
-        parse(query_after_optimizations).expect("parse expected KQL"),
-    )
-    .expect("to expected workflow steps");
-
-    let default_optimizer = Optimizer::default();
-    let no_pushdown_optimizer = Optimizer::empty();
-
-    let steps_cloned = steps.clone();
-    let predicate_pushdown_steps =
-        spawn_blocking(move || default_optimizer.optimize(steps_cloned)).await?;
-
-    let pushdown_workflow = Workflow::new(predicate_pushdown_steps.clone());
-    let expected_workflow = Workflow::new(expected_after_optimizations_steps.clone());
-    info!("Pushdown workflow:\n{pushdown_workflow}");
-    info!("Expected pushdown workflow:\n{expected_workflow}");
-
-    assert_eq!(
-        predicate_pushdown_steps, expected_after_optimizations_steps,
-        "query predicates should have been equal to expected steps after optimization"
-    );
-
-    let no_predicate_pushdown_steps =
-        spawn_blocking(move || no_pushdown_optimizer.optimize(steps)).await?;
-    let no_pushdown_workflow = Workflow::new(no_predicate_pushdown_steps);
-    info!("No pushdown workflow:\n{no_pushdown_workflow}");
-
-    let cancel1 = CancellationToken::new();
-    let cancel2 = CancellationToken::new();
-
-    let mut pushdown_stream = pushdown_workflow
-        .execute(cancel1)
-        .context("execute predicate pushdown workflow")?;
-    let mut no_pushdown_stream = no_pushdown_workflow
-        .execute(cancel2)
-        .context("execute no predicate pushdown workflow")?;
-
-    let mut pushdown_results = Vec::with_capacity(count);
-    let mut no_pushdown_results = Vec::with_capacity(count);
-
-    let mut pushdown_done = false;
-    let mut no_pushdown_done = false;
-
-    loop {
-        if pushdown_done && no_pushdown_done {
-            break;
-        }
-
-        tokio::select! {
-            item = pushdown_stream.try_next(), if !pushdown_done => {
-                match item.context("predicate pushdown workflow failure")? {
-                    Some(log) => {
-                        pushdown_results.push(Value::Object(log));
-                    }
-                    None => {
-                        assert_eq!(
-                            count,
-                            pushdown_results.len(),
-                            "number of logs returned in pushdown query is wrong"
-                        );
-                        pushdown_done = true;
-                    }
-                }
-            }
-            item = no_pushdown_stream.try_next(), if !no_pushdown_done => {
-                match item.context("non predicate pushdown workflow failure")? {
-                    Some(log) => {
-                        no_pushdown_results.push(Value::Object(log));
-                    }
-                    None => {
-                        assert_eq!(
-                            count,
-                            no_pushdown_results.len(),
-                            "number of logs returned in non pushdown query is wrong"
-                        );
-                        no_pushdown_done = true;
-                    }
-                }
-            }
-        }
-    }
-
-    pushdown_results.sort();
-    no_pushdown_results.sort();
-
-    assert_eq!(
-        pushdown_results, no_pushdown_results,
-        "results of pushdown query should equal results of non pushdown query, after sorting"
-    );
-
-    Ok(())
-}
-
-const PREDICATE_PUSHDOWN_TESTS: &[TestCase] = &[
-    TestCase {
-        query: r#"test.stack | sort by creationDate | take 3"#,
-        expected: r#"test.stack"#,
-        count: 3,
-        name: "top_n",
-    },
-    TestCase {
-        query: r#"test.stack | where acceptedAnswerId == 12446"#,
-        expected: r#"test.stack"#,
-        count: 1,
-        name: "filter_eq",
-    },
-    TestCase {
-        query: r#"test.stack | where body has_cs "VB.NET""#,
-        expected: r#"test.stack"#,
-        count: 1,
-        name: "filter_has_cs",
-    },
-    TestCase {
-        query: r#"test.stack | where acceptedAnswerId in (12446, 31)"#,
-        expected: r#"test.stack"#,
-        count: 2,
-        name: "filter_in",
-    },
-    TestCase {
-        query: r#"test.stack | where questionId == 11 and exists(answerId)"#,
-        expected: r#"test.stack"#,
-        count: 1,
-        name: "filter_eq_and_exists",
-    },
-    TestCase {
-        query: r#"test.stack | where @time == datetime(2008-07-31 22:17:57)"#,
-        expected: r#"test.stack"#,
-        count: 1,
-        name: "filter_eq_timestamp",
-    },
-    TestCase {
-        query: r#"test.stack | project acceptedAnswerId"#,
-        expected: r#"test.stack"#,
-        count: 10,
-        name: "project_one_field",
-    },
-    TestCase {
-        query: r#"test.stack | project acceptedAnswerId | count"#,
-        expected: r#"test.stack"#,
-        count: 1,
-        name: "project_count",
-    },
-    TestCase {
-        query: r#"test.stack | project acceptedAnswerId | summarize c=count()"#,
-        expected: r#"test.stack"#,
-        count: 1,
-        name: "project_summarize",
-    },
-    TestCase {
-        query: r#"test.stack | summarize c=count()"#,
-        expected: r#"test.stack"#,
-        count: 1,
-        name: "summarize_only_count",
-    },
-    TestCase {
-        query: r#"
-    test.stack
-    | summarize minQuestionId=min(questionId),
-                maxQuestionId=max(questionId),
-                sumQuestionId=sum(questionId),
-                minTimestamp=min(@time),
-                maxTimestamp=max(@time),
-                c=count()
-      by user
-    "#,
-        expected: r#"test.stack"#,
-        count: 5,
-        name: "summarize_min_max_count",
-    },
+const ELASTICSEARCH_SPECIFIC_TESTS: &[TestCase] = &[
+    // dcount() aggregation uses ES cardinality, not supported in Quickwit.
     TestCase {
         query: r#"
     test.stack
@@ -476,126 +266,15 @@ const PREDICATE_PUSHDOWN_TESTS: &[TestCase] = &[
         count: 2,
         name: "summarize_min_max_count_by_bin_with_dcount",
     },
-    TestCase {
-        query: r#"
-    test.stack
-    | summarize minQuestionId=min(questionId),
-                maxQuestionId=max(questionId),
-                avgQuestionId=avg(questionId),
-                cifQuestionId=countif(exists(questionId)),
-                sumQuestionId=sum(questionId),
-                c=count()
-      by bin(@time, 1h)
-    "#,
-        expected: r#"test.stack"#,
-        count: 6,
-        name: "summarize_min_max_count_by_bin_timestamp",
-    },
-    TestCase {
-        query: r#"test.stack | summarize by user"#,
-        expected: r#"test.stack"#,
-        count: 5,
-        name: "summarize_distinct",
-    },
-    TestCase {
-        query: r#"test.stack | distinct user"#,
-        expected: r#"test.stack"#,
-        count: 5,
-        name: "distinct",
-    },
-    TestCase {
-        query: r#"test.stack | distinct @time"#,
-        expected: r#"test.stack"#,
-        count: 10,
-        name: "distinct_timestamp",
-    },
-    TestCase {
-        query: r#"test.stack | summarize minQuestionId=min(questionId) by user | top 3 by minQuestionId"#,
-        expected: r#"test.stack | top 3 by minQuestionId"#,
-        count: 3,
-        name: "summarize_then_topn",
-    },
-    TestCase {
-        query: r#"test.stack | top 5 by questionId | summarize minQuestionId=min(questionId) by user"#,
-        expected: r#"test.stack | summarize minQuestionId=min(questionId) by user"#,
-        count: 3,
-        name: "topn_then_summarize",
-    },
-    TestCase {
-        query: r#"test.stack | count"#,
-        expected: r#"test.stack"#,
-        count: 1,
-        name: "count",
-    },
-    TestCase {
-        query: r#"test.stack | union (test.stack_mirror)"#,
-        expected: r#"test.stack"#,
-        count: 20,
-        name: "union",
-    },
-    TestCase {
-        query: r#"test.stack | union (test.hdfs)"#,
-        expected: r#"test.stack | union (test.hdfs)"#,
-        count: 20,
-        name: "union_not_same_timestamp_field",
-    },
-    TestCase {
-        query: r#"
-    test.stack
-    | union (test.stack_mirror)
-    | where acceptedAnswerId < 100
-    | top 1 by acceptedAnswerId
-    "#,
-        expected: r#"test.stack"#,
-        count: 1,
-        name: "union_filter_topn",
-    },
 ];
 
 #[tokio::test]
-async fn test_elasticsearch_predicate_pushdown() -> Result<()> {
+async fn elasticsearch_predicate_pushdown() -> Result<()> {
     let image = run_elasticsearch_image().await;
-    let connectors = get_elasticsearch_connector_map(&image).await?;
-    let connectors = Arc::new(connectors);
-
-    // Filter test cases by name if TEST_FILTER env var is set
-    let test_filter = std::env::var("TEST_FILTER").ok();
-    let tests_to_run: Vec<_> = PREDICATE_PUSHDOWN_TESTS
-        .iter()
-        .filter(|tc| {
-            if let Some(ref filter) = test_filter {
-                tc.name.contains(filter)
-            } else {
-                true
-            }
-        })
-        .collect();
-
-    info!("Running {} test cases", tests_to_run.len());
-
-    let handles: Vec<_> = tests_to_run
-        .into_iter()
-        .map(|tc| {
-            let connectors = Arc::clone(&connectors);
-            tokio::spawn(async move {
-                info!("Running test: {}", tc.name);
-                predicate_pushdown_same_results(&connectors, tc.query, tc.expected, tc.count)
-                    .await
-                    .map_err(|e| format!("Test '{}' failed: {}", tc.name, e))
-            })
-        })
-        .collect();
-
-    let mut errors = Vec::new();
-    for handle in handles {
-        if let Err(e) = handle.await? {
-            errors.push(e);
-        }
-    }
-
-    if !errors.is_empty() {
-        bail!("Test failures:\n{}", errors.join("\n"));
-    }
-
-    Ok(())
+    let connectors = Arc::new(get_elasticsearch_connector_map(&image).await?);
+    run_predicate_pushdown_tests(
+        connectors,
+        &[BASE_PREDICATE_PUSHDOWN_TESTS, ELASTICSEARCH_SPECIFIC_TESTS],
+    )
+    .await
 }
