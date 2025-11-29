@@ -14,7 +14,9 @@ use futures_util::stream;
 use hashbrown::{HashMap, HashSet};
 use miso_common::{
     humantime_utils::{deserialize_duration, serialize_duration},
-    metrics::METRICS,
+    metrics::{
+        CONNECTOR_ELASTICSEARCH, METRICS, OP_BEGIN_SEARCH, OP_CONTINUE_SCROLL, OP_GET_INDEXES,
+    },
     run_at_interval::run_at_interval,
     shutdown_future::ShutdownFuture,
 };
@@ -34,7 +36,7 @@ use serde::{Deserialize, Serialize, Serializer, ser::SerializeMap};
 use time::OffsetDateTime;
 use tracing::{debug, error, info, instrument};
 
-use crate::Collection;
+use crate::{Collection, instrumentation::record_operation_result};
 
 use super::{Connector, ConnectorError, QueryHandle, QueryResponse, Split, downcast_unwrap};
 
@@ -424,10 +426,14 @@ async fn response_to_bytes(response: Response) -> Result<BytesMut> {
         bail!(ConnectorError::ServerResp(status.as_u16(), text));
     }
     let bytes = response.bytes().await.context("bytes from response")?;
-    METRICS.downloaded_bytes.inc_by(bytes.len() as u64);
+    METRICS
+        .downloaded_bytes
+        .with_label_values(&[CONNECTOR_ELASTICSEARCH])
+        .inc_by(bytes.len() as u64);
     Ok(bytes.into())
 }
 
+#[instrument(skip_all, name = "elasticsearch send_request")]
 async fn send_request(req: RequestBuilder) -> Result<BytesMut> {
     match req.send().await {
         Ok(response) => response_to_bytes(response).await,
@@ -646,42 +652,55 @@ impl ElasticsearchConnector {
     }
 }
 
-#[instrument(name = "GET and parse elasticsearch indexes")]
+#[instrument(skip(client, auth), name = "elasticsearch get_indexes")]
 async fn get_indexes(
     client: &Client,
     base_url: &str,
     auth: &ElasticsearchAuth,
 ) -> Result<ElasticsearchIndexes> {
-    let url = format!("{base_url}/_cat/indices?format=json");
-    let req = auth.apply_to_request(client.get(&url));
-    let mut bytes = send_request(req).await?;
-    let indices: Vec<CatIndicesResponse> =
-        simd_json::serde::from_slice(bytes.as_mut()).context("parse indices response")?;
+    let start = std::time::Instant::now();
+    METRICS
+        .connector_requests_total
+        .with_label_values(&[CONNECTOR_ELASTICSEARCH, OP_GET_INDEXES])
+        .inc();
 
-    let mut indexes = HashMap::new();
-    for index_info in indices {
-        let index_name = index_info.index;
+    let result: Result<ElasticsearchIndexes> = async {
+        let url = format!("{base_url}/_cat/indices?format=json");
+        let req = auth.apply_to_request(client.get(&url));
+        let mut bytes = send_request(req).await?;
+        let indices: Vec<CatIndicesResponse> =
+            simd_json::serde::from_slice(bytes.as_mut()).context("parse indices response")?;
 
-        let mapping_url = format!("{base_url}/{index_name}/_mapping");
-        let req = auth.apply_to_request(client.get(&mapping_url));
-        let mut mapping_bytes = send_request(req).await?;
+        let mut indexes = HashMap::new();
+        for index_info in indices {
+            let index_name = index_info.index;
 
-        let mapping_response: HashMap<String, IndexMappingResponse> =
-            simd_json::serde::from_slice(mapping_bytes.as_mut())
-                .context("parse mapping response")?;
+            let mapping_url = format!("{base_url}/{index_name}/_mapping");
+            let req = auth.apply_to_request(client.get(&mapping_url));
+            let mut mapping_bytes = send_request(req).await?;
 
-        let timestamp_field = mapping_response.get(&index_name).and_then(|resp| {
-            resp.mappings
-                .properties
-                .iter()
-                .find(|(_, field)| field.field_type == "date")
-                .map(|(name, _)| name.clone())
-        });
+            let mapping_response: HashMap<String, IndexMappingResponse> =
+                simd_json::serde::from_slice(mapping_bytes.as_mut())
+                    .context("parse mapping response")?;
 
-        indexes.insert(index_name, ElasticsearchIndex { timestamp_field });
+            let timestamp_field = mapping_response.get(&index_name).and_then(|resp| {
+                resp.mappings
+                    .properties
+                    .iter()
+                    .find(|(_, field)| field.field_type == "date")
+                    .map(|(name, _)| name.clone())
+            });
+
+            indexes.insert(index_name, ElasticsearchIndex { timestamp_field });
+        }
+
+        Ok(indexes)
     }
+    .await;
 
-    Ok(indexes)
+    let duration = start.elapsed().as_secs_f64();
+    record_operation_result(CONNECTOR_ELASTICSEARCH, OP_GET_INDEXES, &result, duration);
+    result
 }
 
 async fn refresh_indexes_at_interval(
@@ -714,10 +733,7 @@ async fn refresh_indexes_at_interval(
     .await;
 }
 
-#[instrument(
-    skip(query, auth),
-    name = "GET and parse elasticsearch begin search results"
-)]
+#[instrument(skip(query, auth), name = "elasticsearch begin search")]
 async fn begin_search(
     client: &Client,
     base_url: &str,
@@ -727,6 +743,12 @@ async fn begin_search(
     scroll_timeout: &Duration,
     scroll_size: u16,
 ) -> Result<(Vec<Log>, Option<String>)> {
+    let start = std::time::Instant::now();
+    METRICS
+        .connector_requests_total
+        .with_label_values(&[CONNECTOR_ELASTICSEARCH, OP_BEGIN_SEARCH])
+        .inc();
+
     let url = format!(
         "{base_url}/{index}/_search?scroll={}s&size={scroll_size}",
         scroll_timeout.as_secs(),
@@ -736,15 +758,27 @@ async fn begin_search(
         .apply_to_request(client.post(&url))
         .json(&query.unwrap_or_else(|| json!({})));
 
-    let mut bytes = send_request(req).await?;
-    let data: SearchResponse =
-        simd_json::serde::from_slice(bytes.as_mut()).context("parse search response")?;
-    Ok((
-        data.hits.hits.into_iter().map(|x| x.source).collect(),
-        data.scroll_id,
-    ))
+    let result: Result<(Vec<Log>, Option<String>)> = async {
+        let mut bytes = send_request(req).await?;
+        let data: SearchResponse =
+            simd_json::serde::from_slice(bytes.as_mut()).context("parse search response")?;
+        Ok((
+            data.hits.hits.into_iter().map(|x| x.source).collect(),
+            data.scroll_id,
+        ))
+    }
+    .await;
+
+    let duration = start.elapsed().as_secs_f64();
+    record_operation_result(CONNECTOR_ELASTICSEARCH, OP_BEGIN_SEARCH, &result, duration);
+    result
 }
 
+#[instrument(
+    level = "debug",
+    skip(client, auth),
+    name = "elasticsearch continue scroll"
+)]
 async fn continue_scroll(
     client: &Client,
     base_url: &str,
@@ -752,6 +786,12 @@ async fn continue_scroll(
     auth: &ElasticsearchAuth,
     scroll_timeout: &Duration,
 ) -> Result<(Vec<Log>, Option<String>)> {
+    let start = std::time::Instant::now();
+    METRICS
+        .connector_requests_total
+        .with_label_values(&[CONNECTOR_ELASTICSEARCH, OP_CONTINUE_SCROLL])
+        .inc();
+
     let url = format!("{base_url}/_search/scroll");
 
     let req = auth
@@ -761,16 +801,28 @@ async fn continue_scroll(
             scroll_id,
         });
 
-    let mut bytes = send_request(req).await?;
-    let data: SearchResponse =
-        simd_json::serde::from_slice(bytes.as_mut()).context("parse scroll response")?;
-    Ok((
-        data.hits.hits.into_iter().map(|x| x.source).collect(),
-        data.scroll_id,
-    ))
+    let result: Result<(Vec<Log>, Option<String>)> = async {
+        let mut bytes = send_request(req).await?;
+        let data: SearchResponse =
+            simd_json::serde::from_slice(bytes.as_mut()).context("parse scroll response")?;
+        Ok((
+            data.hits.hits.into_iter().map(|x| x.source).collect(),
+            data.scroll_id,
+        ))
+    }
+    .await;
+
+    let duration = start.elapsed().as_secs_f64();
+    record_operation_result(
+        CONNECTOR_ELASTICSEARCH,
+        OP_CONTINUE_SCROLL,
+        &result,
+        duration,
+    );
+    result
 }
 
-#[instrument(skip(query, auth), name = "GET and parse elasticsearch count result")]
+#[instrument(skip(query, auth), name = "elasticsearch count")]
 async fn count(
     client: &Client,
     base_url: &str,

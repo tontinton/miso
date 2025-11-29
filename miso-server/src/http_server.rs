@@ -15,7 +15,9 @@ use axum::{
 use color_eyre::{Result, eyre::Context};
 use futures_util::{Stream, TryStreamExt};
 use miso_common::{
-    humantime_utils::deserialize_duration, metrics::METRICS, run_at_interval::run_at_interval,
+    humantime_utils::deserialize_duration,
+    metrics::{ERROR_CONNECTOR, ERROR_INTERNAL, METRICS},
+    run_at_interval::run_at_interval,
     shutdown_future::ShutdownFuture,
 };
 use miso_connectors::{Connector, ConnectorError, ConnectorState, quickwit::QuickwitConnector};
@@ -190,15 +192,21 @@ async fn query_stream(
                 Ok(None) => break,
                 Ok(log) => {
                     yield Event::default().json_data(log);
-                },
+                }
                 Err(e) => {
-                    let msg = if let Some(e) = e.downcast_ref::<ConnectorError>() {
+                    let (msg, label) = if let Some(e) = e.downcast_ref::<ConnectorError>() {
                         error!("Workflow connector error: {e:?}");
-                        e.to_string()
+                        (e.to_string(), ERROR_CONNECTOR)
                     } else {
+                        METRICS
+                            .query_errors_total
+                            .with_label_values(&[ERROR_INTERNAL])
+                            .inc();
                         error!("Workflow internal error: {e:?}");
-                        INTERNAL_SERVER_ERROR.to_string()
+                        (INTERNAL_SERVER_ERROR.to_string(), ERROR_INTERNAL)
                     };
+
+                    METRICS.query_errors_total.with_label_values(&[label]).inc();
 
                     yield Event::default().json_data(json!({ERROR_LOG_FIELD_NAME: msg}));
                     break;

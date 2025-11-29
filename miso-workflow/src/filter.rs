@@ -1,3 +1,4 @@
+use miso_common::metrics::{ERROR_EVAL, METRICS, STEP_FILTER};
 use miso_workflow_types::{
     expr::Expr,
     log::{Log, LogItem, LogIter},
@@ -11,22 +12,42 @@ use super::{interpreter::LogInterpreter, try_next_with_partial_stream};
 pub struct FilterIter {
     input: LogIter,
     expr: Expr,
+    rows_processed: u64,
 }
 
 impl FilterIter {
     pub fn new(input: LogIter, expr: Expr) -> Self {
-        Self { input, expr }
+        Self {
+            input,
+            expr,
+            rows_processed: 0,
+        }
     }
 
-    fn keep(&self, log: &Log) -> bool {
+    fn keep(&mut self, log: &Log) -> bool {
+        self.rows_processed += 1;
+
         let interpreter = LogInterpreter { log };
         match interpreter.eval(&self.expr) {
             Ok(v) => v.to_bool(),
             Err(e) => {
+                METRICS
+                    .workflow_step_errors
+                    .with_label_values(&[STEP_FILTER, ERROR_EVAL])
+                    .inc();
                 warn!("Filter failed: {e}");
                 false
             }
         }
+    }
+}
+
+impl Drop for FilterIter {
+    fn drop(&mut self) {
+        METRICS
+            .workflow_step_rows
+            .with_label_values(&[STEP_FILTER])
+            .inc_by(self.rows_processed);
     }
 }
 

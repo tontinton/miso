@@ -2,7 +2,7 @@ use std::{cmp::Ordering, num::NonZero, thread::available_parallelism};
 
 use color_eyre::eyre::{Context, Result, bail};
 use flume::Receiver;
-use miso_common::metrics::METRICS;
+use miso_common::metrics::{METRICS, STEP_SORT};
 use miso_workflow_types::{
     field::Field,
     log::{Log, LogItem, LogIter},
@@ -169,6 +169,7 @@ pub fn sort_rx(
         move || {
             let config = SortConfig::new(sorts);
             let mut logs = collect_logs(&config.by, CancelIter::new(input.take(), cancel.clone()))?;
+            let rows_processed = logs.len() as u64;
 
             let sorted = if logs.len() < PARALLEL_SORT_THRESHOLD {
                 logs.sort_unstable_by(|a, b| cmp_logs(a, b, &config));
@@ -193,6 +194,12 @@ pub fn sort_rx(
                     break;
                 }
             }
+
+            METRICS
+                .workflow_step_rows
+                .with_label_values(&[STEP_SORT])
+                .inc_by(rows_processed);
+
             Ok(())
         },
         SORT_THREAD_TAG,

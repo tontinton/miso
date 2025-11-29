@@ -2,6 +2,7 @@ use std::{borrow::Cow, cmp::Ordering, iter, mem::Discriminant};
 
 use color_eyre::eyre::eyre;
 use hashbrown::{HashMap, HashSet};
+use miso_common::metrics::{ERROR_EVAL, METRICS, STEP_SUMMARIZE};
 use miso_workflow_types::{
     expr::Expr,
     field::Field,
@@ -52,6 +53,10 @@ impl Aggregate for Countif {
         let keep = match interpreter.eval(&self.expr) {
             Ok(v) => v.to_bool(),
             Err(e) => {
+                METRICS
+                    .workflow_step_errors
+                    .with_label_values(&[STEP_SUMMARIZE, ERROR_EVAL])
+                    .inc();
                 warn!("Countif failed: {e}");
                 false
             }
@@ -273,6 +278,7 @@ pub struct SummarizeAllIter {
     output_fields: Vec<Field>,
     aggregates: Vec<Box<dyn Aggregate>>,
     done: bool,
+    rows_processed: u64,
 }
 
 impl SummarizeAllIter {
@@ -291,7 +297,17 @@ impl SummarizeAllIter {
             output_fields,
             aggregates,
             done: false,
+            rows_processed: 0,
         }
+    }
+}
+
+impl Drop for SummarizeAllIter {
+    fn drop(&mut self) {
+        METRICS
+            .workflow_step_rows
+            .with_label_values(&[STEP_SUMMARIZE])
+            .inc_by(self.rows_processed);
     }
 }
 
@@ -304,6 +320,7 @@ impl Iterator for SummarizeAllIter {
         }
 
         while let Some(log) = try_next!(self.input) {
+            self.rows_processed += 1;
             for aggregate in &mut self.aggregates {
                 aggregate.input(&log);
             }
@@ -345,6 +362,7 @@ pub struct SummarizeGroupByIter {
 
     output: LogIter,
     done: bool,
+    rows_processed: u64,
 }
 
 impl SummarizeGroupByIter {
@@ -366,7 +384,17 @@ impl SummarizeGroupByIter {
             group_aggregates: GroupAggregates::new(),
             output: Box::new(iter::empty()),
             done: false,
+            rows_processed: 0,
         }
+    }
+}
+
+impl Drop for SummarizeGroupByIter {
+    fn drop(&mut self) {
+        METRICS
+            .workflow_step_rows
+            .with_label_values(&[STEP_SUMMARIZE])
+            .inc_by(self.rows_processed);
     }
 }
 
@@ -408,6 +436,7 @@ impl Iterator for SummarizeGroupByIter {
 
     fn next(&mut self) -> Option<Self::Item> {
         'next_log: while let Some(log) = try_next!(self.input) {
+            self.rows_processed += 1;
             let interpreter = LogInterpreter { log: &log };
             let mut group_keys = Vec::with_capacity(self.group_by.len());
 
@@ -416,6 +445,10 @@ impl Iterator for SummarizeGroupByIter {
                     Ok(Val(None)) => Cow::Owned(Value::Null),
                     Ok(v) => v.0.unwrap(),
                     Err(e) => {
+                        METRICS
+                            .workflow_step_errors
+                            .with_label_values(&[STEP_SUMMARIZE, ERROR_EVAL])
+                            .inc();
                         warn!("Aggregation group by evaluation failed: {e}");
                         Cow::Owned(Value::Null)
                     }

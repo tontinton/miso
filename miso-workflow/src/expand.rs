@@ -1,5 +1,6 @@
 use std::{collections::BTreeMap, vec};
 
+use miso_common::metrics::{METRICS, STEP_EXPAND};
 use miso_workflow_types::{
     expand::{Expand, ExpandKind},
     field::Field,
@@ -75,6 +76,7 @@ pub struct ExpandIter {
     input: LogIter,
     config: Expand,
     state: OutputState,
+    rows_processed: u64,
 }
 
 impl ExpandIter {
@@ -83,6 +85,7 @@ impl ExpandIter {
             input,
             config,
             state: OutputState::None,
+            rows_processed: 0,
         }
     }
 
@@ -133,6 +136,15 @@ impl ExpandIter {
     }
 }
 
+impl Drop for ExpandIter {
+    fn drop(&mut self) {
+        METRICS
+            .workflow_step_rows
+            .with_label_values(&[STEP_EXPAND])
+            .inc_by(self.rows_processed);
+    }
+}
+
 impl Iterator for ExpandIter {
     type Item = LogItem;
 
@@ -141,9 +153,11 @@ impl Iterator for ExpandIter {
             self.state = match &mut self.state {
                 OutputState::None => match try_next_with_partial_stream!(self.input)? {
                     PartialStreamItem::Log(log) => {
+                        self.rows_processed += 1;
                         OutputState::Regular(self.log_to_output_iter(log))
                     }
                     PartialStreamItem::PartialStreamLog(log, id) => {
+                        self.rows_processed += 1;
                         OutputState::Partial(self.log_to_output_iter(log), id)
                     }
                     PartialStreamItem::PartialStreamDone(id) => {

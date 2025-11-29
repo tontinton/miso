@@ -1,4 +1,5 @@
 pub mod elasticsearch;
+pub mod instrumentation;
 pub mod quickwit;
 pub mod stats;
 

@@ -1,6 +1,7 @@
 use std::iter;
 
 use hashbrown::HashMap;
+use miso_common::metrics::{METRICS, STEP_COUNT};
 use miso_workflow_types::{
     log::{Log, LogItem, LogIter},
     value::Value,
@@ -56,6 +57,7 @@ pub struct CountIter {
     mode: CountMode,
     next: Option<LogItem>,
     done: bool,
+    rows_processed: u64,
 }
 
 impl CountIter {
@@ -67,6 +69,7 @@ impl CountIter {
             mode,
             next: None,
             done: false,
+            rows_processed: 0,
         }
     }
 
@@ -76,6 +79,15 @@ impl CountIter {
 
     pub fn new_mux(input: LogIter) -> Self {
         Self::new(input, CountMode::Mux)
+    }
+}
+
+impl Drop for CountIter {
+    fn drop(&mut self) {
+        METRICS
+            .workflow_step_rows
+            .with_label_values(&[STEP_COUNT])
+            .inc_by(self.rows_processed);
     }
 }
 
@@ -94,9 +106,11 @@ impl Iterator for CountIter {
         while let Some(item) = try_next_with_partial_stream!(self.input) {
             match item {
                 PartialStreamItem::Log(log) => {
+                    self.rows_processed += 1;
                     self.mode.update_count(&mut self.count, log);
                 }
                 PartialStreamItem::PartialStreamLog(log, id) => {
+                    self.rows_processed += 1;
                     let count = self.partial_counts.entry(id).or_insert(0);
                     self.mode.update_count(count, log);
                 }

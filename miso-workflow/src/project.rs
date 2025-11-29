@@ -1,3 +1,4 @@
+use miso_common::metrics::{METRICS, STEP_PROJECT};
 use miso_workflow_types::{
     log::{Log, LogItem, LogIter},
     project::ProjectField,
@@ -14,6 +15,7 @@ pub struct ProjectIter {
     input: LogIter,
     project_fields: Vec<ProjectField>,
     extend: bool,
+    rows_processed: u64,
 }
 
 impl ProjectIter {
@@ -22,6 +24,7 @@ impl ProjectIter {
             input,
             project_fields,
             extend: false,
+            rows_processed: 0,
         }
     }
 
@@ -30,10 +33,13 @@ impl ProjectIter {
             input,
             project_fields,
             extend: true,
+            rows_processed: 0,
         }
     }
 
-    fn eval(&self, mut log: Log) -> Log {
+    fn eval(&mut self, mut log: Log) -> Log {
+        self.rows_processed += 1;
+
         let mut output = Log::new();
 
         {
@@ -61,6 +67,15 @@ impl ProjectIter {
         }
 
         log
+    }
+}
+
+impl Drop for ProjectIter {
+    fn drop(&mut self) {
+        METRICS
+            .workflow_step_rows
+            .with_label_values(&[STEP_PROJECT])
+            .inc_by(self.rows_processed);
     }
 }
 
