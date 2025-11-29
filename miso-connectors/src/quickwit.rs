@@ -11,9 +11,14 @@ use bytes::BytesMut;
 use color_eyre::eyre::{Context, OptionExt, Result, bail, eyre};
 use futures_util::stream;
 use hashbrown::{HashMap, HashSet};
+
+use crate::instrumentation::record_operation_result;
 use miso_common::{
     humantime_utils::{deserialize_duration, serialize_duration},
-    metrics::METRICS,
+    metrics::{
+        CONNECTOR_QUICKWIT, METRICS, OP_BEGIN_SEARCH, OP_CONTINUE_SCROLL, OP_GET_INDEXES,
+        OP_SEARCH_AGGREGATION,
+    },
     run_at_interval::run_at_interval,
     shutdown_future::ShutdownFuture,
 };
@@ -601,10 +606,14 @@ async fn response_to_bytes(response: Response) -> Result<BytesMut> {
         bail!(ConnectorError::ServerResp(status.as_u16(), text));
     }
     let bytes = response.bytes().await.context("bytes from response")?;
-    METRICS.downloaded_bytes.inc_by(bytes.len() as u64);
+    METRICS
+        .downloaded_bytes
+        .with_label_values(&[CONNECTOR_QUICKWIT])
+        .inc_by(bytes.len() as u64);
     Ok(bytes.into())
 }
 
+#[instrument(skip_all, name = "quickwit send_request")]
 async fn send_request(req: RequestBuilder) -> Result<BytesMut> {
     match req.send().await {
         Ok(response) => response_to_bytes(response).await,
@@ -612,7 +621,7 @@ async fn send_request(req: RequestBuilder) -> Result<BytesMut> {
     }
 }
 
-#[instrument(skip(query), name = "GET and parse quickwit begin search results")]
+#[instrument(skip(query), name = "uickwit begin search")]
 async fn begin_search(
     client: &Client,
     base_url: &str,
@@ -622,6 +631,8 @@ async fn begin_search(
     scroll_timeout: &Duration,
     scroll_size: u16,
 ) -> Result<(Vec<Log>, String)> {
+    let start = Instant::now();
+
     let source_includes = if source_includes.is_empty() {
         "".to_string()
     } else {
@@ -642,21 +653,32 @@ async fn begin_search(
         req = req.json(&query);
     }
 
-    let mut bytes = send_request(req).await?;
-    let data: SearchResponse =
-        simd_json::serde::from_slice(bytes.as_mut()).context("parse response")?;
-    Ok((
-        data.hits.hits.into_iter().map(|x| x.source).collect(),
-        data.scroll_id,
-    ))
+    let result: Result<(Vec<Log>, String)> = async {
+        let mut bytes = send_request(req).await?;
+        let data: SearchResponse =
+            simd_json::serde::from_slice(bytes.as_mut()).context("parse response")?;
+        Ok((
+            data.hits.hits.into_iter().map(|x| x.source).collect(),
+            data.scroll_id,
+        ))
+    }
+    .await;
+
+    let duration = start.elapsed().as_secs_f64();
+    record_operation_result(CONNECTOR_QUICKWIT, OP_BEGIN_SEARCH, &result, duration);
+
+    result
 }
 
-async fn continue_search(
+#[instrument(level = "debug", skip(client), name = "quickwit continue scroll")]
+async fn continue_scroll(
     client: &Client,
     base_url: &str,
     scroll_id: String,
     scroll_timeout: &Duration,
 ) -> Result<(Vec<Log>, String)> {
+    let start = Instant::now();
+
     let url = format!("{base_url}/api/v1/_elastic/_search/scroll");
 
     let req = client.get(&url).json(&ContinueSearchRequest {
@@ -664,16 +686,24 @@ async fn continue_search(
         scroll: format!("{}ms", scroll_timeout.as_millis()),
     });
 
-    let mut bytes = send_request(req).await?;
-    let data: SearchResponse =
-        simd_json::serde::from_slice(bytes.as_mut()).context("parse response")?;
-    Ok((
-        data.hits.hits.into_iter().map(|x| x.source).collect(),
-        data.scroll_id,
-    ))
+    let result: Result<(Vec<Log>, String)> = async {
+        let mut bytes = send_request(req).await?;
+        let data: SearchResponse =
+            simd_json::serde::from_slice(bytes.as_mut()).context("parse response")?;
+        Ok((
+            data.hits.hits.into_iter().map(|x| x.source).collect(),
+            data.scroll_id,
+        ))
+    }
+    .await;
+
+    let duration = start.elapsed().as_secs_f64();
+    record_operation_result(CONNECTOR_QUICKWIT, OP_CONTINUE_SCROLL, &result, duration);
+
+    result
 }
 
-#[instrument(skip(query), name = "GET and parse quickwit count result")]
+#[instrument(skip(query), name = "quickwit count")]
 async fn count(client: &Client, base_url: &str, index: &str, query: Option<Value>) -> Result<u64> {
     let url = format!("{base_url}/api/v1/_elastic/{index}/_count");
 
@@ -698,6 +728,8 @@ async fn search_aggregation(
     index: &str,
     query: Option<Value>,
 ) -> Result<SearchAggregationResponse> {
+    let start = Instant::now();
+
     let url = format!("{base_url}/api/v1/_elastic/{index}/_search");
 
     let mut req = client.get(&url);
@@ -705,27 +737,45 @@ async fn search_aggregation(
         req = req.json(&query);
     }
 
-    let mut bytes = send_request(req).await?;
-    simd_json::serde::from_slice(bytes.as_mut()).context("parse response")
+    let result: Result<SearchAggregationResponse> = async {
+        let mut bytes = send_request(req).await?;
+        simd_json::serde::from_slice(bytes.as_mut()).context("parse response")
+    }
+    .await;
+
+    let duration = start.elapsed().as_secs_f64();
+    record_operation_result(CONNECTOR_QUICKWIT, OP_SEARCH_AGGREGATION, &result, duration);
+
+    result
 }
 
-#[instrument(name = "GET and parse quickwit indexes")]
+#[instrument(name = "quickwit get_indexes")]
 async fn get_indexes(client: &Client, base_url: &str) -> Result<QuickwitIndexes> {
-    let url = format!("{base_url}/api/v1/indexes");
-    let mut bytes = send_request(client.get(&url)).await?;
-    let data: Vec<IndexResponse> =
-        simd_json::serde::from_slice(bytes.as_mut()).context("parse response")?;
-    Ok(data
-        .into_iter()
-        .map(|x| {
-            (
-                x.index_config.index_id,
-                QuickwitIndex {
-                    timestamp_field: x.index_config.doc_mapping.timestamp_field,
-                },
-            )
-        })
-        .collect())
+    let start = Instant::now();
+
+    let result: Result<QuickwitIndexes> = async {
+        let url = format!("{base_url}/api/v1/indexes");
+        let mut bytes = send_request(client.get(&url)).await?;
+        let data: Vec<IndexResponse> =
+            simd_json::serde::from_slice(bytes.as_mut()).context("parse response")?;
+        Ok(data
+            .into_iter()
+            .map(|x| {
+                (
+                    x.index_config.index_id,
+                    QuickwitIndex {
+                        timestamp_field: x.index_config.doc_mapping.timestamp_field,
+                    },
+                )
+            })
+            .collect())
+    }
+    .await;
+
+    let duration = start.elapsed().as_secs_f64();
+    record_operation_result(CONNECTOR_QUICKWIT, OP_GET_INDEXES, &result, duration);
+
+    result
 }
 
 async fn refresh_indexes_at_interval(
@@ -827,7 +877,7 @@ impl QuickwitConnector {
             }
 
             loop {
-                (logs, scroll_id) = continue_search(&client, &url, scroll_id, &scroll_timeout).await?;
+                (logs, scroll_id) = continue_scroll(&client, &url, scroll_id, &scroll_timeout).await?;
                 if logs.is_empty() {
                     return;
                 }

@@ -1,6 +1,7 @@
 use std::{cmp::Ordering, collections::BinaryHeap, iter, rc::Rc};
 
 use hashbrown::HashMap;
+use miso_common::metrics::{METRICS, STEP_TOPN};
 use miso_workflow_types::{
     log::{Log, LogItem, LogIter},
     sort::Sort,
@@ -89,6 +90,7 @@ pub struct TopNIter {
     state: Option<TopNState>,
     partial_states: HashMap<usize, TopNState>,
     logs: LogIter,
+    rows_processed: u64,
 }
 
 impl TopNIter {
@@ -102,6 +104,7 @@ impl TopNIter {
             state: Some(TopNState::new(limit, config)),
             partial_states: HashMap::new(),
             logs: Box::new(iter::empty()),
+            rows_processed: 0,
         }
     }
 
@@ -124,6 +127,15 @@ impl TopNIter {
     }
 }
 
+impl Drop for TopNIter {
+    fn drop(&mut self) {
+        METRICS
+            .workflow_step_rows
+            .with_label_values(&[STEP_TOPN])
+            .inc_by(self.rows_processed);
+    }
+}
+
 impl Iterator for TopNIter {
     type Item = LogItem;
 
@@ -136,9 +148,11 @@ impl Iterator for TopNIter {
         while let Some(item) = try_next_with_partial_stream!(self.input) {
             match item {
                 PartialStreamItem::Log(log) => {
+                    self.rows_processed += 1;
                     state.push(log);
                 }
                 PartialStreamItem::PartialStreamLog(log, id) => {
+                    self.rows_processed += 1;
                     self.partial_states
                         .entry(id)
                         .or_insert_with(|| TopNState::new(self.limit, self.config.clone()))
@@ -163,6 +177,7 @@ pub struct PartialTopNIter {
     // the top-n state of one stream (no passthrough).
     state: Option<TopNState>,
     logs: LogIter,
+    rows_processed: u64,
 }
 
 impl PartialTopNIter {
@@ -174,12 +189,22 @@ impl PartialTopNIter {
                 Rc::new(SortConfig::new(sorts)),
             )),
             logs: Box::new(iter::empty()),
+            rows_processed: 0,
         }
     }
 
     fn set_next_batch(&mut self, logs: Vec<SortableLog>) -> Option<LogItem> {
         self.logs = Box::new(logs.into_iter().map(|x| LogItem::Log(x.0)));
         self.logs.next()
+    }
+}
+
+impl Drop for PartialTopNIter {
+    fn drop(&mut self) {
+        METRICS
+            .workflow_step_rows
+            .with_label_values(&[STEP_TOPN])
+            .inc_by(self.rows_processed);
     }
 }
 
@@ -206,6 +231,7 @@ impl Iterator for PartialTopNIter {
 
         let state = self.state.as_mut()?;
         while let Some(log) = try_next!(self.input) {
+            self.rows_processed += 1;
             state.push(log);
         }
 

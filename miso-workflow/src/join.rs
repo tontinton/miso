@@ -4,7 +4,10 @@ use std::iter;
 use color_eyre::{Result, eyre::Context};
 use flume::{Receiver, RecvError, Selector, Sender, TryRecvError};
 use hashbrown::{DefaultHashBuilder, HashMap, HashSet, hash_map::RawEntryMut};
-use miso_common::watch::Watch;
+use miso_common::{
+    metrics::{METRICS, STEP_JOIN},
+    watch::Watch,
+};
 use miso_workflow_types::{
     expr::Expr,
     field::Field,
@@ -356,33 +359,43 @@ impl Iterator for JoinCollectorIter {
     }
 }
 
-pub fn join_iter(config: Join, iter: impl Iterator<Item = (bool, Log)>, tx: Sender<Log>) {
+pub fn join_iter(config: Join, iter: impl Iterator<Item = (bool, Log)>, tx: Sender<Log>) -> usize {
     let type_ = config.type_;
     match type_ {
         JoinType::Inner => {
             let (build, probe, flip) = collect_to_build_and_probe(config, iter);
+            let rows_processed = build.len() + probe.len();
 
             let mut build_map: HashMap<Value, Vec<Log>> = HashMap::new();
             for (key, log) in build {
                 build_map.entry(key).or_default().push(log);
             }
             hash_inner_join(tx, build_map, probe, flip);
+
+            rows_processed
         }
         JoinType::Outer => {
             let (build, probe, flip) = collect_to_build_and_probe(config, iter);
+            let rows_processed = build.len() + probe.len();
 
             let mut build_map: HashMap<Value, (Vec<Log>, bool)> = HashMap::new();
             for (key, log) in build {
                 build_map.entry(key).or_default().0.push(log);
             }
             hash_outer_join(tx, build_map, probe, flip);
+
+            rows_processed
         }
         JoinType::Left | JoinType::Right => {
             let (mut left, mut right) = collect_to_hash_maps(config, iter);
+            let rows_processed = left.len() + right.len();
+
             if matches!(type_, JoinType::Right) {
                 std::mem::swap(&mut left, &mut right);
             }
             hash_left_join(tx, left, right);
+
+            rows_processed
         }
     }
 }
@@ -401,7 +414,13 @@ fn spawn_join_thread(
                 JoinCollectorIter::new(left_rxs, right_rxs, dynamic_filter_tx),
                 cancel,
             );
-            join_iter(config, iter, tx);
+            let rows_processed = join_iter(config, iter, tx);
+
+            METRICS
+                .workflow_step_rows
+                .with_label_values(&[STEP_JOIN])
+                .inc_by(rows_processed as u64);
+
             Ok(())
         },
         "join",

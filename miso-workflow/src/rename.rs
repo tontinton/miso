@@ -1,3 +1,4 @@
+use miso_common::metrics::{METRICS, STEP_RENAME};
 use miso_workflow_types::{
     field::Field,
     log::{Log, LogItem, LogIter},
@@ -10,18 +11,33 @@ use crate::{
 pub struct RenameIter {
     input: LogIter,
     renames: Vec<(Field, Field)>,
+    rows_processed: u64,
 }
 
 impl RenameIter {
     pub fn new(input: LogIter, renames: Vec<(Field, Field)>) -> Self {
-        Self { input, renames }
+        Self {
+            input,
+            renames,
+            rows_processed: 0,
+        }
     }
 
-    fn rename(&self, mut log: Log) -> Log {
+    fn rename(&mut self, mut log: Log) -> Log {
+        self.rows_processed += 1;
         for (from, to) in &self.renames {
             let _renamed = rename_field(&mut log, from, to);
         }
         log
+    }
+}
+
+impl Drop for RenameIter {
+    fn drop(&mut self) {
+        METRICS
+            .workflow_step_rows
+            .with_label_values(&[STEP_RENAME])
+            .inc_by(self.rows_processed);
     }
 }
 
