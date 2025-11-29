@@ -651,7 +651,6 @@ async fn begin_search(
     ))
 }
 
-#[instrument(name = "GET and parse quickwit continue search results")]
 async fn continue_search(
     client: &Client,
     base_url: &str,
