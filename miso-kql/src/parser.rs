@@ -426,6 +426,15 @@ where
             .labelled("not")
             .boxed();
 
+        let negate = just(Token::Minus)
+            .ignore_then(literal.clone())
+            .map(|expr| {
+                // Convert -x to (0 - x)
+                Expr::Minus(Box::new(Expr::Literal(json!(0))), Box::new(expr))
+            })
+            .labelled("negate")
+            .boxed();
+
         let cast = select! {
             Token::ToString => CastType::String,
             Token::ToInt | Token::ToLong => CastType::Int,
@@ -441,6 +450,7 @@ where
             .or(expr_delimited_by_parentheses)
             .or(bin)
             .or(not)
+            .or(negate)
             .or(cast)
             .or(exists)
             .or(case)
