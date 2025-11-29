@@ -19,5 +19,11 @@ fmt-check:
 fmt:
     cargo fmt --all
 
+run-opensearch:
+    scripts/run_opensearch.sh
+
+run-quickwit:
+    scripts/run_quickwit.sh
+
 # Full CI check
 ci: fmt-check lint test

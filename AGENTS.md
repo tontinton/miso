@@ -107,4 +107,4 @@ KQL String
 - Integration tests in tests/ (e.g. tests/elasticsearch.rs and tests/quickwit.rs) use testcontainers
 - Each test file runs as a single test function that creates a container, and spawns all test cases concurrently
 - Filter individual test cases with the `TEST_FILTER` environment variable (for example `cargo test --test elasticsearch/quickwit`)
-- For a fast feedback loop, you can run scripts/run_quickwit.sh or scripts/run_opensearch.sh to get the connector running, and then use EXT_QW=http://localhost:7280 or EXT_ES=http://localhost:9200 when running the tests
+- For a fast feedback loop, always prefer running an external connector using `just run-quickwit` or `just run-opensearch`, and then use `EXT_QW=http://localhost:7280` or `EXT_ES=http://localhost:9200` when running the tests
