@@ -23,7 +23,16 @@ use time::OffsetDateTime;
 
 use crate::lexer::{StringValue, Token};
 
-const ERROR_PLACEHOLDER: &str = "ERROR";
+const ERROR_FIELD_NAME: &str = "_error";
+
+const EXPR_TERMINATORS: &[Token] = &[
+    Token::Pipe,
+    Token::Comma,
+    Token::RParen,
+    Token::RBracket,
+    Token::And,
+    Token::Or,
+];
 
 macro_rules! binary_ops {
     ($prev:expr; $( $token:path => $expr:path ),* $(,)?) => {
@@ -68,7 +77,7 @@ macro_rules! agg_single_param {
                         Token::LParen,
                         Token::RParen,
                         [(Token::LBracket, Token::RBracket)],
-                        |_| Field::from_str(ERROR_PLACEHOLDER).expect("error field"),
+                        |_| Field::from_str(ERROR_FIELD_NAME).expect("error field"),
                     ))),
             )
             .map(Aggregation::$variant)
@@ -77,9 +86,11 @@ macro_rules! agg_single_param {
 
 #[derive(Debug, Serialize)]
 pub struct ParseError {
-    span: std::ops::Range<usize>,
-    message: String,
-    reason: String,
+    pub span: std::ops::Range<usize>,
+    pub line: usize,
+    pub column: usize,
+    pub message: String,
+    pub reason: String,
 }
 
 impl std::error::Error for ParseError {}
@@ -88,10 +99,31 @@ impl fmt::Display for ParseError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "Parse error at {:?}: {} ({})",
-            self.span, self.message, self.reason
-        )
+            "Parse error at {}:{}: {}",
+            self.line, self.column, self.message
+        )?;
+        Ok(())
     }
+}
+
+/// Convert a byte offset in the source to line and column numbers (1-indexed).
+fn offset_to_line_col(source: &str, offset: usize) -> (usize, usize) {
+    let mut line = 1;
+    let mut col = 1;
+
+    for (i, ch) in source.chars().enumerate() {
+        if i >= offset {
+            break;
+        }
+        if ch == '\n' {
+            line += 1;
+            col = 1;
+        } else {
+            col += 1;
+        }
+    }
+
+    (line, col)
 }
 
 pub fn parse(query: &str) -> Result<Vec<QueryStep>, Vec<ParseError>> {
@@ -108,10 +140,16 @@ pub fn parse(query: &str) -> Result<Vec<QueryStep>, Vec<ParseError>> {
         Err(errs) => {
             let parse_errors: Vec<ParseError> = errs
                 .into_iter()
-                .map(|err| ParseError {
-                    span: err.span().into_range(),
-                    message: format!("{err:?}"),
-                    reason: format!("{:?}", err.reason()),
+                .map(|err| {
+                    let span = err.span().into_range();
+                    let (line, column) = offset_to_line_col(query, span.start);
+                    ParseError {
+                        span,
+                        line,
+                        column,
+                        message: format!("{err:?}"),
+                        reason: format!("{:?}", err.reason()),
+                    }
                 })
                 .collect();
             Err(parse_errors)
@@ -210,12 +248,26 @@ where
         top_level
             .then(
                 just(Token::LBracket)
-                    .ignore_then(select! {
-                        Token::Integer(i) if i >= 0 => i as usize
-                    })
+                    .ignore_then(
+                        select! {
+                            Token::Integer(i) => i
+                        }
+                        .validate(|i, e, emitter| {
+                            if i < 0 {
+                                emitter.emit(Rich::custom(
+                                    e.span(),
+                                    "array index must be non-negative. Use field[0], field[1], etc.",
+                                ));
+                                0
+                            } else {
+                                i as usize
+                            }
+                        }),
+                    )
                     .then_ignore(just(Token::RBracket))
                     .repeated()
-                    .collect::<Vec<_>>(),
+                    .collect::<Vec<_>>()
+                    .labelled("array index"),
             )
             .map(|(name, arr_indices)| FieldAccess::new(name, arr_indices))
             .boxed()
@@ -309,9 +361,9 @@ where
             StringValue::Bytes(_) => {
                 emitter.emit(Rich::custom(
                     e.span(),
-                    "byte strings are currently not supported",
+                    "byte strings are currently not supported. Use regular strings with double quotes",
                 ));
-                ERROR_PLACEHOLDER.to_string()
+                String::new()
             }
         })
         .labelled("string literal")
@@ -343,7 +395,7 @@ where
                         Token::LParen,
                         Token::RParen,
                         [(Token::LBracket, Token::RBracket)],
-                        |_| Field::from_str(ERROR_PLACEHOLDER).expect("error field"),
+                        |_| Field::from_str(ERROR_FIELD_NAME).expect("error field"),
                     ))),
             )
             .map(Expr::Exists)
@@ -367,7 +419,7 @@ where
                 if items.len() < 3 {
                     emitter.emit(Rich::custom(
                         e.span(),
-                        "case() must have at least one predicate, one then, and an else expression",
+                        "case() requires at least 3 arguments: case(condition, result, defaultResult). Example: case(x > 10, \"high\", \"low\")",
                     ));
                     return Expr::Literal(Value::Null);
                 }
@@ -383,7 +435,7 @@ where
                 if iter.next().is_some() {
                     emitter.emit(Rich::custom(
                         e.span(),
-                        "case() must have an even number of predicate/then expressions before the else",
+                        "case() needs pairs of (condition, result) before the default. Example: case(x > 10, \"high\", x > 5, \"medium\", \"low\")",
                     ));
                 }
 
@@ -456,27 +508,21 @@ where
             .or(field.map(Expr::Field))
             .recover_with(skip_then_retry_until(
                 any().ignored(),
-                one_of([
-                    Token::Pipe,
-                    Token::Comma,
-                    Token::RParen,
-                    Token::RBracket,
-                    Token::And,
-                    Token::Or,
-                ])
-                .ignored(),
+                one_of(EXPR_TERMINATORS).ignored(),
             ))
             .boxed();
 
         let mul_div = binary_ops!(atom;
             Token::Mul => Expr::Mul,
             Token::Div => Expr::Div,
-        );
+        )
+        .labelled("multiplication or division");
 
         let add_sub = binary_ops!(mul_div;
             Token::Plus  => Expr::Plus,
             Token::Minus => Expr::Minus,
-        );
+        )
+        .labelled("addition or subtraction");
 
         let comparisons = binary_ops!(add_sub;
             Token::DoubleEq => Expr::Eq,
@@ -485,7 +531,8 @@ where
             Token::Gt       => Expr::Gt,
             Token::Lte      => Expr::Lte,
             Token::Lt       => Expr::Lt,
-        );
+        )
+        .labelled("comparison");
 
         let text_ops = binary_ops!(comparisons;
             Token::StartsWith => Expr::StartsWith,
@@ -493,7 +540,8 @@ where
             Token::Contains   => Expr::Contains,
             Token::Has        => Expr::Has,
             Token::HasCs      => Expr::HasCs,
-        );
+        )
+        .labelled("text operation");
 
         let bin_op_expr = text_ops
             .recover_with(skip_until(
@@ -603,7 +651,15 @@ where
 
     let project_expr = field_no_arr
         .clone()
-        .then(just(Token::Eq).ignore_then(expr.clone()).or_not())
+        .then(
+            just(Token::Eq)
+                .ignore_then(expr.clone().recover_with(skip_until(
+                    any().ignored(),
+                    one_of([Token::Comma, Token::Pipe]).ignored(),
+                    || Expr::Literal(Value::Null),
+                )))
+                .or_not(),
+        )
         .map(|(to, from)| ProjectField {
             from: from.unwrap_or_else(|| Expr::Field(to.clone())),
             to,
@@ -655,10 +711,17 @@ where
         .ignore_then(
             just(Token::Kind)
                 .ignore_then(just(Token::Eq))
-                .ignore_then(select! {
-                    Token::Bag => ExpandKind::Bag,
-                    Token::Array => ExpandKind::Array,
-                })
+                .ignore_then(
+                    select! {
+                        Token::Bag => ExpandKind::Bag,
+                        Token::Array => ExpandKind::Array,
+                    }
+                    .recover_with(skip_until(
+                        any().ignored(),
+                        one_of([Token::Pipe, Token::Comma]).ignored(),
+                        ExpandKind::default,
+                    )),
+                )
                 .or_not(),
         )
         .then(mv_expand_exprs)
@@ -671,7 +734,19 @@ where
         .labelled("mv-expand")
         .boxed();
 
-    let limit_int = select! { Token::Integer(x) => x as u64 }.labelled("limit value");
+    let limit_int = select! { Token::Integer(x) => x }
+        .validate(|x, e, emitter| {
+            if x < 0 {
+                emitter.emit(Rich::custom(
+                    e.span(),
+                    "limit must be a positive number. Use 'limit 100' or 'take 50'",
+                ));
+                100 // default fallback
+            } else {
+                x as u64
+            }
+        })
+        .labelled("limit value");
 
     let limit_step = just(Token::Limit)
         .or(just(Token::Take))
@@ -693,7 +768,12 @@ where
                 .ignore_then(
                     just(Token::First)
                         .to(NullsOrder::First)
-                        .or(just(Token::Last).to(NullsOrder::Last)),
+                        .or(just(Token::Last).to(NullsOrder::Last))
+                        .recover_with(skip_until(
+                            any().ignored(),
+                            one_of([Token::Comma, Token::Pipe]).ignored(),
+                            NullsOrder::default,
+                        )),
                 )
                 .or_not(),
         )
@@ -712,7 +792,11 @@ where
 
     let sort_step = just(Token::Sort)
         .or(just(Token::Order))
-        .ignore_then(just(Token::By))
+        .ignore_then(just(Token::By).recover_with(skip_until(
+            any().ignored(),
+            one_of([Token::Pipe, Token::Comma]).ignored(),
+            || Token::By,
+        )))
         .ignore_then(sort_exprs.clone())
         .map(QueryStep::Sort)
         .labelled("sort")
@@ -720,7 +804,11 @@ where
 
     let top_step = just(Token::Top)
         .ignore_then(limit_int)
-        .then_ignore(just(Token::By))
+        .then_ignore(just(Token::By).recover_with(skip_until(
+            any().ignored(),
+            one_of([Token::Pipe]).ignored(),
+            || Token::By,
+        )))
         .then(sort_exprs)
         .map(|(limit, sorts)| QueryStep::Top(sorts, limit))
         .labelled("top")
@@ -789,6 +877,11 @@ where
         .ignore_then(
             field
                 .clone()
+                .recover_with(skip_until(
+                    any().ignored(),
+                    one_of([Token::Comma, Token::Pipe]).ignored(),
+                    || Field::from_str(ERROR_FIELD_NAME).expect("error field"),
+                ))
                 .separated_by(just(Token::Comma))
                 .collect::<Vec<_>>(),
         )
@@ -834,10 +927,17 @@ where
             ) {
                 (true, false) => (left_expr, right_expr),
                 (false, true) => (right_expr, left_expr),
-                _ => {
+                (true, true) => {
                     emitter.emit(Rich::custom(
                         e.span(),
-                        "join condition must have one $left and one $right field",
+                        "join condition has both sides marked as $left. Use '$left.field == $right.field'",
+                    ));
+                    (left_expr, right_expr)
+                }
+                (false, false) => {
+                    emitter.emit(Rich::custom(
+                        e.span(),
+                        "join condition has both sides marked as $right. Use '$left.field == $right.field'",
                     ));
                     (left_expr, right_expr)
                 }
@@ -868,7 +968,20 @@ where
                 .ignore_then(just(Token::Dot))
                 .ignore_then(just(Token::Partitions))
                 .ignore_then(just(Token::Eq))
-                .ignore_then(select! { Token::Integer(x) => x })
+                .ignore_then(
+                    select! { Token::Integer(x) => x }
+                        .validate(|x, e, emitter| {
+                            if x <= 0 {
+                                emitter.emit(Rich::custom(
+                                    e.span(),
+                                    "partition count must be positive. Use 'hint.partitions=2' or similar",
+                                ));
+                                1 // default to 1
+                            } else {
+                                x
+                            }
+                        })
+                )
                 .or_not(),
         )
         .then(
@@ -926,7 +1039,11 @@ where
         let let_step = just(Token::Let)
             .ignore_then(ident.clone())
             .then_ignore(just(Token::Eq))
-            .then(query_expr.clone())
+            .then(query_expr.clone().recover_with(skip_until(
+                any().ignored(),
+                just(Token::Semicolon).ignored(),
+                || vec![QueryStep::Count],
+            )))
             .then_ignore(just(Token::Semicolon))
             .map(|(name, steps)| QueryStep::Let(name, steps))
             .labelled("let")
@@ -934,7 +1051,15 @@ where
 
         let scan_step = ident
             .clone()
-            .then(just(Token::Dot).ignore_then(ident).or_not())
+            .then(
+                just(Token::Dot)
+                    .ignore_then(ident.recover_with(skip_until(
+                        any().ignored(),
+                        one_of([Token::Pipe]).ignored(),
+                        || ERROR_FIELD_NAME.to_string(),
+                    )))
+                    .or_not(),
+            )
             .map(|(connector, collection)| {
                 QueryStep::Scan(match collection {
                     Some(collection) => ScanKind::Collection {

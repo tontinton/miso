@@ -1044,6 +1044,37 @@ fn test_case_expression(expr_str: &str) {
     }
 }
 
+#[test]
+fn test_parse_error_includes_line_and_column() {
+    let query = "connector.table | where field1 == \"value\"\n| invalid_operator field2";
+    let result = parse(query);
+
+    assert!(result.is_err());
+    let errors = result.unwrap_err();
+    assert!(!errors.is_empty());
+    assert_eq!(
+        errors
+            .into_iter()
+            .map(|e| (e.line, e.column))
+            .collect::<Vec<_>>(),
+        vec![(2, 3)]
+    );
+}
+
+#[test]
+fn test_join_condition_validation() {
+    let query = "connector.table | join kind=inner (other.table) on $left.field1 == $left.field2";
+    let result = parse(query);
+
+    assert!(result.is_err());
+    let errors = result.unwrap_err();
+
+    let has_join_error = errors
+        .iter()
+        .any(|e| e.message.contains("$left") && e.message.contains("$right"));
+    assert!(has_join_error, "Should have error about join condition");
+}
+
 #[test_case(
     "connector.table1 | join (connector.table2 | where) on $left. == $right.field2 | project field1",
     3;
