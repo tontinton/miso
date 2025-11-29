@@ -26,6 +26,15 @@ use tracing::info;
 
 use common::{run_predicate_pushdown_tests, BASE_PREDICATE_PUSHDOWN_TESTS};
 
+use crate::common::TestCase;
+
+const ELASTICSEARCH_TESTS: &[TestCase] = &[TestCase {
+    query: r#"test.stack | union (test.hdfs) | where exists(questionId) or exists(tenant_id)"#,
+    expected: r#"test.stack | union (test.hdfs)"#,
+    count: 20,
+    name: "elasticsearch_union_different_timestamps",
+}];
+
 #[ctor]
 fn init() {
     color_eyre::install().unwrap();
@@ -250,5 +259,9 @@ async fn write_to_index(
 async fn elasticsearch_predicate_pushdown() -> Result<()> {
     let image = run_elasticsearch_image().await;
     let connectors = Arc::new(get_elasticsearch_connector_map(&image).await?);
-    run_predicate_pushdown_tests(connectors, &[BASE_PREDICATE_PUSHDOWN_TESTS]).await
+    run_predicate_pushdown_tests(
+        connectors,
+        &[BASE_PREDICATE_PUSHDOWN_TESTS, ELASTICSEARCH_TESTS],
+    )
+    .await
 }
