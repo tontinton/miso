@@ -76,6 +76,12 @@ async fn run_image() -> QuickwitImage {
 async fn setup(url: String) -> Result<ConnectorsMap> {
     let client = Client::new();
 
+    let delete_futures: Vec<_> = INDEXES
+        .iter()
+        .map(|(name, _)| delete_index(&client, &url, name))
+        .collect();
+    try_join_all(delete_futures).await?;
+
     let mut create_index_futures = Vec::with_capacity(INDEXES.len());
 
     for stackoverflow_index_name in ["stack", "stack_mirror"] {
@@ -241,6 +247,29 @@ async fn void_response_to_err(url: &str, response: Response) -> Result<()> {
             bail!("POST {} failed with status {}", url, status);
         }
     }
+    Ok(())
+}
+
+async fn delete_index(client: &Client, base_url: &str, index_name: &str) -> Result<()> {
+    let url = format!("{base_url}/api/v1/indexes/{index_name}");
+    let response = client
+        .delete(&url)
+        .send()
+        .await
+        .with_context(|| format!("DELETE index: {index_name}"))?;
+
+    let status = response.status();
+
+    // Ignore 404 errors (index doesn't exist).
+    if !status.is_success() && status != 404 {
+        if let Ok(text) = response.text().await {
+            bail!("DELETE {} failed with status {}: {}", url, status, text);
+        } else {
+            bail!("DELETE {} failed with status {}", url, status);
+        }
+    }
+
+    info!("Index '{}' deleted or did not exist", index_name);
     Ok(())
 }
 
