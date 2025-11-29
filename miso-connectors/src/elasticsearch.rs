@@ -745,10 +745,6 @@ async fn begin_search(
     ))
 }
 
-#[instrument(
-    skip(auth),
-    name = "GET and parse elasticsearch continue scroll results"
-)]
 async fn continue_scroll(
     client: &Client,
     base_url: &str,
