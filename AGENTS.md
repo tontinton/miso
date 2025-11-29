@@ -27,6 +27,8 @@ Miso is a query engine over semi-structured (JSON) logs that processes KQL (Kust
 - Run miso: `cargo run`
 - Run miso without optimizations (sometimes useful for debugging): `cargo run -- --no-optimizations`
 
+See justfile for more
+
 ## Architecture
 
 The codebase is organized as a Rust workspace with the following key crates:
