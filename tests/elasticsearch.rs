@@ -46,7 +46,7 @@ struct ElasticsearchImage {
     port: u16,
 }
 
-async fn run_elasticsearch_image() -> ElasticsearchImage {
+async fn run_image() -> ElasticsearchImage {
     let container = GenericImage::new("opensearchproject/opensearch", "2.11.0")
         .with_wait_for(WaitFor::message_on_stdout("started"))
         .with_exposed_port(9200.tcp())
@@ -78,8 +78,7 @@ struct IndexProperties {
     properties: serde_json::Map<String, serde_json::Value>,
 }
 
-async fn get_elasticsearch_connector_map(image: &ElasticsearchImage) -> Result<ConnectorsMap> {
-    let url = format!("http://127.0.0.1:{}", image.port);
+async fn setup(url: String) -> Result<ConnectorsMap> {
     let client = Client::new();
 
     let mut create_index_futures = Vec::with_capacity(INDEXES.len());
@@ -243,8 +242,14 @@ async fn write_to_index(
 
 #[tokio::test]
 async fn elasticsearch_predicate_pushdown() -> Result<()> {
-    let image = run_elasticsearch_image().await;
-    let connectors = Arc::new(get_elasticsearch_connector_map(&image).await?);
+    let (url, _image_keepalive) = match std::env::var("EXT_ES") {
+        Ok(url) => (url, None),
+        Err(_) => {
+            let image = run_image().await;
+            (format!("http://127.0.0.1:{}", image.port), Some(image))
+        }
+    };
+    let connectors = Arc::new(setup(url).await?);
     run_predicate_pushdown_tests(
         connectors,
         &[BASE_PREDICATE_PUSHDOWN_TESTS, ELASTICSEARCH_TESTS],

@@ -41,20 +41,20 @@ const QUICKWIT_TESTS: &[TestCase] = &[
     },
 ];
 
+const QUICKWIT_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
+
 #[ctor]
 fn init() {
     color_eyre::install().unwrap();
     tracing_subscriber::fmt::init();
 }
 
-const QUICKWIT_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
-
 struct QuickwitImage {
     _container: ContainerAsync<GenericImage>,
     port: u16,
 }
 
-async fn run_quickwit_image() -> QuickwitImage {
+async fn run_image() -> QuickwitImage {
     let container = GenericImage::new("quickwit/quickwit", "edge")
         .with_exposed_port(7280.tcp())
         .with_wait_for(WaitFor::message_on_stdout("REST server is ready"))
@@ -73,8 +73,7 @@ async fn run_quickwit_image() -> QuickwitImage {
     }
 }
 
-async fn get_quickwit_connector_map(image: &QuickwitImage) -> Result<ConnectorsMap> {
-    let url = format!("http://127.0.0.1:{}", image.port);
+async fn setup(url: String) -> Result<ConnectorsMap> {
     let client = Client::new();
 
     let mut create_index_futures = Vec::with_capacity(INDEXES.len());
@@ -296,7 +295,13 @@ async fn write_to_index(
 
 #[tokio::test]
 async fn quickwit_predicate_pushdown() -> Result<()> {
-    let image = run_quickwit_image().await;
-    let connectors = Arc::new(get_quickwit_connector_map(&image).await?);
+    let (url, _image_keepalive) = match std::env::var("EXT_QW") {
+        Ok(url) => (url, None),
+        Err(_) => {
+            let image = run_image().await;
+            (format!("http://127.0.0.1:{}", image.port), Some(image))
+        }
+    };
+    let connectors = Arc::new(setup(url).await?);
     run_predicate_pushdown_tests(connectors, &[BASE_PREDICATE_PUSHDOWN_TESTS, QUICKWIT_TESTS]).await
 }
