@@ -25,6 +25,18 @@ use tracing_subscriber::fmt::MakeWriter;
 
 const SLOW_TEST_LOG_DURATION: Duration = Duration::from_secs(60);
 
+pub const INDEXES: [(&str, &str); 3] = [
+    (
+        "stack",
+        include_str!("../resources/stackoverflow.posts.10.json"),
+    ),
+    (
+        "stack_mirror",
+        include_str!("../resources/stackoverflow.posts.10.json"),
+    ),
+    ("hdfs", include_str!("../resources/hdfs.logs.10.json")),
+];
+
 #[derive(Clone)]
 struct TestLogWriter {
     buffer: Arc<Mutex<Vec<u8>>>,

@@ -24,9 +24,7 @@ use testcontainers::{
 use tokio_retry::{strategy::FixedInterval, Retry};
 use tracing::info;
 
-use common::{run_predicate_pushdown_tests, BASE_PREDICATE_PUSHDOWN_TESTS};
-
-use crate::common::TestCase;
+use common::{run_predicate_pushdown_tests, TestCase, BASE_PREDICATE_PUSHDOWN_TESTS, INDEXES};
 
 const QUICKWIT_TESTS: &[TestCase] = &[
     TestCase {
@@ -48,18 +46,6 @@ fn init() {
     color_eyre::install().unwrap();
     tracing_subscriber::fmt::init();
 }
-
-const INDEXES: [(&str, &str); 3] = [
-    (
-        "stack",
-        include_str!("./resources/stackoverflow.posts.10.json"),
-    ),
-    (
-        "stack_mirror",
-        include_str!("./resources/stackoverflow.posts.10.json"),
-    ),
-    ("hdfs", include_str!("./resources/hdfs.logs.10.json")),
-];
 
 const QUICKWIT_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
 
