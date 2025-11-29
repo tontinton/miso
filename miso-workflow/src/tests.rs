@@ -1591,7 +1591,7 @@ async fn divide_zero_by_value() -> Result<()> {
 #[tokio::test]
 async fn negative_number_operations() -> Result<()> {
     check(
-        r#"test.c | where result == (0 - 5) * 2"#,
+        r#"test.c | where result == -5 * 2"#,
         r#"[{"result": -10.0}, {"result": 10.0}]"#,
         r#"[{"result": -10.0}]"#,
     )
@@ -1601,7 +1601,7 @@ async fn negative_number_operations() -> Result<()> {
 #[tokio::test]
 async fn mixed_int_uint_arithmetic() -> Result<()> {
     check(
-        r#"test.c | where result == toint(5) + toint(0 - 3)"#,
+        r#"test.c | where result == toint(5) + toint(-3)"#,
         r#"[{"result": 2}, {"result": 3}]"#,
         r#"[{"result": 2}]"#,
     )
