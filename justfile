@@ -1,6 +1,9 @@
 build *ARGS:
     cargo build {{ARGS}}
 
+default:
+    build
+
 run *ARGS:
     cargo run {{ARGS}}
 
