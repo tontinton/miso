@@ -689,6 +689,60 @@ fn test_arithmetic_expressions() {
     }
 }
 
+fn assert_negated_literal(expr: &Expr, expected_value: f64) {
+    match expr {
+        Expr::Minus(left, right) => {
+            assert!(
+                matches!(**left, Expr::Literal(Value::Int(0))),
+                "Expected left side to be 0"
+            );
+            match &**right {
+                Expr::Literal(Value::Int(i)) => {
+                    assert_eq!(*i as f64, expected_value, "Expected right side to match");
+                }
+                Expr::Literal(Value::Float(f)) => {
+                    assert_eq!(*f, expected_value, "Expected right side to match");
+                }
+                _ => panic!("Expected numeric literal on right side"),
+            }
+        }
+        _ => panic!("Expected minus expression for negation"),
+    }
+}
+
+#[test_case("x == -5", 5.0, "integer")]
+#[test_case("y == -3.15", 3.15, "float")]
+fn test_negative_literal(condition: &str, expected_value: f64, _literal_type: &str) {
+    let query = format!("connector.table | where {}", condition);
+    let result = parse_unwrap!(&query);
+
+    match &result[1] {
+        QueryStep::Filter(Expr::Eq(_, right)) => {
+            assert_negated_literal(right, expected_value);
+        }
+        _ => panic!("Expected Eq filter"),
+    }
+}
+
+#[test]
+fn test_negative_literal_in_arithmetic() {
+    let query = "connector.table | where result == -5 * 2";
+    let result = parse_unwrap!(query);
+
+    match &result[1] {
+        QueryStep::Filter(Expr::Eq(_, right)) => {
+            // Should be parsed as (0 - 5) * 2
+            match &**right {
+                Expr::Mul(left, _right) => {
+                    assert_negated_literal(left, 5.0);
+                }
+                _ => panic!("Expected multiplication expression"),
+            }
+        }
+        _ => panic!("Expected Eq filter"),
+    }
+}
+
 #[test_case("invalid syntax")]
 #[test_case("connector.table | where")]
 #[test_case("connector.table | limit -1")]
