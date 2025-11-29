@@ -1577,3 +1577,374 @@ async fn case_chained_with_other_ops() -> Result<()> {
     )
     .await
 }
+
+#[tokio::test]
+async fn divide_zero_by_value() -> Result<()> {
+    check(
+        r#"test.c | where result == 0 / 5"#,
+        r#"[{"result": 0.0}, {"result": 1.0}]"#,
+        r#"[{"result": 0.0}]"#,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn negative_number_operations() -> Result<()> {
+    check(
+        r#"test.c | where result == (0 - 5) * 2"#,
+        r#"[{"result": -10.0}, {"result": 10.0}]"#,
+        r#"[{"result": -10.0}]"#,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn mixed_int_uint_arithmetic() -> Result<()> {
+    check(
+        r#"test.c | where result == toint(5) + toint(0 - 3)"#,
+        r#"[{"result": 2}, {"result": 3}]"#,
+        r#"[{"result": 2}]"#,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn null_in_gte_operator() -> Result<()> {
+    check(
+        r#"test.c | where x >= 5"#,
+        r#"[{"x": 10}, {"x": 5}, {"x": null}, {"x": 3}]"#,
+        r#"[{"x": 10}, {"x": 5}]"#,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn null_in_lte_operator() -> Result<()> {
+    check(
+        r#"test.c | where x <= 5"#,
+        r#"[{"x": 10}, {"x": 5}, {"x": null}, {"x": 3}]"#,
+        r#"[{"x": null}, {"x": 5}, {"x": 3}]"#,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn null_in_and_operator() -> Result<()> {
+    check(
+        r#"test.c | where x == 5 and y == 10"#,
+        r#"[{"x": 5, "y": 10}, {"x": 5, "y": null}, {"x": null, "y": 10}]"#,
+        r#"[{"x": 5, "y": 10}]"#,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn null_in_or_operator() -> Result<()> {
+    check(
+        r#"test.c | where x == 5 or y == 10"#,
+        r#"[{"x": 5, "y": 0}, {"x": null, "y": 10}, {"x": null, "y": null}, {"x": 1, "y": 2}]"#,
+        r#"[{"x": 5, "y": 0}, {"x": null, "y": 10}]"#,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn comparison_cross_type() -> Result<()> {
+    check(
+        r#"test.c | where x == "5""#,
+        r#"[{"x": 5}, {"x": "5"}, {"x": 5.0}, {"x": true}]"#,
+        r#"[{"x": "5"}]"#,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn project_nonexistent_field_arithmetic() -> Result<()> {
+    check(
+        r#"test.c | project result=missing + 5"#,
+        r#"[{"id": 1}, {"id": 2}]"#,
+        r#"[{}, {}]"#,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn filter_null_field_comparison() -> Result<()> {
+    check(
+        r#"test.c | where null > 5"#,
+        r#"[{"id": 1}, {"id": 2}]"#,
+        r#"[]"#,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn exists_missing_nested_path() -> Result<()> {
+    check(
+        r#"test.c | where exists(a.b.c)"#,
+        r#"[{"a": {"b": {"c": 1}}}, {"a": {"x": 1}}, {"a": null}, {}]"#,
+        r#"[{"a": {"b": {"c": 1}}}]"#,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn in_operator_with_null_in_list() -> Result<()> {
+    check(
+        r#"test.c | where x in (1, null, 3)"#,
+        r#"[{"x": 1}, {"x": 2}, {"x": null}, {"x": 3}]"#,
+        r#"[{"x": null}, {"x": 1}, {"x": 3}]"#,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn between_null_endpoints() -> Result<()> {
+    check(
+        r#"test.c | where x between (null .. 10)"#,
+        r#"[{"x": 5}, {"x": 15}]"#,
+        r#"[{"x": 5}]"#,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn contains_empty_string() -> Result<()> {
+    check(
+        r#"test.c | where text contains """#,
+        r#"[{"text": "hello"}, {"text": ""}, {"text": null}]"#,
+        r#"[{"text": "hello"}, {"text": ""}]"#,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn startswith_empty_string() -> Result<()> {
+    check(
+        r#"test.c | where text startswith """#,
+        r#"[{"text": "hello"}, {"text": ""}, {"text": null}]"#,
+        r#"[{"text": "hello"}, {"text": ""}]"#,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn endswith_empty_string() -> Result<()> {
+    check(
+        r#"test.c | where text endswith """#,
+        r#"[{"text": "hello"}, {"text": ""}, {"text": null}]"#,
+        r#"[{"text": "hello"}, {"text": ""}]"#,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn summarize_countif_all_false() -> Result<()> {
+    check(
+        r#"
+        test.c
+        | summarize cif=countif(x > 100) by y
+        "#,
+        r#"[{"x": 1, "y": "a"}, {"x": 2, "y": "a"}, {"x": 3, "y": "b"}]"#,
+        r#"[
+            {"cif": 0, "y": "a"},
+            {"cif": 0, "y": "b"}
+        ]"#,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn summarize_min_max_all_nulls() -> Result<()> {
+    check(
+        r#"
+        test.c
+        | summarize min_x=min(x), max_x=max(x) by y
+        "#,
+        r#"[{"x": null, "y": "a"}, {"x": null, "y": "a"}, {"x": null, "y": "b"}]"#,
+        r#"[
+            {"min_x": null, "max_x": null, "y": "a"},
+            {"min_x": null, "max_x": null, "y": "b"}
+        ]"#,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn summarize_avg_single_value() -> Result<()> {
+    check(
+        r#"
+        test.c
+        | summarize avg_x=avg(x) by y
+        "#,
+        r#"[{"x": 10, "y": "a"}, {"x": 20, "y": "a"}]"#,
+        r#"[
+            {"avg_x": 15.0, "y": "a"}
+        ]"#,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn dcount_with_nulls() -> Result<()> {
+    check(
+        r#"
+        test.c
+        | summarize dcount_x=dcount(x)
+        "#,
+        r#"[{"x": 1}, {"x": 1}, {"x": null}, {"x": null}, {"x": 2}]"#,
+        r#"[{"dcount_x": 3}]"#,
+    )
+    .await
+}
+
+#[tokio::test]
+#[test_case(1)]
+#[test_case(10)]
+async fn join_with_null_keys(partitions: usize) -> Result<()> {
+    check_multi_collection()
+        .query(&format!(
+            r#"test.left | join hint.partitions={partitions} (test.right) on id"#
+        ))
+        .input(btreemap! {
+            "left"  => r#"[{"id": 1, "value": "a"}, {"id": null, "value": "b"}]"#,
+            "right" => r#"[{"id": 1, "value": "A"}, {"id": null, "value": "B"}]"#,
+        })
+        .expect(
+            r#"[
+                {"id": null, "value_left": "b", "value_right": "B"},
+                {"id": 1, "value_left": "a", "value_right": "A"}
+            ]"#,
+        )
+        .call()
+        .await
+}
+
+#[tokio::test]
+async fn join_empty_right_side() -> Result<()> {
+    check_multi_collection()
+        .query(r#"test.left | join (test.right) on id"#)
+        .input(btreemap! {
+            "left"  => r#"[{"id": 1, "value": "a"}]"#,
+            "right" => r#"[]"#,
+        })
+        .expect(r#"[]"#)
+        .call()
+        .await
+}
+
+#[tokio::test]
+async fn join_no_key_matches() -> Result<()> {
+    check_multi_collection()
+        .query(r#"test.left | join (test.right) on id"#)
+        .input(btreemap! {
+            "left"  => r#"[{"id": 1, "value": "a"}]"#,
+            "right" => r#"[{"id": 99, "value": "b"}]"#,
+        })
+        .expect(r#"[]"#)
+        .call()
+        .await
+}
+
+#[tokio::test]
+async fn join_outer_with_nulls() -> Result<()> {
+    check_multi_collection()
+        .query(r#"test.left | join kind=outer (test.right) on id"#)
+        .input(btreemap! {
+            "left"  => r#"[{"id": 1, "value": "a"}, {"id": null, "value": "b"}]"#,
+            "right" => r#"[{"id": 1, "value": "A"}, {"id": null, "value": "B"}]"#,
+        })
+        .expect(
+            r#"[
+                {"id": null, "value_left": "b", "value_right": "B"},
+                {"id": 1, "value_left": "a", "value_right": "A"}
+            ]"#,
+        )
+        .call()
+        .await
+}
+
+#[tokio::test]
+async fn expand_null_value() -> Result<()> {
+    check(
+        r#"test.c | mv-expand items"#,
+        r#"[{"id": 1, "items": null}, {"id": 2, "items": ["a", "b"]}]"#,
+        r#"[{"id": 1, "items": null}, {"id": 2, "items": "a"}, {"id": 2, "items": "b"}]"#,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn expand_array_with_nulls() -> Result<()> {
+    check(
+        r#"test.c | mv-expand items"#,
+        r#"[{"id": 1, "items": [1, null, 3]}]"#,
+        r#"[{"id": 1, "items": 1}, {"id": 1, "items": null}, {"id": 1, "items": 3}]"#,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn limit_zero() -> Result<()> {
+    check(
+        r#"test.c | take 0"#,
+        r#"[{"id": 1}, {"id": 2}, {"id": 3}]"#,
+        r#"[]"#,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn topn_with_ties_at_boundary() -> Result<()> {
+    check(
+        r#"test.c | top 2 by value desc"#,
+        r#"[{"id": 1, "value": 10}, {"id": 2, "value": 10}, {"id": 3, "value": 5}]"#,
+        r#"[{"id": 1, "value": 10}, {"id": 2, "value": 10}]"#,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn sort_by_all_null_field() -> Result<()> {
+    check(
+        r#"test.c | sort by x"#,
+        r#"[{"id": 1, "x": null}, {"id": 2, "x": null}, {"id": 3, "x": null}]"#,
+        r#"[{"id": 1, "x": null}, {"id": 2, "x": null}, {"id": 3, "x": null}]"#,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn case_no_conditions_match() -> Result<()> {
+    check(
+        r#"
+            test.c
+            | project result = case(x > 100, "big", x > 50, "medium", "small")
+        "#,
+        r#"[{"x": 25}, {"x": 75}, {"x": 150}]"#,
+        r#"[
+            {"result": "small"},
+            {"result": "medium"},
+            {"result": "big"}
+        ]"#,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn filter_with_nested_null_logic() -> Result<()> {
+    check(
+        r#"test.c | where (x == 5 or y == null) and z > 0"#,
+        r#"[
+            {"x": 5, "y": 10, "z": 1},
+            {"x": 1, "y": null, "z": 1},
+            {"x": 1, "y": null, "z": -1},
+            {"x": 1, "y": 10, "z": 1}
+        ]"#,
+        r#"[
+            {"x": 5, "y": 10, "z": 1},
+            {"x": 1, "y": null, "z": 1}
+        ]"#,
+    )
+    .await
+}
