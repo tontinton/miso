@@ -26,6 +26,23 @@ use tracing::info;
 
 use common::{run_predicate_pushdown_tests, BASE_PREDICATE_PUSHDOWN_TESTS};
 
+use crate::common::TestCase;
+
+const QUICKWIT_TESTS: &[TestCase] = &[
+    TestCase {
+        query: r#"test.stack | summarize c=count() by user | top 3 by c"#,
+        expected: r#"test.stack | top 3 by c"#,
+        count: 3,
+        name: "quickwit_topn_after_groupby",
+    },
+    TestCase {
+        query: r#"test.stack | top 5 by questionId | top 3 by questionId"#,
+        expected: r#"test.stack | top 3 by questionId"#,
+        count: 3,
+        name: "quickwit_topn_after_topn",
+    },
+];
+
 #[ctor]
 fn init() {
     color_eyre::install().unwrap();
@@ -295,5 +312,5 @@ async fn write_to_index(
 async fn quickwit_predicate_pushdown() -> Result<()> {
     let image = run_quickwit_image().await;
     let connectors = Arc::new(get_quickwit_connector_map(&image).await?);
-    run_predicate_pushdown_tests(connectors, &[BASE_PREDICATE_PUSHDOWN_TESTS]).await
+    run_predicate_pushdown_tests(connectors, &[BASE_PREDICATE_PUSHDOWN_TESTS, QUICKWIT_TESTS]).await
 }
