@@ -1,6 +1,6 @@
 use color_eyre::Result;
 use tokio::sync::oneshot;
-use tracing::debug;
+use tracing::{Span, debug};
 
 use miso_common::metrics::METRICS;
 
@@ -12,7 +12,11 @@ where
     F: Send + 'static,
 {
     let (thread_tx, thread_rx) = oneshot::channel();
+    let span = Span::current();
+
     std::thread::spawn(move || {
+        let _span_guard = span.enter();
+
         METRICS.alive_threads.with_label_values(&[tag]).inc();
         let _guard = scopeguard::guard((), |_| {
             METRICS.alive_threads.with_label_values(&[tag]).dec();
