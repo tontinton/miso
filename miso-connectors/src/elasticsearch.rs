@@ -722,7 +722,7 @@ async fn refresh_indexes_at_interval(
                     *guard = response;
                 }
                 Err(e) => {
-                    error!("Failed to get elasticsearch indexes: {:?}", e);
+                    error!("Failed to get elasticsearch indexes: {:#}", e);
                 }
             }
 

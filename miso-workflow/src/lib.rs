@@ -372,7 +372,7 @@ fn execute_pipeline(iter: impl Iterator<Item = LogItem>, tx: Sender<Log>) -> Res
         };
 
         if let Err(e) = tx.send(log) {
-            debug!("Closing pipeline {:?}", e);
+            debug!("Closing pipeline {:#}", e);
             break;
         }
     }
