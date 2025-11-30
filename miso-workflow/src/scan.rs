@@ -18,7 +18,7 @@ use miso_workflow_types::{
 };
 use parking_lot::Mutex;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, info};
+use tracing::{Instrument, Span, debug, info};
 
 use super::{AsyncTask, CHANNEL_CAPACITY, count::count_to_log};
 
@@ -161,24 +161,27 @@ where
 
 pub fn scan_rx(scan: Scan, cancel: CancellationToken) -> (Receiver<LogItem>, AsyncTask) {
     let (tx, rx) = flume::bounded(CHANNEL_CAPACITY);
-    let task = tokio::spawn(async move {
-        let mut rows_processed = 0u64;
+    let task = tokio::spawn(
+        async move {
+            let mut rows_processed = 0u64;
 
-        let mut stream = scan_stream(scan).await.context("create scan stream")?;
-        while let Some(Some(item)) = cancel_or(&cancel, stream.next()).await {
-            rows_processed += 1;
-            if let Err(e) = tx.send_async(item.into()).await {
-                debug!("Closing scan task: {e:?}");
-                break;
+            let mut stream = scan_stream(scan).await.context("create scan stream")?;
+            while let Some(Some(item)) = cancel_or(&cancel, stream.next()).await {
+                rows_processed += 1;
+                if let Err(e) = tx.send_async(item.into()).await {
+                    debug!("Closing scan task: {e:?}");
+                    break;
+                }
             }
+
+            METRICS
+                .workflow_step_rows
+                .with_label_values(&[STEP_SCAN])
+                .inc_by(rows_processed);
+
+            Ok(())
         }
-
-        METRICS
-            .workflow_step_rows
-            .with_label_values(&[STEP_SCAN])
-            .inc_by(rows_processed);
-
-        Ok(())
-    });
+        .instrument(Span::current()),
+    );
     (rx, task)
 }
