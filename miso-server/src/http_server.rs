@@ -30,7 +30,7 @@ use serde_json::json;
 use tokio::{sync::RwLock, task::spawn_blocking};
 use tokio_util::sync::CancellationToken;
 use tower_http::trace::TraceLayer;
-use tracing::{Level, debug, error, info, span};
+use tracing::{Level, Span, debug, error, info, span};
 use uuid::Uuid;
 
 use crate::{VIEWS_CONNECTOR_NAME, ViewsMap, query_to_workflow::to_workflow_steps};
@@ -98,6 +98,7 @@ struct QueryRequest {
 pub struct HttpError {
     status: StatusCode,
     message: serde_json::Value,
+    query_id: Option<String>,
 }
 
 impl HttpError {
@@ -106,17 +107,36 @@ impl HttpError {
     }
 
     pub fn new(status: StatusCode, message: serde_json::Value) -> HttpError {
-        Self { status, message }
+        Self {
+            status,
+            message,
+            query_id: None,
+        }
+    }
+
+    fn with_query_id(mut self, query_id: String) -> Self {
+        self.query_id = Some(query_id);
+        self
     }
 }
 
 impl IntoResponse for HttpError {
     fn into_response(self) -> Response {
-        let body = if self.status.is_server_error() {
+        if let Some(query_id) = self.query_id {
+            if self.status.is_server_error() {
+                error!(%query_id, "Internal server error: {}", self.message);
+            } else {
+                error!(%query_id, "User error: {}", self.message);
+            }
+        } else if self.status.is_server_error() {
             error!("Internal server error: {}", self.message);
-            Json(json!({ERROR_LOG_FIELD_NAME: INTERNAL_SERVER_ERROR}))
         } else {
             error!("User error: {}", self.message);
+        }
+
+        let body = if self.status.is_server_error() {
+            Json(json!({ERROR_LOG_FIELD_NAME: INTERNAL_SERVER_ERROR}))
+        } else {
             Json(json!({ERROR_LOG_FIELD_NAME: self.message}))
         };
 
@@ -134,6 +154,36 @@ async fn health_check() -> impl IntoResponse {
     "OK"
 }
 
+async fn build_query_workflow(
+    state: Arc<App>,
+    req: QueryRequest,
+    query_id: Uuid,
+) -> Result<Workflow, HttpError> {
+    let query_id = query_id.to_string();
+
+    let ast = spawn_blocking(move || Span::current().in_scope(|| parse(&req.query)))
+        .await
+        .expect("parse thread panicked")
+        .map_err(|e| HttpError::from(e).with_query_id(query_id.clone()))?;
+
+    let steps = to_workflow_steps(
+        &state.connectors.read().await.clone(),
+        &state.views.read().await.clone(),
+        ast,
+    )
+    .map_err(|e| e.with_query_id(query_id))?;
+
+    let optimized_steps =
+        spawn_blocking(move || Span::current().in_scope(|| state.optimizer.optimize(steps)))
+            .await
+            .expect("optimize thread panicked");
+
+    Ok(Workflow::new_with_partial_stream(
+        optimized_steps,
+        req.partial_stream,
+    ))
+}
+
 /// Starts running a new query.
 async fn query_stream(
     State(state): State<Arc<App>>,
@@ -147,29 +197,15 @@ async fn query_stream(
         METRICS.query_latency.observe(start.elapsed().as_secs_f64());
     });
 
+    // Must be called the same as the const QUERY_ID_FIELD so it will be in all logs.
     let query_id = req.query_id.unwrap_or_else(Uuid::now_v7);
 
     let span = span!(Level::INFO, "query", ?query_id, ?req.query);
+    let stream_span = span.clone();
     let _enter = span.enter();
 
     info!(?req.query, "Starting to run a new query");
-    let workflow = {
-        let ast = spawn_blocking(move || parse(&req.query))
-            .await
-            .expect("parse thread panicked")?;
-
-        let steps = to_workflow_steps(
-            &state.connectors.read().await.clone(),
-            &state.views.read().await.clone(),
-            ast,
-        )?;
-
-        let optimized_steps = spawn_blocking(move || state.optimizer.optimize(steps))
-            .await
-            .expect("optimize thread panicked");
-
-        Workflow::new_with_partial_stream(optimized_steps, req.partial_stream)
-    };
+    let workflow = build_query_workflow(state.clone(), req, query_id).await?;
 
     debug!(?workflow, "Executing workflow");
 
@@ -179,9 +215,14 @@ async fn query_stream(
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("failed to execute workflow: {e}"),
         )
+        .with_query_id(query_id.to_string())
     })?;
 
     Ok(Sse::new(stream! {
+        // Keep the span going.
+        let stream_span = stream_span;
+        let _enter = stream_span.enter();
+
         let _cancel_on_drop = scopeguard::guard(cancel, |cancel| {
             info!("Query dropped");
             cancel.cancel();
@@ -220,28 +261,15 @@ async fn explain(
     State(state): State<Arc<App>>,
     Json(req): Json<QueryRequest>,
 ) -> Result<Response, HttpError> {
+    // Must be called the same as the const QUERY_ID_FIELD so it will be in all logs.
     let query_id = req.query_id.unwrap_or_else(Uuid::now_v7);
 
     let span = span!(Level::INFO, "explain", ?query_id);
     let _enter = span.enter();
 
-    let ast = spawn_blocking(move || parse(&req.query))
-        .await
-        .expect("parse thread panicked")?;
+    let workflow = build_query_workflow(state.clone(), req, query_id).await?;
 
-    let steps = to_workflow_steps(
-        &state.connectors.read().await.clone(),
-        &state.views.read().await.clone(),
-        ast,
-    )?;
-
-    let optimized_steps = spawn_blocking(move || state.optimizer.optimize(steps))
-        .await
-        .expect("optimize thread panicked");
-
-    let optimized_workflow = Workflow::new(optimized_steps);
-
-    Ok(format!("{optimized_workflow}").into_response())
+    Ok(format!("{workflow}").into_response())
 }
 
 async fn get_connectors(State(state): State<Arc<App>>) -> Result<Response, HttpError> {

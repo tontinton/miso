@@ -20,7 +20,7 @@ use miso_workflow_types::{
 };
 use partial_stream::{add_partial_stream_id, build_partial_stream_id_done_log};
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, info, instrument};
+use tracing::{Instrument, Span, debug, info, instrument};
 
 use crate::{
     count::CountIter,
@@ -546,11 +546,10 @@ impl Workflow {
             Box::pin(select_all(streams))
         };
 
-        let mut task = tokio::spawn(wait_for_threads_and_async_tasks(
-            threads,
-            async_tasks,
-            cancel,
-        ));
+        let mut task = tokio::spawn(
+            wait_for_threads_and_async_tasks(threads, async_tasks, cancel)
+                .instrument(Span::current()),
+        );
 
         Ok(Box::pin(try_stream! {
             let task_alive = loop {
