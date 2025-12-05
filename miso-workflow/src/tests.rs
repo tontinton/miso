@@ -170,6 +170,53 @@ fn init() {
     tracing_subscriber::fmt::init();
 }
 
+async fn assert_workflows(
+    no_optimizations_workflow: Workflow,
+    optimizations_workflow: Workflow,
+    expected_logs: &[Value],
+    should_cancel: bool,
+) -> Result<()> {
+    let cancel = CancellationToken::new();
+    if should_cancel {
+        cancel.cancel();
+    }
+    let mut logs_stream = no_optimizations_workflow
+        .execute(cancel)
+        .context("non optimized workflow execute")?;
+
+    let mut logs = Vec::new();
+    while let Some(log) = logs_stream.try_next().await.context("log stream")? {
+        logs.push(json!(log));
+    }
+    logs.sort();
+
+    assert_eq!(
+        expected_logs, logs,
+        "non optimized workflow streamed logs not equal to expected (left is expected, right is what we received)",
+    );
+
+    let cancel = CancellationToken::new();
+    if should_cancel {
+        cancel.cancel();
+    }
+    let mut logs_stream = optimizations_workflow
+        .execute(cancel)
+        .context("optimized workflow execute")?;
+
+    let mut optimized_logs = Vec::with_capacity(logs.len());
+    while let Some(log) = logs_stream.try_next().await? {
+        optimized_logs.push(json!(log));
+    }
+    optimized_logs.sort();
+
+    assert_eq!(
+        logs, optimized_logs,
+        "results of workflow should equal results of optimized workflow query, even after sorting"
+    );
+
+    Ok(())
+}
+
 async fn check_multi_connectors(
     query: &str,
     input: BTreeMap<&str, BTreeMap<&str, &str>>,
@@ -177,6 +224,7 @@ async fn check_multi_connectors(
     expected: &str,
     should_cancel: bool,
     apply_filter_tx: Option<std::sync::mpsc::Sender<Expr>>,
+    run_only_once: bool,
 ) -> Result<()> {
     let expected_logs = {
         let mut v: Vec<_> = serde_json::from_str::<Vec<Value>>(expected)
@@ -233,43 +281,30 @@ async fn check_multi_connectors(
     let optimizations_workflow = Workflow::new(optimized_steps);
     info!("Optimized:\n{optimizations_workflow}");
 
-    let cancel = CancellationToken::new();
-    if should_cancel {
-        cancel.cancel();
+    let test_runs: usize = std::env::var("WORKFLOW_TEST_RUNS")
+        .ok()
+        .and_then(|test_run_str| test_run_str.parse().ok())
+        .unwrap_or(1);
+
+    if run_only_once || test_runs == 1 {
+        assert_workflows(
+            no_optimizations_workflow,
+            optimizations_workflow,
+            &expected_logs,
+            should_cancel,
+        )
+        .await?;
+    } else {
+        for _ in 0..test_runs {
+            assert_workflows(
+                no_optimizations_workflow.clone(),
+                optimizations_workflow.clone(),
+                &expected_logs,
+                should_cancel,
+            )
+            .await?;
+        }
     }
-    let mut logs_stream = no_optimizations_workflow
-        .execute(cancel)
-        .context("non optimized workflow execute")?;
-
-    let mut logs = Vec::new();
-    while let Some(log) = logs_stream.try_next().await.context("log stream")? {
-        logs.push(json!(log));
-    }
-    logs.sort();
-
-    assert_eq!(
-        expected_logs, logs,
-        "non optimized workflow streamed logs not equal to expected (left is expected, right is what we received)",
-    );
-
-    let cancel = CancellationToken::new();
-    if should_cancel {
-        cancel.cancel();
-    }
-    let mut logs_stream = optimizations_workflow
-        .execute(cancel)
-        .context("optimized workflow execute")?;
-
-    let mut optimized_logs = Vec::with_capacity(logs.len());
-    while let Some(log) = logs_stream.try_next().await? {
-        optimized_logs.push(json!(log));
-    }
-    optimized_logs.sort();
-
-    assert_eq!(
-        logs, optimized_logs,
-        "results of workflow should equal results of optimized workflow query, even after sorting"
-    );
 
     Ok(())
 }
@@ -282,6 +317,7 @@ async fn check_multi_collection(
     expect: &str,
     cancel: Option<bool>,
     apply_filter_tx: Option<std::sync::mpsc::Sender<Expr>>,
+    run_only_once: Option<bool>,
 ) -> Result<()> {
     check_multi_connectors(
         query,
@@ -290,6 +326,7 @@ async fn check_multi_collection(
         expect,
         cancel.unwrap_or(false),
         apply_filter_tx,
+        run_only_once.unwrap_or(false),
     )
     .await
 }
@@ -983,6 +1020,7 @@ async fn join_inner(partitions: usize) -> Result<()> {
             ]"#
         )
         .apply_filter_tx(tx)
+        .run_only_once(true)
         .call()
         .await
         .context("check multi collection")?;
