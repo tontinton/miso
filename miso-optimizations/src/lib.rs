@@ -10,6 +10,7 @@ use mux_into_union::MuxIntoUnion;
 use pattern::{Group, Pattern};
 use project_propagation::{ProjectPropagationWithEnd, ProjectPropagationWithoutEnd};
 use push_into_scan::PushIntoScan;
+use push_join_into_scan::PushJoinIntoScan;
 use push_limit_into_limit::PushLimitIntoLimit;
 use push_limit_into_topn::PushLimitIntoTopN;
 use push_steps_into_union::PushStepsIntoUnion;
@@ -30,9 +31,11 @@ mod mux_into_union;
 mod pattern;
 mod project_propagation;
 mod push_into_scan;
+mod push_join_into_scan;
 mod push_limit_into_limit;
 mod push_limit_into_topn;
 mod push_steps_into_union;
+mod push_steps_into_join;
 mod push_union_into_scan;
 mod remove_redundant_empty_steps;
 mod remove_redundant_sorts_before_count;
@@ -127,6 +130,8 @@ impl Optimizer {
                 // Mux.
                 opt!(MuxIntoUnion),
                 opt!(ReorderStepsBeforeMux),
+                // Join.
+                opt!(PushJoinIntoScan),
             ],
             // Post predicate pushdowns.
             vec![
