@@ -4,7 +4,9 @@ use std::{
 };
 
 use crossbeam_utils::Backoff;
-use flume::{Receiver, RecvError, Selector, TryRecvError};
+use flume::{Receiver, RecvError, TryRecvError};
+use futures_lite::future::block_on;
+use futures_util::future::select_all;
 use miso_common::humantime_utils::deserialize_duration;
 use miso_workflow_types::{
     json,
@@ -62,9 +64,32 @@ pub struct UnionIter {
     rxs: Vec<Receiver<Log>>,
 }
 
+enum TryRecv {
+    Item(LogItem),
+    Exhausted,
+    None,
+}
+
 impl UnionIter {
     pub fn new(rxs: Vec<Receiver<Log>>) -> Self {
         Self { rxs }
+    }
+
+    fn try_recv(&mut self) -> TryRecv {
+        for i in 0..self.rxs.len() {
+            match self.rxs[i].try_recv() {
+                Ok(log) => return TryRecv::Item(LogItem::Log(log)),
+                Err(TryRecvError::Disconnected) => {
+                    self.rxs.swap_remove(i);
+                    if self.rxs.is_empty() {
+                        return TryRecv::Exhausted;
+                    }
+                    return TryRecv::Item(LogItem::UnionSomePipelineDone);
+                }
+                Err(TryRecvError::Empty) => {}
+            }
+        }
+        TryRecv::None
     }
 }
 
@@ -78,29 +103,16 @@ impl Iterator for UnionIter {
 
         let backoff = Backoff::new();
         while !backoff.is_completed() {
-            for i in 0..self.rxs.len() {
-                match self.rxs[i].try_recv() {
-                    Ok(log) => return Some(LogItem::Log(log)),
-                    Err(TryRecvError::Disconnected) => {
-                        self.rxs.swap_remove(i);
-                        if self.rxs.is_empty() {
-                            return None;
-                        }
-                        return Some(LogItem::UnionSomePipelineDone);
-                    }
-                    Err(TryRecvError::Empty) => {}
-                }
+            match self.try_recv() {
+                TryRecv::Item(item) => return Some(item),
+                TryRecv::Exhausted => return None,
+                TryRecv::None => {}
             }
-
             backoff.snooze();
         }
 
-        let mut selector = Selector::new();
-        for (i, rx) in self.rxs.iter().enumerate() {
-            selector = selector.recv(rx, move |result| (i, result));
-        }
-
-        let (i, result) = selector.wait();
+        let futs: Vec<_> = self.rxs.iter().map(|rx| rx.recv_async()).collect();
+        let (result, i, _) = block_on(select_all(futs));
         match result {
             Ok(log) => Some(LogItem::Log(log)),
             Err(RecvError::Disconnected) => {

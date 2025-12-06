@@ -8,6 +8,7 @@ async-stream.workspace = true
 color-eyre.workspace = true
 crossbeam-utils.workspace = true
 flume.workspace = true
+futures-lite.workspace = true
 futures-util.workspace = true
 hashbrown.workspace = true
 kinded.workspace = true
