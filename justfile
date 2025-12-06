@@ -10,6 +10,9 @@ run *ARGS:
 test *ARGS:
     cargo nextest run --workspace {{ARGS}}
 
+test-workflow-stress:
+    WORKFLOW_TEST_RUNS=1000 cargo nextest run -p miso-workflow
+
 lint:
     cargo clippy --all --all-features --tests -- -D warnings
 
