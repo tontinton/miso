@@ -2,7 +2,10 @@ use std::hash::BuildHasher;
 use std::iter;
 
 use color_eyre::{Result, eyre::Context};
-use flume::{Receiver, RecvError, Selector, Sender, TryRecvError};
+use crossbeam_utils::Backoff;
+use flume::{Receiver, RecvError, Sender, TryRecvError};
+use futures_lite::future::block_on;
+use futures_util::future::select_all;
 use hashbrown::{DefaultHashBuilder, HashMap, HashSet, hash_map::RawEntryMut};
 use miso_common::{
     metrics::{METRICS, STEP_JOIN},
@@ -256,6 +259,12 @@ struct JoinCollectorIter {
     dynamic_filter_tx: Option<DynamicFilterTx>,
 }
 
+enum TryRecv {
+    Item((bool, Log)),
+    Exhausted,
+    None,
+}
+
 impl JoinCollectorIter {
     fn new(
         left: Vec<Receiver<Log>>,
@@ -311,25 +320,17 @@ impl JoinCollectorIter {
 
         (is_left, log)
     }
-}
 
-impl Iterator for JoinCollectorIter {
-    type Item = (bool, Log);
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.rxs.is_empty() {
-            return None;
-        }
-
+    fn try_recv(&mut self) -> TryRecv {
         let mut i = 0;
         while i < self.rxs.len() {
             match self.rxs[i].try_recv() {
-                Ok(log) => return Some(self.handle_log(i, log)),
+                Ok(log) => return TryRecv::Item(self.handle_log(i, log)),
                 Err(TryRecvError::Disconnected) => {
                     self.remove(i);
                     if self.rxs.is_empty() {
                         assert!(self.is_left.is_empty());
-                        return None;
+                        return TryRecv::Exhausted;
                     }
                 }
                 Err(TryRecvError::Empty) => {
@@ -337,20 +338,31 @@ impl Iterator for JoinCollectorIter {
                 }
             }
         }
+        TryRecv::None
+    }
+}
 
-        let mut alive = self.rxs.len();
-        while alive != 0 {
-            let mut selector = Selector::new();
-            for (i, rx) in self.rxs.iter().enumerate() {
-                selector = selector.recv(rx, move |result| (i, result));
+impl Iterator for JoinCollectorIter {
+    type Item = (bool, Log);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        while !self.rxs.is_empty() {
+            let backoff = Backoff::new();
+            while !backoff.is_completed() {
+                match self.try_recv() {
+                    TryRecv::Item(item) => return Some(item),
+                    TryRecv::Exhausted => return None,
+                    TryRecv::None => {}
+                }
+                backoff.snooze();
             }
 
-            let (i, result) = selector.wait();
+            let futs: Vec<_> = self.rxs.iter().map(|rx| rx.recv_async()).collect();
+            let (result, i, _) = block_on(select_all(futs));
             match result {
                 Ok(log) => return Some(self.handle_log(i, log)),
                 Err(RecvError::Disconnected) => {
                     self.remove(i);
-                    alive -= 1;
                 }
             }
         }
