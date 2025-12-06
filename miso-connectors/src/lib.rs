@@ -13,7 +13,7 @@ use color_eyre::eyre::Result;
 use hashbrown::HashMap;
 use miso_workflow_types::field::Field;
 use miso_workflow_types::{
-    expand::Expand, expr::Expr, log::LogTryStream, project::ProjectField, sort::Sort,
+    expand::Expand, expr::Expr, join::Join, log::LogTryStream, project::ProjectField, sort::Sort,
     summarize::Summarize,
 };
 use parking_lot::Mutex;
@@ -241,6 +241,19 @@ pub trait Connector: Debug + Send + Sync {
         _union_collection: &str,
         _handle: &dyn QueryHandle,
         _union_handle: &dyn QueryHandle,
+    ) -> Option<Box<dyn QueryHandle>> {
+        None
+    }
+
+    /// Returns the handle with join predicate pushdown.
+    /// None means it can't predicate pushdown join.
+    fn apply_join(
+        &self,
+        _join_config: &Join,
+        _left_collection: &str,
+        _right_collection: &str,
+        _left_handle: &dyn QueryHandle,
+        _right_handle: &dyn QueryHandle,
     ) -> Option<Box<dyn QueryHandle>> {
         None
     }
