@@ -24,7 +24,10 @@ use testcontainers::{
 use tokio_retry::{strategy::FixedInterval, Retry};
 use tracing::info;
 
-use common::{run_predicate_pushdown_tests, TestCase, BASE_PREDICATE_PUSHDOWN_TESTS, INDEXES};
+use common::{
+    init_test_tracing, run_predicate_pushdown_tests, TestCase, BASE_PREDICATE_PUSHDOWN_TESTS,
+    INDEXES,
+};
 
 const ELASTICSEARCH_TESTS: &[TestCase] = &[TestCase {
     query: r#"test.stack | union (test.hdfs) | where exists(questionId) or exists(tenant_id)"#,
@@ -35,8 +38,7 @@ const ELASTICSEARCH_TESTS: &[TestCase] = &[TestCase {
 
 #[ctor]
 fn init() {
-    color_eyre::install().unwrap();
-    tracing_subscriber::fmt::init();
+    init_test_tracing();
 }
 
 const ELASTICSEARCH_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
