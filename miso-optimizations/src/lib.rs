@@ -35,7 +35,6 @@ mod push_join_into_scan;
 mod push_limit_into_limit;
 mod push_limit_into_topn;
 mod push_steps_into_union;
-mod push_steps_into_join;
 mod push_union_into_scan;
 mod remove_redundant_empty_steps;
 mod remove_redundant_sorts_before_count;
@@ -161,6 +160,18 @@ impl Default for Optimizer {
     }
 }
 
+#[derive(Default)]
+struct AlreadyRan {
+    root: BTreeSet<usize>,
+    subquery: SubQueryAlreadyRan,
+}
+
+#[derive(Default)]
+struct SubQueryAlreadyRan {
+    union: BTreeSet<usize>,
+    join: BTreeSet<usize>,
+}
+
 fn run_optimization_pass(
     optimizations: &[OptimizationStep],
     patterns: &[Pattern],
@@ -233,38 +244,69 @@ impl Optimizer {
         let mut kinded_steps = to_kind(&steps);
 
         for (optimizations, patterns) in self.optimizations.iter().zip(&self.patterns) {
-            let mut already_ran = BTreeSet::new();
+            let mut already_ran = AlreadyRan::default();
+
+            // Optimize inner workflows before root, so optimizations like scan / join pushdown (which
+            // require the right side to only contain a single scan step) will have a greater
+            // chance to run.
+            self.optimize_sub_query_steps(
+                optimizations,
+                patterns,
+                &mut steps,
+                &mut already_ran.subquery,
+            );
 
             while run_optimization_pass(
                 optimizations,
                 patterns,
                 &mut steps,
                 &mut kinded_steps,
-                &mut already_ran,
+                &mut already_ran.root,
             ) {}
+
+            // Optimize inner workflows again, because some optimizations on the root added
+            // steps to the inner workflows (e.g. when splitting a summarize into partial / final,
+            // and pushing partial into the union).
+            self.optimize_sub_query_steps(
+                optimizations,
+                patterns,
+                &mut steps,
+                &mut already_ran.subquery,
+            );
         }
 
-        self.optimize_sub_query_steps(steps)
+        steps
     }
 
     /// Optimize the query steps inside union and join.
-    fn optimize_sub_query_steps(&self, steps: Vec<WorkflowStep>) -> Vec<WorkflowStep> {
-        let mut optimized_inner_steps = Vec::with_capacity(steps.len());
-        for step in steps {
-            let optimized_inner_step = match step {
-                WorkflowStep::Union(mut workflow) => {
-                    workflow.steps = self.optimize(workflow.steps);
-                    WorkflowStep::Union(workflow)
-                }
-                WorkflowStep::Join(config, mut workflow) => {
-                    workflow.steps = self.optimize(workflow.steps);
-                    WorkflowStep::Join(config, workflow)
-                }
-                _ => step,
-            };
+    fn optimize_sub_query_steps(
+        &self,
+        optimizations: &[OptimizationStep],
+        patterns: &[Pattern],
+        steps: &mut Vec<WorkflowStep>,
+        already_ran: &mut SubQueryAlreadyRan,
+    ) {
+        let run = |steps: &mut Vec<WorkflowStep>, already_ran: &mut BTreeSet<usize>| {
+            let mut kinded_steps = to_kind(steps);
+            while run_optimization_pass(
+                optimizations,
+                patterns,
+                steps,
+                &mut kinded_steps,
+                already_ran,
+            ) {}
+        };
 
-            optimized_inner_steps.push(optimized_inner_step);
+        for step in steps {
+            match step {
+                WorkflowStep::Union(workflow) => {
+                    run(&mut workflow.steps, &mut already_ran.union);
+                }
+                WorkflowStep::Join(_, workflow) => {
+                    run(&mut workflow.steps, &mut already_ran.join);
+                }
+                _ => {}
+            }
         }
-        optimized_inner_steps
     }
 }
