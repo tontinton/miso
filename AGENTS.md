@@ -73,7 +73,7 @@ KQL String
 **Predicate Pushdown**:
 - The optimizer transforms WorkflowSteps to push filters, limits, projections, and aggregations into Scan steps
 - Connectors receive a QueryHandle describing what operations to perform natively
-- See miso-optimizations/src/push_into_scan.rs and miso-connectors/src/quickwit.rs
+- See miso-optimizations/src/push_into_scan/mod.rs and miso-connectors/src/quickwit.rs
 
 **Optimization Passes**:
 - Located in miso-optimizations/src/
