@@ -4,7 +4,7 @@ use chumsky::{
     input::{Stream, ValueInput},
     prelude::*,
 };
-use hashbrown::HashMap;
+use hashbrown::{HashMap, HashSet};
 use logos::Logos;
 use miso_workflow_types::{
     expand::{Expand, ExpandKind},
@@ -644,6 +644,52 @@ fn agg_default_name(agg: &Aggregation) -> String {
     }
 }
 
+fn expr_default_name(expr: &Expr) -> Option<String> {
+    Some(match expr {
+        Expr::Field(field) => field.to_string(),
+        Expr::Cast(_, inner) => expr_default_name(inner)?,
+        _ => return None,
+    })
+}
+
+#[derive(Debug)]
+struct UnnamedProjectField {
+    from: Expr,
+    to: Option<Field>,
+}
+
+fn generate_unique_name(base: &str, initial: &str, used_names: &mut HashSet<String>) -> Field {
+    let mut candidate = initial.to_string();
+    let mut counter = 1;
+    while used_names.contains(&candidate) {
+        candidate = format!("{}{}", base, counter);
+        counter += 1;
+    }
+    let field = Field::from_str(&candidate);
+    used_names.insert(candidate);
+    field.unwrap()
+}
+
+fn name_project_fields(fields: Vec<UnnamedProjectField>) -> Vec<ProjectField> {
+    let mut result = vec![];
+    let mut used_names: HashSet<String> = HashSet::new();
+    for pf in fields {
+        let to = if let Some(to) = pf.to {
+            let default = to.to_string();
+            generate_unique_name(&default, &default, &mut used_names)
+        } else {
+            let default_opt = expr_default_name(&pf.from);
+            if let Some(default) = default_opt {
+                generate_unique_name(&default, &default, &mut used_names)
+            } else {
+                generate_unique_name("Column", "Column1", &mut used_names)
+            }
+        };
+        result.push(ProjectField { from: pf.from, to });
+    }
+    result
+}
+
 fn query_step_parser<'a, I>(
     query_expr: impl Parser<'a, I, Vec<QueryStep>, extra::Err<Rich<'a, Token>>> + Clone + 'a,
 ) -> impl Parser<'a, I, QueryStep, extra::Err<Rich<'a, Token>>> + Clone
@@ -661,21 +707,9 @@ where
         .labelled("filter")
         .boxed();
 
-    let project_expr = field_no_arr
-        .clone()
-        .then(
-            just(Token::Eq)
-                .ignore_then(expr.clone().recover_with(skip_until(
-                    any().ignored(),
-                    one_of([Token::Comma, Token::Pipe]).ignored(),
-                    || Expr::Literal(Value::Null),
-                )))
-                .or_not(),
-        )
-        .map(|(to, from)| ProjectField {
-            from: from.unwrap_or_else(|| Expr::Field(to.clone())),
-            to,
-        })
+    let project_expr = (field_no_arr.clone().then_ignore(just(Token::Eq)).or_not())
+        .then(expr.clone())
+        .map(|(maybe_to, from)| UnnamedProjectField { from, to: maybe_to })
         .labelled("project expression")
         .boxed();
 
@@ -686,13 +720,13 @@ where
 
     let project_step = just(Token::Project)
         .ignore_then(project_exprs.clone())
-        .map(QueryStep::Project)
+        .map(|fields: Vec<UnnamedProjectField>| QueryStep::Project(name_project_fields(fields)))
         .labelled("project")
         .boxed();
 
     let extend_step = just(Token::Extend)
         .ignore_then(project_exprs)
-        .map(QueryStep::Extend)
+        .map(|fields: Vec<UnnamedProjectField>| QueryStep::Extend(name_project_fields(fields)))
         .labelled("extend");
 
     let project_rename_expr = field_no_arr
