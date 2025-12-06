@@ -34,7 +34,7 @@ impl Optimization for PushIntoScan {
                 .into(),
             WorkflowStep::Extend(projections) => scan
                 .connector
-                .apply_project(
+                .apply_extend(
                     &replacer.transform_project(projections.to_vec()),
                     scan.handle.as_ref(),
                 )?
