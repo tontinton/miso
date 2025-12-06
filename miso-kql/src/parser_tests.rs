@@ -355,6 +355,25 @@ fn test_project() {
 }
 
 #[test]
+fn test_project_unnamed() {
+    let query = "connector.table | project field3 + 1, field3 + 1, field3, Column2 = 5, field5";
+    let result = parse_unwrap!(query);
+
+    match &result[1] {
+        QueryStep::Project(fields) => {
+            assert_eq!(fields.len(), 5);
+
+            assert_eq!(fields[0].to, field_unwrap!("Column1"));
+            assert_eq!(fields[1].to, field_unwrap!("Column2"));
+            assert_eq!(fields[2].to, field_unwrap!("field3"));
+            assert_eq!(fields[3].to, field_unwrap!("Column21"));
+            assert_eq!(fields[4].to, field_unwrap!("field5"));
+        }
+        _ => panic!("Expected Project step"),
+    }
+}
+
+#[test]
 fn test_extend() {
     let query = "connector.table | extend newfield = field1 + field2";
     let result = parse_unwrap!(query);
