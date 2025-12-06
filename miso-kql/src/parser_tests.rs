@@ -458,6 +458,57 @@ fn test_summarize() {
     }
 }
 
+#[test]
+fn test_summarize_unnamed_aggregations() {
+    let query = "connector.table | summarize count(), sum(field1), avg(field2)";
+    let result = parse_unwrap!(query);
+
+    match &result[1] {
+        QueryStep::Summarize(summarize) => {
+            assert_eq!(summarize.aggs.len(), 3);
+            let keys: Vec<String> = summarize.aggs.keys().map(|f| f.to_string()).collect();
+            assert!(keys.contains(&"count_".to_string()));
+            assert!(keys.contains(&"sum_field1".to_string()));
+            assert!(keys.contains(&"avg_field2".to_string()));
+        }
+        _ => panic!("Expected Summarize step"),
+    }
+}
+
+#[test]
+fn test_summarize_unnamed_aggregations_with_duplicates() {
+    let query = "connector.table | summarize count(), count(), sum(field1)";
+    let result = parse_unwrap!(query);
+
+    match &result[1] {
+        QueryStep::Summarize(summarize) => {
+            assert_eq!(summarize.aggs.len(), 3);
+            let keys: Vec<String> = summarize.aggs.keys().map(|f| f.to_string()).collect();
+            assert!(keys.contains(&"count_".to_string()));
+            assert!(keys.contains(&"count_1".to_string()));
+            assert!(keys.contains(&"sum_field1".to_string()));
+        }
+        _ => panic!("Expected Summarize step"),
+    }
+}
+
+#[test]
+fn test_summarize_unnamed_with_named_conflicts() {
+    let query = "connector.table | summarize count_ = sum(field1), count(), count()";
+    let result = parse_unwrap!(query);
+
+    match &result[1] {
+        QueryStep::Summarize(summarize) => {
+            assert_eq!(summarize.aggs.len(), 3);
+            let keys: Vec<String> = summarize.aggs.keys().map(|f| f.to_string()).collect();
+            assert!(keys.contains(&"count_".to_string()));
+            assert!(keys.contains(&"count_1".to_string()));
+            assert!(keys.contains(&"count_2".to_string()));
+        }
+        _ => panic!("Expected Summarize step"),
+    }
+}
+
 #[test_case("count()", "Count")]
 #[test_case("dcount(field1)", "DCount")]
 #[test_case("sum(field1)", "Sum")]
@@ -1081,8 +1132,8 @@ fn test_join_condition_validation() {
     "malformed join subquery and condition"
 )]
 #[test_case(
-    "connector.table | summarize count() = count(), invalid_agg =, sum_field = sum(field1) by field2",
-    2;
+    "connector.table | summarize invalid_agg =, sum_field = sum(field1) by field2",
+    1;
     "malformed aggregation expressions"
 )]
 #[test_case(
