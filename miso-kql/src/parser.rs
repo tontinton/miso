@@ -632,6 +632,18 @@ where
     })
 }
 
+fn agg_default_name(agg: &Aggregation) -> String {
+    match agg {
+        Aggregation::Count => "count_".to_string(),
+        Aggregation::DCount(field) => format!("dcount_{}", field.display_with("_")),
+        Aggregation::Sum(field) => format!("sum_{}", field.display_with("_")),
+        Aggregation::Avg(field) => format!("avg_{}", field.display_with("_")),
+        Aggregation::Min(field) => format!("min_{}", field.display_with("_")),
+        Aggregation::Max(field) => format!("max_{}", field.display_with("_")),
+        Aggregation::Countif(_) => "countif_".to_string(),
+    }
+}
+
 fn query_step_parser<'a, I>(
     query_expr: impl Parser<'a, I, Vec<QueryStep>, extra::Err<Rich<'a, Token>>> + Clone + 'a,
 ) -> impl Parser<'a, I, QueryStep, extra::Err<Rich<'a, Token>>> + Clone
@@ -835,12 +847,9 @@ where
         .labelled("summarize aggregation")
         .boxed();
 
-    let summarize_agg_expr = field_no_arr
-        .then_ignore(just(Token::Eq).recover_with(skip_then_retry_until(
-            any().ignored(),
-            one_of([Token::Comma, Token::Pipe]).ignored(),
-        )))
+    let summarize_agg_expr = (field_no_arr.then_ignore(just(Token::Eq)).or_not())
         .then(summarize_agg)
+        .map(|(maybe_field, agg)| (maybe_field, agg))
         .labelled("summarize aggregation expression")
         .boxed();
 
@@ -862,7 +871,24 @@ where
         )
         .map(|(aggs_tuple, by)| {
             let mut aggs = HashMap::new();
-            for (field, agg) in aggs_tuple {
+            let mut unnamed_aggs = vec![];
+            for (maybe_field, agg) in aggs_tuple {
+                if let Some(field) = maybe_field {
+                    aggs.insert(field, agg);
+                } else {
+                    unnamed_aggs.push(agg);
+                }
+            }
+
+            for agg in unnamed_aggs {
+                let base = agg_default_name(&agg);
+                let mut name = base.clone();
+                let mut counter = 1;
+                while aggs.contains_key(&Field::from_str(&name).unwrap()) {
+                    name = format!("{}{}", base, counter);
+                    counter += 1;
+                }
+                let field = Field::from_str(&name).unwrap();
                 aggs.insert(field, agg);
             }
             QueryStep::Summarize(Summarize {

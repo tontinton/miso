@@ -139,6 +139,13 @@ impl Field {
     pub fn has_array_access(&self) -> bool {
         self.0.iter().any(|x| !x.arr_indices.is_empty())
     }
+
+    pub fn display_with<'a>(&'a self, separator: &'a str) -> FieldDisplay<'a> {
+        FieldDisplay {
+            field: self,
+            separator,
+        }
+    }
 }
 
 impl FromStr for Field {
@@ -167,16 +174,11 @@ impl Deref for Field {
 
 impl fmt::Display for Field {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut iter = self.0.iter();
-
-        if let Some(first) = iter.next() {
-            write!(f, "{first}")?;
-            for access in iter {
-                write!(f, ".{access}")?;
-            }
+        FieldDisplay {
+            field: self,
+            separator: ".",
         }
-
-        Ok(())
+        .fmt(f)
     }
 }
 
@@ -202,5 +204,25 @@ impl<'de> Deserialize<'de> for Field {
 impl From<&Field> for String {
     fn from(f: &Field) -> Self {
         f.to_string()
+    }
+}
+
+pub struct FieldDisplay<'a> {
+    field: &'a Field,
+    separator: &'a str,
+}
+
+impl fmt::Display for FieldDisplay<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut iter = self.field.0.iter();
+
+        if let Some(first) = iter.next() {
+            write!(f, "{first}")?;
+            for access in iter {
+                write!(f, "{}{}", self.separator, access)?;
+            }
+        }
+
+        Ok(())
     }
 }
