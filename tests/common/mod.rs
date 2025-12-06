@@ -1,9 +1,11 @@
 mod test_cases;
+mod test_context_layer;
+
 pub use test_cases::{TestCase, BASE_PREDICATE_PUSHDOWN_TESTS};
+pub use test_context_layer::TestContextLayer;
 
 use std::collections::BTreeMap;
-use std::io::Write;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use color_eyre::{
@@ -17,13 +19,16 @@ use miso_server::http_server::ConnectorsMap;
 use miso_server::query_to_workflow::to_workflow_steps;
 use miso_workflow::Workflow;
 use miso_workflow_types::value::Value;
+use once_cell::sync::OnceCell;
 use tokio::task::spawn_blocking;
 use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
-use tracing::info;
-use tracing_subscriber::fmt::MakeWriter;
+use tracing::{info, Instrument};
 
 const SLOW_TEST_LOG_DURATION: Duration = Duration::from_secs(60);
+
+/// Global test layer storage for sequential log output.
+static TEST_LAYER: OnceCell<TestContextLayer> = OnceCell::new();
 
 pub const INDEXES: [(&str, &str); 3] = [
     (
@@ -37,39 +42,23 @@ pub const INDEXES: [(&str, &str); 3] = [
     ("hdfs", include_str!("../resources/hdfs.logs.10.json")),
 ];
 
-#[derive(Clone)]
-struct TestLogWriter {
-    buffer: Arc<Mutex<Vec<u8>>>,
-}
+/// Initialize test infrastructure with color_eyre and tracing with TestContextLayer.
+/// Call this from a #[ctor] function in each test file.
+pub fn init_test_tracing() {
+    use tracing_subscriber::{filter::EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
-impl TestLogWriter {
-    fn new() -> (Self, Arc<Mutex<Vec<u8>>>) {
-        let buffer = Arc::new(Mutex::new(Vec::new()));
-        (
-            Self {
-                buffer: Arc::clone(&buffer),
-            },
-            buffer,
-        )
-    }
-}
+    color_eyre::install().unwrap();
 
-impl Write for TestLogWriter {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        self.buffer.lock().unwrap().write(buf)
-    }
+    let test_layer = TestContextLayer::new();
 
-    fn flush(&mut self) -> std::io::Result<()> {
-        self.buffer.lock().unwrap().flush()
-    }
-}
+    let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
 
-impl<'a> MakeWriter<'a> for TestLogWriter {
-    type Writer = Self;
+    tracing_subscriber::registry()
+        .with(env_filter)
+        .with(test_layer.clone())
+        .init();
 
-    fn make_writer(&'a self) -> Self::Writer {
-        self.clone()
-    }
+    TEST_LAYER.set(test_layer).expect("set test layer")
 }
 
 pub async fn predicate_pushdown_same_results(
@@ -209,67 +198,66 @@ pub async fn run_predicate_pushdown_tests(
         .into_iter()
         .map(|tc| {
             let connectors = Arc::clone(&connectors);
-            tokio::spawn(async move {
-                let (writer, log_buffer) = TestLogWriter::new();
-                let start = Instant::now();
 
-                let subscriber = tracing_subscriber::fmt()
-                    .with_writer(writer)
-                    .with_ansi(false)
-                    .finish();
+            // Create a span with test_name field for TestContextLayer to capture.
+            let test_span = tracing::info_span!("test_execution", test_name = tc.name);
 
-                let result = tracing::dispatcher::with_default(
-                    &tracing::Dispatch::new(subscriber),
-                    || async move {
-                        info!("Running test: {}", tc.name);
+            tokio::spawn(
+                async move {
+                    let start = Instant::now();
 
-                        let test_name_for_monitor = tc.name;
-                        let monitor_handle = tokio::spawn(async move {
+                    info!("Running test: {}", tc.name);
+
+                    let test_name_for_monitor = tc.name;
+                    let monitor_handle = tokio::spawn(
+                        async move {
                             sleep(SLOW_TEST_LOG_DURATION).await;
                             info!(
                                 "SLOW TEST: {} is still running after 60s",
                                 test_name_for_monitor
                             );
-                        });
+                        }
+                        .in_current_span(),
+                    );
 
-                        let result = std::panic::AssertUnwindSafe(predicate_pushdown_same_results(
-                            &connectors,
-                            tc.query,
-                            tc.expected,
-                            tc.count,
-                            tc.name,
-                        ))
-                        .catch_unwind()
-                        .await;
+                    let result = std::panic::AssertUnwindSafe(predicate_pushdown_same_results(
+                        &connectors,
+                        tc.query,
+                        tc.expected,
+                        tc.count,
+                        tc.name,
+                    ))
+                    .catch_unwind()
+                    .await;
 
-                        monitor_handle.abort();
-                        result
-                    },
-                )
-                .await;
+                    monitor_handle.abort();
 
-                let elapsed = start.elapsed();
-                let logs = String::from_utf8_lossy(&log_buffer.lock().unwrap()).to_string();
+                    let elapsed = start.elapsed();
 
-                match result {
-                    Ok(Ok(())) => Ok((tc.name, elapsed, logs)),
-                    Ok(Err(e)) => Err((tc.name, e, logs)),
-                    Err(panic_payload) => {
-                        let panic_msg = if let Some(s) = panic_payload.downcast_ref::<&str>() {
-                            s.to_string()
-                        } else if let Some(s) = panic_payload.downcast_ref::<String>() {
-                            s.clone()
-                        } else {
-                            "unknown panic".to_string()
-                        };
-                        Err((
-                            tc.name,
-                            color_eyre::eyre::eyre!("panic: {}", panic_msg),
-                            logs,
-                        ))
+                    match result {
+                        Ok(Ok(())) => {
+                            info!("Test passed: {}", tc.name);
+                            Ok((tc.name, elapsed))
+                        }
+                        Ok(Err(e)) => {
+                            info!("Test failed: {}", tc.name);
+                            Err((tc.name, e))
+                        }
+                        Err(panic_payload) => {
+                            let panic_msg = if let Some(s) = panic_payload.downcast_ref::<&str>() {
+                                s.to_string()
+                            } else if let Some(s) = panic_payload.downcast_ref::<String>() {
+                                s.clone()
+                            } else {
+                                "unknown panic".to_string()
+                            };
+                            info!("Test panicked: {}", tc.name);
+                            Err((tc.name, color_eyre::eyre::eyre!("panic: {}", panic_msg)))
+                        }
                     }
                 }
-            })
+                .instrument(test_span),
+            )
         })
         .collect();
 
@@ -278,11 +266,11 @@ pub async fn run_predicate_pushdown_tests(
 
     for handle in handles {
         match handle.await {
-            Ok(Ok((name, duration, _logs))) => {
+            Ok(Ok((name, duration))) => {
                 passed_tests.push((name, duration));
             }
-            Ok(Err((name, err, logs))) => {
-                failed_tests.push((name.to_string(), err, logs));
+            Ok(Err((name, err))) => {
+                failed_tests.push((name.to_string(), err));
             }
             Err(join_err) => {
                 return Err(join_err.into());
@@ -290,21 +278,48 @@ pub async fn run_predicate_pushdown_tests(
         }
     }
 
-    if !failed_tests.is_empty() {
-        eprintln!("\n──────────────────────────────────────────────────────────────────");
-        for (test_name, err, logs) in &failed_tests {
-            eprintln!("\n{}", test_name);
-            eprintln!("──────────────────────────────────────────────────────────────────");
-            eprintln!("Error: {:#}", err);
+    if let Some(layer) = TEST_LAYER.get() {
+        eprintln!("\n════════════════════════════════════════════════════════════════");
+        eprintln!("TEST OUTPUT");
+        eprintln!("════════════════════════════════════════════════════════════════\n");
+
+        for (test_name, duration) in &passed_tests {
+            let logs = layer.drain_logs(test_name);
             if !logs.is_empty() {
-                eprintln!("\nLogs:\n{}", logs);
+                eprintln!(
+                    "════════ Test: {} (PASSED in {:.2}s) ════════",
+                    test_name,
+                    duration.as_secs_f64()
+                );
+                for log in logs {
+                    eprintln!("{}", log);
+                }
+                eprintln!();
             }
         }
-        eprintln!("──────────────────────────────────────────────────────────────────");
+
+        for (test_name, err) in &failed_tests {
+            let logs = layer.drain_logs(test_name);
+            eprintln!("════════ Test: {} (FAILED) ════════", test_name);
+            if !logs.is_empty() {
+                for log in logs {
+                    eprintln!("{}", log);
+                }
+            }
+            eprintln!("Error: {:#}", err);
+            eprintln!();
+        }
+
+        eprintln!("════════════════════════════════════════════════════════════════");
+    }
+
+    if !failed_tests.is_empty() {
+        eprintln!("\n────────────────────────────────────────────────────────────────");
         eprintln!("FAILED TESTS:");
-        for (test_name, _, _) in &failed_tests {
+        for (test_name, _) in &failed_tests {
             eprintln!("  ✗ {}", test_name);
         }
+        eprintln!("────────────────────────────────────────────────────────────────");
         bail!(
             "{} test(s) failed out of {}",
             failed_tests.len(),
