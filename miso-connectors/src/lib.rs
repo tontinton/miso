@@ -1,6 +1,7 @@
 pub mod elasticsearch;
 pub mod instrumentation;
 pub mod quickwit;
+pub mod splunk;
 pub mod stats;
 
 use std::fmt::{self, Debug};

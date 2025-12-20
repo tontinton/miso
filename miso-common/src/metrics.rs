@@ -9,12 +9,16 @@ pub static METRICS: Lazy<Metrics> = Lazy::new(Metrics::default);
 // Connector name labels
 pub const CONNECTOR_ELASTICSEARCH: &str = "elasticsearch";
 pub const CONNECTOR_QUICKWIT: &str = "quickwit";
+pub const CONNECTOR_SPLUNK: &str = "splunk";
 
 // Connector operation labels
 pub const OP_BEGIN_SEARCH: &str = "begin_search";
 pub const OP_CONTINUE_SCROLL: &str = "continue_scroll";
 pub const OP_GET_INDEXES: &str = "get_indexes";
 pub const OP_SEARCH_AGGREGATION: &str = "search_aggregation";
+pub const OP_CREATE_JOB: &str = "create_job";
+pub const OP_FETCH_RESULTS: &str = "fetch_results";
+pub const OP_POLL_JOB: &str = "poll_job";
 
 // Status labels
 pub const STATUS_SUCCESS: &str = "success";
