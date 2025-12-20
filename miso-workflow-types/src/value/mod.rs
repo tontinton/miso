@@ -598,3 +598,31 @@ impl Value {
         }
     }
 }
+
+impl From<serde_json::Value> for Value {
+    fn from(json: serde_json::Value) -> Self {
+        match json {
+            serde_json::Value::Null => Value::Null,
+            serde_json::Value::Bool(b) => Value::Bool(b),
+            serde_json::Value::Number(n) => {
+                if let Some(i) = n.as_i64() {
+                    Value::Int(i)
+                } else if let Some(u) = n.as_u64() {
+                    Value::UInt(u)
+                } else if let Some(f) = n.as_f64() {
+                    Value::Float(f)
+                } else {
+                    // Fallback for edge cases
+                    Value::String(n.to_string())
+                }
+            }
+            serde_json::Value::String(s) => Value::String(s),
+            serde_json::Value::Array(arr) => {
+                Value::Array(arr.into_iter().map(Value::from).collect())
+            }
+            serde_json::Value::Object(map) => {
+                Value::Object(map.into_iter().map(|(k, v)| (k, Value::from(v))).collect())
+            }
+        }
+    }
+}
