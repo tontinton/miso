@@ -13,6 +13,10 @@ test *ARGS:
 test-workflow-stress:
     WORKFLOW_TEST_RUNS=1000 cargo nextest run -p miso-workflow
 
+# Run all tests (`just test`) but without any predicate pushdown (connector) tests
+test-without-connectors:
+    cargo nextest run --workspace -E 'not test(predicate_pushdown)'
+
 lint:
     cargo clippy --all --all-features --tests -- -D warnings
 
