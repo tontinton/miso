@@ -1,5 +1,6 @@
 pub mod elasticsearch;
 pub mod instrumentation;
+pub mod memory;
 pub mod quickwit;
 pub mod splunk;
 pub mod stats;
@@ -13,6 +14,7 @@ use axum::async_trait;
 use color_eyre::eyre::Result;
 use hashbrown::HashMap;
 use miso_workflow_types::field::Field;
+use miso_workflow_types::log::Log;
 use miso_workflow_types::{
     expand::Expand, expr::Expr, join::Join, log::LogTryStream, project::ProjectField, sort::Sort,
     summarize::Summarize,
@@ -127,6 +129,17 @@ pub struct Collection {
     /// Field replacements (for the top level field, not inner field accesses).
     /// Examples: @time -> event_time, @metadata.info -> _metadata.info.
     pub static_fields: HashMap<String, String>,
+}
+
+/// A sink that can write logs to a connector.
+/// Sinks are created via `Connector::create_sink()`.
+#[async_trait]
+pub trait Sink: Debug + Send + Sync {
+    /// Write a single log to the sink.
+    async fn write(&self, log: Log);
+
+    /// Drain whatever might be buffered to the sink.
+    async fn flush(&self) {}
 }
 
 #[async_trait]
@@ -265,6 +278,12 @@ pub trait Connector: Debug + Send + Sync {
     /// JOIN ON, we can see ahead of time whether we should execute that query and filter the
     /// results in the other part of the JOIN query. This is called "dynamic filtering".
     async fn fetch_stats(&self) -> Option<ConnectorStats> {
+        None
+    }
+
+    /// Create a sink that can write logs to a collection in this connector.
+    /// Returns None if the connector doesn't support sink operations.
+    fn create_sink(&self, _collection: &str) -> Option<Box<dyn Sink>> {
         None
     }
 

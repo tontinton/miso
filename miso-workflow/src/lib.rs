@@ -35,6 +35,7 @@ use crate::{
     sort::sort_rx,
     spawn_thread::{ThreadRx, spawn},
     summarize::create_summarize_iter,
+    tee::{Tee, tee_iter},
     topn::{PartialTopNIter, TopNIter},
 };
 
@@ -57,6 +58,7 @@ mod send_once;
 pub mod sort;
 mod spawn_thread;
 pub mod summarize;
+pub mod tee;
 pub mod topn;
 
 #[cfg(test)]
@@ -114,6 +116,9 @@ pub enum WorkflowStep {
     /// Returns 1 record with a field named "count" containing the number of records.
     Count,
     MuxCount,
+
+    /// Write logs to a sink while also forwarding them downstream.
+    Tee(Tee),
 }
 
 #[derive(Debug, Clone)]
@@ -288,6 +293,11 @@ impl WorkflowStep {
             )),
             WorkflowStep::MuxCount => Box::new(CountIter::new_mux(rx.into_iter())),
             WorkflowStep::Count => Box::new(CountIter::new_simple(rx.into_iter())),
+            WorkflowStep::Tee(tee) => {
+                let (iter, task) = tee_iter(rx.into_iter(), tee);
+                async_tasks.push(task);
+                Box::new(iter)
+            }
         };
 
         Ok((iter, threads, async_tasks))
@@ -323,7 +333,8 @@ impl WorkflowStep {
             | Self::MuxLimit(..)
             | Self::TopN(..)
             | Self::Count
-            | Self::MuxCount => true,
+            | Self::MuxCount
+            | Self::Tee(..) => true,
         }
     }
 }

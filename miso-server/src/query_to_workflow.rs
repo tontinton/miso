@@ -1,6 +1,8 @@
+use std::sync::Arc;
+
 use axum::http::StatusCode;
 use hashbrown::HashMap;
-use miso_workflow::{Workflow, WorkflowStep, scan::Scan};
+use miso_workflow::{Workflow, WorkflowStep, scan::Scan, tee::Tee};
 use miso_workflow_types::{
     expr::Expr,
     query::{QueryStep, ScanKind},
@@ -176,6 +178,26 @@ fn to_workflow_steps_inner(
             }
             QueryStep::Count => {
                 steps.push(WorkflowStep::Count);
+            }
+            QueryStep::Tee {
+                connector: connector_name,
+                collection: collection_name,
+            } => {
+                let Some(connector_state) = connectors.get(&connector_name).cloned() else {
+                    return Err(HttpError::from_string(
+                        StatusCode::NOT_FOUND,
+                        format!("connector '{connector_name}' not found"),
+                    ));
+                };
+
+                let Some(sink) = connector_state.connector.create_sink(&collection_name) else {
+                    return Err(HttpError::from_string(
+                        StatusCode::BAD_REQUEST,
+                        format!("connector '{connector_name}' does not support sink operations"),
+                    ));
+                };
+
+                steps.push(WorkflowStep::Tee(Tee::new(Arc::from(sink))));
             }
         }
     }

@@ -213,6 +213,7 @@ where
         Token::Array => "array".to_string(),
         Token::Union => "union".to_string(),
         Token::Count => "count".to_string(),
+        Token::Tee => "tee".to_string(),
         Token::Countif => "countif".to_string(),
         Token::DCount => "dcount".to_string(),
         Token::Sum => "sum".to_string(),
@@ -1073,6 +1074,18 @@ where
         .labelled("count")
         .boxed();
 
+    let ident = ident_parser();
+    let tee_step = just(Token::Tee)
+        .ignore_then(ident.clone())
+        .then_ignore(just(Token::Dot))
+        .then(ident)
+        .map(|(connector, collection)| QueryStep::Tee {
+            connector,
+            collection,
+        })
+        .labelled("tee")
+        .boxed();
+
     filter_step
         .or(project_step)
         .or(extend_step)
@@ -1086,6 +1099,7 @@ where
         .or(union_step)
         .or(join_step)
         .or(count_step)
+        .or(tee_step)
         .boxed()
 }
 
