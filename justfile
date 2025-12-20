@@ -40,6 +40,9 @@ test-elasticsearch:
 test-quickwit:
     cargo nextest run --workspace quickwit_predicate_pushdown
 
+test-splunk:
+    cargo nextest run --workspace splunk_predicate_pushdown
+
 # Fast feedback loop: test an already running `just run-elasticsearch`
 test-local-elasticsearch:
     EXT_ES=http://localhost:9200 cargo nextest run --workspace elasticsearch_predicate_pushdown
@@ -47,6 +50,10 @@ test-local-elasticsearch:
 # Fast feedback loop: test an already running `just run-quickwit`
 test-local-quickwit:
     EXT_QW=http://localhost:7280 cargo nextest run --workspace quickwit_predicate_pushdown
+
+# Fast feedback loop: test an already running `just run-splunk`
+test-local-splunk:
+    EXT_SPLUNK=https://localhost:8089 cargo nextest run --workspace splunk_predicate_pushdown
 
 # Full CI check
 ci: fmt-check lint test
