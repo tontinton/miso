@@ -31,6 +31,9 @@ run-opensearch:
 run-quickwit:
     scripts/run_quickwit.sh
 
+run-splunk:
+    scripts/run_splunk.sh
+
 test-elasticsearch:
     cargo nextest run --workspace elasticsearch_predicate_pushdown
 
