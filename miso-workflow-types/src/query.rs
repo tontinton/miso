@@ -22,6 +22,10 @@ pub enum QueryStep {
     Union(Vec<QueryStep>),
     Join(Join, Vec<QueryStep>),
     Count,
+    Tee {
+        connector: String,
+        collection: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

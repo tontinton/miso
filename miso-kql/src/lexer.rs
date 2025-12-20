@@ -150,6 +150,8 @@ pub enum Token {
     Union,
     #[token("count")]
     Count,
+    #[token("tee")]
+    Tee,
     #[token("countif")]
     Countif,
     #[token("dcount")]

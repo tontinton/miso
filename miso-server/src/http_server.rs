@@ -20,7 +20,9 @@ use miso_common::{
     run_at_interval::run_at_interval,
     shutdown_future::ShutdownFuture,
 };
-use miso_connectors::{Connector, ConnectorError, ConnectorState, quickwit::QuickwitConnector};
+use miso_connectors::{
+    Connector, ConnectorError, ConnectorState, memory::MemoryConnector, quickwit::QuickwitConnector,
+};
 use miso_kql::{ParseError, parse};
 use miso_optimizations::Optimizer;
 use miso_workflow::{Workflow, partial_stream::PartialStream};
@@ -434,6 +436,10 @@ pub enum OptimizationConfig {
 
 pub fn create_axum_app(config: OptimizationConfig) -> Result<Router> {
     let mut connectors = BTreeMap::new();
+    connectors.insert(
+        "mem".to_string(),
+        Arc::new(ConnectorState::new(Arc::new(MemoryConnector::new()))),
+    );
     connectors.insert(
         "tony".to_string(),
         Arc::new(ConnectorState::new_with_stats(
