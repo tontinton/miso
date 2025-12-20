@@ -25,24 +25,9 @@ use tokio_retry::{strategy::FixedInterval, Retry};
 use tracing::info;
 
 use common::{
-    init_test_tracing, run_predicate_pushdown_tests, TestCase, BASE_PREDICATE_PUSHDOWN_TESTS,
+    init_test_tracing, run_predicate_pushdown_tests, TestConnector, BASE_PREDICATE_PUSHDOWN_TESTS,
     INDEXES,
 };
-
-const QUICKWIT_TESTS: &[TestCase] = &[
-    TestCase {
-        query: r#"test.stack | summarize c=count() by user | top 3 by c"#,
-        expected: r#"test.stack | top 3 by c"#,
-        count: 3,
-        name: "quickwit_topn_after_groupby",
-    },
-    TestCase {
-        query: r#"test.stack | top 5 by questionId | top 3 by questionId"#,
-        expected: r#"test.stack | top 3 by questionId"#,
-        count: 3,
-        name: "quickwit_topn_after_topn",
-    },
-];
 
 const QUICKWIT_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
 
@@ -334,5 +319,10 @@ async fn quickwit_predicate_pushdown() -> Result<()> {
         }
     };
     let connectors = Arc::new(setup(url).await?);
-    run_predicate_pushdown_tests(connectors, &[BASE_PREDICATE_PUSHDOWN_TESTS, QUICKWIT_TESTS]).await
+    run_predicate_pushdown_tests(
+        TestConnector::Quickwit,
+        connectors,
+        &[BASE_PREDICATE_PUSHDOWN_TESTS],
+    )
+    .await
 }

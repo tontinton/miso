@@ -174,7 +174,16 @@ pub async fn predicate_pushdown_same_results(
     Ok(())
 }
 
+#[allow(dead_code)]
+#[derive(Clone, Copy, PartialEq)]
+pub enum TestConnector {
+    Elastic,
+    Quickwit,
+    Splunk,
+}
+
 pub async fn run_predicate_pushdown_tests(
+    test_connector: TestConnector,
     connectors: Arc<ConnectorsMap>,
     test_case_slices: &[&[TestCase]],
 ) -> Result<()> {
@@ -189,7 +198,7 @@ pub async fn run_predicate_pushdown_tests(
                 true
             }
         })
-        .copied()
+        .cloned()
         .collect();
 
     info!("Running {} test cases", tests_to_run.len());
@@ -223,7 +232,7 @@ pub async fn run_predicate_pushdown_tests(
                     let result = std::panic::AssertUnwindSafe(predicate_pushdown_same_results(
                         &connectors,
                         tc.query,
-                        tc.expected,
+                        tc.expected.for_connector(test_connector),
                         tc.count,
                         tc.name,
                     ))

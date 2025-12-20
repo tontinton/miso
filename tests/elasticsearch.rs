@@ -25,16 +25,9 @@ use tokio_retry::{strategy::FixedInterval, Retry};
 use tracing::info;
 
 use common::{
-    init_test_tracing, run_predicate_pushdown_tests, TestCase, BASE_PREDICATE_PUSHDOWN_TESTS,
+    init_test_tracing, run_predicate_pushdown_tests, TestConnector, BASE_PREDICATE_PUSHDOWN_TESTS,
     INDEXES,
 };
-
-const ELASTICSEARCH_TESTS: &[TestCase] = &[TestCase {
-    query: r#"test.stack | union (test.hdfs) | where exists(questionId) or exists(tenant_id)"#,
-    expected: r#"test.stack | union (test.hdfs)"#,
-    count: 20,
-    name: "elasticsearch_union_different_timestamps",
-}];
 
 #[ctor]
 fn init() {
@@ -282,8 +275,9 @@ async fn elasticsearch_predicate_pushdown() -> Result<()> {
     };
     let connectors = Arc::new(setup(url).await?);
     run_predicate_pushdown_tests(
+        TestConnector::Elastic,
         connectors,
-        &[BASE_PREDICATE_PUSHDOWN_TESTS, ELASTICSEARCH_TESTS],
+        &[BASE_PREDICATE_PUSHDOWN_TESTS],
     )
     .await
 }
