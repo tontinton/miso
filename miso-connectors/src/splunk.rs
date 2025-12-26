@@ -21,9 +21,10 @@ use miso_common::{
 };
 use miso_workflow_types::{
     expr::Expr,
+    field::Field,
     log::{Log, LogTryStream},
     project::ProjectField,
-    sort::Sort,
+    sort::{Sort, SortOrder},
     summarize::{Aggregation, Summarize},
     value::Value,
 };
@@ -473,7 +474,7 @@ async fn send_request(req: RequestBuilder) -> Result<BytesMut> {
     }
 }
 
-fn is_timestamp_field(field: &miso_workflow_types::field::Field) -> bool {
+fn is_timestamp_field(field: &Field) -> bool {
     let field_str = field.to_string();
     field_str == SPLUNK_TIME_FIELD || field_str == "@time"
 }
@@ -790,6 +791,8 @@ async fn create_search_job(
     ];
 
     let req = auth.apply_to_request(client.post(&url)).form(&form);
+
+    info!("running SPL: `{spl}`");
 
     let result: Result<String> = async {
         let mut bytes = send_request(req).await?;
@@ -1211,11 +1214,10 @@ impl Connector for SplunkConnector {
         let splunk_sorts: Vec<(String, bool)> = sorts
             .iter()
             .filter(|s| {
-                let field = s.by.to_string();
-                let is_desc = s.order.to_string() == "desc";
-                !((field == SPLUNK_TIME_FIELD || field == "@time") && is_desc)
+                let is_desc = s.order == SortOrder::Desc;
+                !(is_timestamp_field(&s.by) && is_desc)
             })
-            .map(|s| (s.by.to_string(), s.order.to_string() == "desc"))
+            .map(|s| (s.by.to_string(), s.order == SortOrder::Desc))
             .collect();
 
         let mut new_handle = handle.clone();
