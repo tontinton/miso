@@ -148,31 +148,29 @@ impl SplunkConfig {
     }
 }
 
-/// A single stage in the SPL pipeline
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 enum SplunkOp {
-    /// Search filter: `field=value` or complex boolean expressions
+    /// `| search` - faster, uses indexed lookups
     Search(String),
-    /// Sort: `| sort -field1, +field2`
-    Sort(Vec<(String, bool)>), // (field, descending)
-    /// Head/limit: `| head N`
+    /// `| where` - slower, but needed for functions like isnotnull(), like()
+    Where(String),
+    Sort(Vec<(String, bool)>),
     Head(u64),
-    /// Stats aggregation: `| stats count, sum(x) by y`
     Stats {
         aggs: String,
         by: Vec<String>,
         timestamp_agg_fields: HashSet<String>,
         numeric_agg_fields: HashSet<String>,
     },
-    /// Count: `| stats count`
     Count,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 struct SplunkHandle {
-    /// Additional indexes for union operations
     indexes: Vec<String>,
     pipeline: Vec<SplunkOp>,
+    earliest: Option<i64>,
+    latest: Option<i64>,
 }
 
 #[typetag::serde]
@@ -195,6 +193,23 @@ impl SplunkHandle {
         handle
     }
 
+    fn with_time_constraints(&self, earliest: Option<i64>, latest: Option<i64>) -> Self {
+        let mut handle = self.clone();
+        if let Some(e) = earliest {
+            handle.earliest = Some(match handle.earliest {
+                Some(existing) => existing.max(e),
+                None => e,
+            });
+        }
+        if let Some(l) = latest {
+            handle.latest = Some(match handle.latest {
+                Some(existing) => existing.min(l),
+                None => l,
+            });
+        }
+        handle
+    }
+
     fn build_spl(&self, collection: &str) -> String {
         let mut spl = String::new();
 
@@ -209,11 +224,35 @@ impl SplunkHandle {
             .collect::<Vec<_>>()
             .join(" OR ");
 
+        // tstats is much faster for simple count queries without filters
+        if self.can_use_tstats() {
+            spl.push_str(&format!("| tstats count as count where ({})", index_clause));
+            if let Some(earliest) = self.earliest {
+                spl.push_str(&format!(" earliest={}", earliest));
+            }
+            if let Some(latest) = self.latest {
+                spl.push_str(&format!(" latest={}", latest));
+            }
+            return spl;
+        }
+
         spl.push_str(&format!("search ({})", index_clause));
+
+        // earliest/latest in base clause is more efficient than filtering
+        if let Some(earliest) = self.earliest {
+            spl.push_str(&format!(" earliest={}", earliest));
+        }
+        if let Some(latest) = self.latest {
+            spl.push_str(&format!(" latest={}", latest));
+        }
 
         for op in &self.pipeline {
             match op {
                 SplunkOp::Search(term) => {
+                    spl.push_str(" | search ");
+                    spl.push_str(term);
+                }
+                SplunkOp::Where(term) => {
                     spl.push_str(" | where ");
                     spl.push_str(term);
                 }
@@ -262,7 +301,10 @@ impl SplunkHandle {
             .any(|op| matches!(op, SplunkOp::Stats { .. }))
     }
 
-    /// Get the stats timestamp fields if present
+    fn can_use_tstats(&self) -> bool {
+        self.pipeline.len() == 1 && matches!(self.pipeline.first(), Some(SplunkOp::Count))
+    }
+
     fn get_stats_timestamp_fields(&self) -> Option<&HashSet<String>> {
         for op in &self.pipeline {
             if let SplunkOp::Stats {
@@ -276,7 +318,6 @@ impl SplunkHandle {
         None
     }
 
-    /// Get the stats numeric fields if present
     fn get_stats_numeric_fields(&self) -> Option<&HashSet<String>> {
         for op in &self.pipeline {
             if let SplunkOp::Stats {
@@ -301,6 +342,7 @@ impl fmt::Display for SplunkHandle {
         for op in &self.pipeline {
             match op {
                 SplunkOp::Search(term) => items.push(format!("search={}", term)),
+                SplunkOp::Where(term) => items.push(format!("where={}", term)),
                 SplunkOp::Sort(sorts) => {
                     let s = sorts
                         .iter()
@@ -431,6 +473,36 @@ async fn send_request(req: RequestBuilder) -> Result<BytesMut> {
     }
 }
 
+fn is_timestamp_field(field: &miso_workflow_types::field::Field) -> bool {
+    let field_str = field.to_string();
+    field_str == SPLUNK_TIME_FIELD || field_str == "@time"
+}
+
+#[derive(Debug, Clone)]
+enum FilterResult {
+    Search(String),
+    Where(String),
+}
+
+impl FilterResult {
+    fn into_spl_op(self) -> SplunkOp {
+        match self {
+            FilterResult::Search(s) => SplunkOp::Search(s),
+            FilterResult::Where(s) => SplunkOp::Where(s),
+        }
+    }
+
+    fn unwrap_str(&self) -> &str {
+        match self {
+            FilterResult::Search(s) | FilterResult::Where(s) => s,
+        }
+    }
+
+    fn is_where(&self) -> bool {
+        matches!(self, FilterResult::Where(_))
+    }
+}
+
 fn format_spl_value(value: &Value) -> String {
     match value {
         Value::String(s) => format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\"")),
@@ -442,25 +514,59 @@ fn format_spl_value(value: &Value) -> String {
     }
 }
 
-fn compile_filter_to_spl(expr: &Expr) -> Option<String> {
+/// String values wrapped in CASE() for case-sensitive matching in `| search`
+fn format_spl_value_for_search(value: &Value) -> String {
+    match value {
+        Value::String(s) => {
+            let escaped = s.replace('\\', "\\\\").replace('"', "\\\"");
+            format!("CASE(\"{}\")", escaped)
+        }
+        _ => format_spl_value(value),
+    }
+}
+
+fn compile_filter_to_spl(expr: &Expr) -> Option<FilterResult> {
     Some(match expr {
         Expr::Or(left, right) => {
-            let left_spl = compile_filter_to_spl(left)?;
-            let right_spl = compile_filter_to_spl(right)?;
-            format!("({} OR {})", left_spl, right_spl)
+            let left_result = compile_filter_to_spl(left)?;
+            let right_result = compile_filter_to_spl(right)?;
+            let combined = format!(
+                "({} OR {})",
+                left_result.unwrap_str(),
+                right_result.unwrap_str()
+            );
+            if left_result.is_where() || right_result.is_where() {
+                FilterResult::Where(combined)
+            } else {
+                FilterResult::Search(combined)
+            }
         }
         Expr::And(left, right) => {
-            let left_spl = compile_filter_to_spl(left)?;
-            let right_spl = compile_filter_to_spl(right)?;
-            format!("({} AND {})", left_spl, right_spl)
+            let left_result = compile_filter_to_spl(left)?;
+            let right_result = compile_filter_to_spl(right)?;
+            let combined = format!(
+                "({} AND {})",
+                left_result.unwrap_str(),
+                right_result.unwrap_str()
+            );
+            if left_result.is_where() || right_result.is_where() {
+                FilterResult::Where(combined)
+            } else {
+                FilterResult::Search(combined)
+            }
         }
         Expr::Not(inner) => {
-            let inner_spl = compile_filter_to_spl(inner)?;
-            format!("NOT {}", inner_spl)
+            let inner_result = compile_filter_to_spl(inner)?;
+            let combined = format!("NOT {}", inner_result.unwrap_str());
+            if inner_result.is_where() {
+                FilterResult::Where(combined)
+            } else {
+                FilterResult::Search(combined)
+            }
         }
 
         Expr::Exists(field) if !field.has_array_access() => {
-            format!("isnotnull({})", field)
+            FilterResult::Where(format!("isnotnull({})", field))
         }
 
         Expr::Eq(lhs, rhs) => {
@@ -470,7 +576,7 @@ fn compile_filter_to_spl(expr: &Expr) -> Option<String> {
             if field.has_array_access() {
                 return None;
             }
-            format!("{}={}", field, format_spl_value(value))
+            FilterResult::Search(format!("{}={}", field, format_spl_value_for_search(value)))
         }
         Expr::Ne(lhs, rhs) => {
             let (Expr::Field(field), Expr::Literal(value)) = (&**lhs, &**rhs) else {
@@ -479,7 +585,7 @@ fn compile_filter_to_spl(expr: &Expr) -> Option<String> {
             if field.has_array_access() {
                 return None;
             }
-            format!("{}!={}", field, format_spl_value(value))
+            FilterResult::Search(format!("{}!={}", field, format_spl_value_for_search(value)))
         }
         Expr::Gt(lhs, rhs) => {
             let (Expr::Field(field), Expr::Literal(value)) = (&**lhs, &**rhs) else {
@@ -488,7 +594,7 @@ fn compile_filter_to_spl(expr: &Expr) -> Option<String> {
             if field.has_array_access() {
                 return None;
             }
-            format!("{}>{}", field, format_spl_value(value))
+            FilterResult::Search(format!("{}>{}", field, format_spl_value(value)))
         }
         Expr::Gte(lhs, rhs) => {
             let (Expr::Field(field), Expr::Literal(value)) = (&**lhs, &**rhs) else {
@@ -497,7 +603,7 @@ fn compile_filter_to_spl(expr: &Expr) -> Option<String> {
             if field.has_array_access() {
                 return None;
             }
-            format!("{}>={}", field, format_spl_value(value))
+            FilterResult::Search(format!("{}>={}", field, format_spl_value(value)))
         }
         Expr::Lt(lhs, rhs) => {
             let (Expr::Field(field), Expr::Literal(value)) = (&**lhs, &**rhs) else {
@@ -506,7 +612,7 @@ fn compile_filter_to_spl(expr: &Expr) -> Option<String> {
             if field.has_array_access() {
                 return None;
             }
-            format!("{}<{}", field, format_spl_value(value))
+            FilterResult::Search(format!("{}<{}", field, format_spl_value(value)))
         }
         Expr::Lte(lhs, rhs) => {
             let (Expr::Field(field), Expr::Literal(value)) = (&**lhs, &**rhs) else {
@@ -515,7 +621,7 @@ fn compile_filter_to_spl(expr: &Expr) -> Option<String> {
             if field.has_array_access() {
                 return None;
             }
-            format!("{}<={}", field, format_spl_value(value))
+            FilterResult::Search(format!("{}<={}", field, format_spl_value(value)))
         }
 
         Expr::In(lhs, values) => {
@@ -528,7 +634,7 @@ fn compile_filter_to_spl(expr: &Expr) -> Option<String> {
             let formatted_values = values
                 .iter()
                 .map(|v| match v {
-                    Expr::Literal(val) => Some(format_spl_value(val)),
+                    Expr::Literal(val) => Some(format_spl_value_for_search(val)),
                     _ => None,
                 })
                 .collect::<Option<Vec<_>>>()?;
@@ -538,7 +644,7 @@ fn compile_filter_to_spl(expr: &Expr) -> Option<String> {
                 .map(|v| format!("{}={}", field, v))
                 .collect::<Vec<_>>()
                 .join(" OR ");
-            format!("({})", conditions)
+            FilterResult::Search(format!("({})", conditions))
         }
 
         Expr::StartsWith(lhs, rhs) => {
@@ -552,7 +658,7 @@ fn compile_filter_to_spl(expr: &Expr) -> Option<String> {
                 Value::String(s) => s.clone(),
                 _ => return None,
             };
-            format!("{}={}*", field, prefix_str)
+            FilterResult::Search(format!("{}={}*", field, prefix_str))
         }
         Expr::HasCs(lhs, rhs) | Expr::Has(lhs, rhs) => {
             let (Expr::Field(field), Expr::Literal(phrase)) = (&**lhs, &**rhs) else {
@@ -561,8 +667,7 @@ fn compile_filter_to_spl(expr: &Expr) -> Option<String> {
             if field.has_array_access() {
                 return None;
             }
-            // Use LIKE operator with wildcards for substring matching
-            format!(
+            FilterResult::Where(format!(
                 "like({}, \"%{}%\")",
                 field,
                 match phrase {
@@ -572,7 +677,7 @@ fn compile_filter_to_spl(expr: &Expr) -> Option<String> {
                         .replace('%', "\\%"),
                     _ => return None,
                 }
-            )
+            ))
         }
 
         _ => return None,
@@ -809,7 +914,6 @@ impl SplunkConnector {
             Self::value_to_datetime(value)?;
         }
 
-        // Remove unimportant Splunk internal metadata fields.
         log.remove("_serial");
         log.remove("_bkt");
         log.remove("_cd");
@@ -821,13 +925,11 @@ impl SplunkConnector {
     fn value_to_datetime(value: &mut Value) -> Result<()> {
         match value {
             Value::String(s) => {
-                // Try RFC3339 first
                 if let Ok(dt) =
                     OffsetDateTime::parse(s, &time::format_description::well_known::Rfc3339)
                 {
                     *value = Value::from(dt);
                 } else if let Ok(epoch) = s.parse::<f64>() {
-                    // Splunk sometimes returns epoch as string
                     let dt = miso_common::time_utils::parse_timestamp_float(epoch)
                         .map_err(|e| color_eyre::eyre::eyre!("parse splunk datetime: {}", e))?;
                     *value = Value::from(dt);
@@ -864,8 +966,7 @@ impl SplunkConnector {
         Ok(value)
     }
 
-    /// Convert numeric strings to proper numeric types.
-    /// Splunk stats returns all values as strings, so we try to parse them.
+    /// Splunk stats returns all values as strings
     fn try_parse_numeric_string(value: Value) -> Value {
         if let Value::String(s) = &value {
             if let Ok(i) = s.parse::<i64>() {
@@ -1068,8 +1169,17 @@ impl Connector for SplunkConnector {
 
     fn apply_filter(&self, ast: &Expr, handle: &dyn QueryHandle) -> Option<Box<dyn QueryHandle>> {
         let handle = downcast_unwrap!(handle, SplunkHandle);
-        let spl = compile_filter_to_spl(ast)?;
-        Some(Box::new(handle.push(SplunkOp::Search(spl))))
+
+        let (time_range, remaining_expr) = ast.extract_timestamp_range(is_timestamp_field);
+
+        let mut new_handle = handle.with_time_constraints(time_range.earliest, time_range.latest);
+
+        if let Some(ref expr) = remaining_expr {
+            let filter_result = compile_filter_to_spl(expr)?;
+            new_handle = new_handle.push(filter_result.into_spl_op());
+        }
+
+        Some(Box::new(new_handle))
     }
 
     fn apply_project(
@@ -1096,16 +1206,25 @@ impl Connector for SplunkConnector {
     ) -> Option<Box<dyn QueryHandle>> {
         let handle = downcast_unwrap!(handle, SplunkHandle);
 
+        // Skip sort by _time desc - Splunk returns results in this order by default.
+        // Adding `| sort -_time` forces Splunk to process the entire dataset.
         let splunk_sorts: Vec<(String, bool)> = sorts
             .iter()
+            .filter(|s| {
+                let field = s.by.to_string();
+                let is_desc = s.order.to_string() == "desc";
+                !((field == SPLUNK_TIME_FIELD || field == "@time") && is_desc)
+            })
             .map(|s| (s.by.to_string(), s.order.to_string() == "desc"))
             .collect();
 
-        Some(Box::new(
-            handle
-                .push(SplunkOp::Sort(splunk_sorts))
-                .push(SplunkOp::Head(max)),
-        ))
+        let mut new_handle = handle.clone();
+        if !splunk_sorts.is_empty() {
+            new_handle = new_handle.push(SplunkOp::Sort(splunk_sorts));
+        }
+        new_handle = new_handle.push(SplunkOp::Head(max));
+
+        Some(Box::new(new_handle))
     }
 
     fn apply_count(&self, handle: &dyn QueryHandle) -> Option<Box<dyn QueryHandle>> {
