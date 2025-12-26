@@ -50,7 +50,7 @@ where
         });
 
         if let Some(query_id_value) = query_id {
-            span.extensions_mut().insert(QueryIdValue(query_id_value));
+            span.extensions_mut().replace(QueryIdValue(query_id_value));
         }
     }
 }
