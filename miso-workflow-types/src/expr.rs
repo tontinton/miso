@@ -125,7 +125,92 @@ impl fmt::Display for Expr {
     }
 }
 
+/// Extracted timestamp constraints from a filter expression
+#[derive(Debug, Clone, Default)]
+pub struct TimestampRange {
+    pub earliest: Option<i64>,
+    pub latest: Option<i64>,
+}
+
 impl Expr {
+    /// Extract timestamp constraints from a filter expression.
+    /// Returns the constraints and a modified expression without the timestamp predicates.
+    ///
+    /// The `is_timestamp` predicate determines which fields are timestamp fields.
+    pub fn extract_timestamp_range<F>(&self, is_timestamp: F) -> (TimestampRange, Option<Expr>)
+    where
+        F: Fn(&Field) -> bool + Copy,
+    {
+        let mut range = TimestampRange::default();
+
+        match self {
+            Expr::Gte(lhs, rhs) => {
+                if let (Expr::Field(field), Expr::Literal(value)) = (&**lhs, &**rhs)
+                    && is_timestamp(field)
+                    && let Some(epoch) = value.as_epoch_seconds()
+                {
+                    range.earliest = Some(epoch);
+                    return (range, None);
+                }
+            }
+            Expr::Gt(lhs, rhs) => {
+                if let (Expr::Field(field), Expr::Literal(value)) = (&**lhs, &**rhs)
+                    && is_timestamp(field)
+                    && let Some(epoch) = value.as_epoch_seconds()
+                {
+                    // > is exclusive, so add 1 to make earliest inclusive
+                    range.earliest = Some(epoch + 1);
+                    return (range, None);
+                }
+            }
+            Expr::Lt(lhs, rhs) => {
+                if let (Expr::Field(field), Expr::Literal(value)) = (&**lhs, &**rhs)
+                    && is_timestamp(field)
+                    && let Some(epoch) = value.as_epoch_seconds()
+                {
+                    range.latest = Some(epoch);
+                    return (range, None);
+                }
+            }
+            Expr::Lte(lhs, rhs) => {
+                if let (Expr::Field(field), Expr::Literal(value)) = (&**lhs, &**rhs)
+                    && is_timestamp(field)
+                    && let Some(epoch) = value.as_epoch_seconds()
+                {
+                    // <= is inclusive, so add 1 since latest is exclusive
+                    range.latest = Some(epoch + 1);
+                    return (range, None);
+                }
+            }
+            Expr::And(left, right) => {
+                let (left_range, left_remaining) = left.extract_timestamp_range(is_timestamp);
+                let (right_range, right_remaining) = right.extract_timestamp_range(is_timestamp);
+
+                range.earliest = match (left_range.earliest, right_range.earliest) {
+                    (Some(a), Some(b)) => Some(a.max(b)),
+                    (Some(a), None) | (None, Some(a)) => Some(a),
+                    (None, None) => None,
+                };
+                range.latest = match (left_range.latest, right_range.latest) {
+                    (Some(a), Some(b)) => Some(a.min(b)),
+                    (Some(a), None) | (None, Some(a)) => Some(a),
+                    (None, None) => None,
+                };
+
+                let remaining = match (left_remaining, right_remaining) {
+                    (Some(l), Some(r)) => Some(Expr::And(Box::new(l), Box::new(r))),
+                    (Some(e), None) | (None, Some(e)) => Some(e),
+                    (None, None) => None,
+                };
+
+                return (range, remaining);
+            }
+            _ => {}
+        }
+
+        (range, Some(self.clone()))
+    }
+
     pub(crate) fn _fields(&self, out: &mut HashSet<Field>) {
         match self {
             Expr::Field(f) | Expr::Exists(f) => {

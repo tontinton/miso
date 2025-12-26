@@ -597,6 +597,13 @@ impl Value {
             _ => None,
         }
     }
+
+    pub fn as_epoch_seconds(&self) -> Option<i64> {
+        match self {
+            Value::Timestamp(dt) => Some(dt.unix_timestamp()),
+            _ => None,
+        }
+    }
 }
 
 impl From<serde_json::Value> for Value {
