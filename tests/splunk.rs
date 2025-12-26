@@ -98,19 +98,37 @@ async fn setup(url: String) -> Result<ConnectorsMap> {
     let connector = Arc::new(SplunkConnector::new(config)) as Arc<dyn Connector>;
     let connector_state = Arc::new(ConnectorState::new(connector.clone()));
 
-    // Wait for indexes to be available
+    let url_for_retry = url.clone();
+    let client_for_retry = client.clone();
     Retry::spawn(
         FixedInterval::new(SPLUNK_REFRESH_INTERVAL).take(30),
         move || {
             let connector = connector.clone();
+            let url = url_for_retry.clone();
+            let client = client_for_retry.clone();
             async move {
-                for (index_name, _) in INDEXES.iter() {
+                for (index_name, data) in INDEXES.iter() {
+                    let expected_count = data.lines().count();
+
                     connector
                         .does_collection_exist(index_name)
                         .then_some(())
                         .ok_or_eyre(format!(
                             "timeout waiting for '{index_name}' collection to exist"
                         ))?;
+
+                    let actual_count =
+                        get_index_count(&client, &url, index_name)
+                            .await
+                            .with_context(|| {
+                                format!("failed to get count for index '{index_name}'")
+                            })?;
+
+                    if actual_count < expected_count {
+                        bail!(
+                            "Index '{index_name}' has {actual_count} docs, expecting {expected_count}"
+                        );
+                    }
                 }
                 Ok::<(), color_eyre::eyre::Error>(())
             }
@@ -174,6 +192,60 @@ async fn write_to_index(
 
     info!("Index '{}' ingested data successfully", index_name);
     Ok(())
+}
+
+async fn get_index_count(client: &Client, base_url: &str, index_name: &str) -> Result<usize> {
+    let url = format!("{base_url}/services/search/jobs");
+    let search_query = format!("search (index=\"{index_name}\") | stats count");
+    let form = [
+        ("search", search_query.as_str()),
+        ("output_mode", "json"),
+        ("exec_mode", "blocking"),
+    ];
+
+    let response = client
+        .post(&url)
+        .basic_auth("admin", Some(SPLUNK_PASSWORD))
+        .form(&form)
+        .send()
+        .await
+        .with_context(|| format!("POST search job for count in index: {index_name}"))?;
+
+    let status = response.status();
+    if !status.is_success() {
+        let text = response.text().await.unwrap_or_default();
+        bail!("Search job for '{index_name}' failed with status {status}: {text}");
+    }
+
+    let search_response: serde_json::Value = response.json().await?;
+    let sid = search_response["sid"]
+        .as_str()
+        .ok_or_eyre("missing sid in search response")?;
+
+    let results_url = format!("{base_url}/services/search/jobs/{sid}/results?output_mode=json");
+    let results_response = client
+        .get(&results_url)
+        .basic_auth("admin", Some(SPLUNK_PASSWORD))
+        .send()
+        .await
+        .with_context(|| format!("GET search results for index: {index_name}"))?;
+
+    let results_status = results_response.status();
+    if !results_status.is_success() {
+        let text = results_response.text().await.unwrap_or_default();
+        bail!("Get search results for '{index_name}' failed with status {results_status}: {text}");
+    }
+
+    let results: serde_json::Value = results_response.json().await?;
+    let count = results["results"]
+        .as_array()
+        .and_then(|arr| arr.first())
+        .and_then(|obj| obj["count"].as_str())
+        .and_then(|s| s.parse::<usize>().ok())
+        .unwrap_or(0);
+
+    info!("Index '{}' has {} documents", index_name, count);
+    Ok(count)
 }
 
 #[tokio::test]
