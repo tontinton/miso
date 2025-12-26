@@ -1339,3 +1339,385 @@ impl Connector for SplunkConnector {
         self.interval_task.shutdown().await;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use miso_workflow_types::field::Field;
+
+    fn field(name: &str) -> Field {
+        name.parse().unwrap()
+    }
+
+    mod build_spl {
+        use super::*;
+
+        #[test]
+        fn basic_index() {
+            let handle = SplunkHandle::default();
+            assert_eq!(handle.build_spl("myindex"), "search (index=\"myindex\")");
+        }
+
+        #[test]
+        fn with_search_filter() {
+            let handle = SplunkHandle::default().push(SplunkOp::Search("foo=CASE(\"bar\")".into()));
+            assert_eq!(
+                handle.build_spl("myindex"),
+                "search (index=\"myindex\") | search foo=CASE(\"bar\")"
+            );
+        }
+
+        #[test]
+        fn with_where_filter() {
+            let handle = SplunkHandle::default().push(SplunkOp::Where("isnotnull(foo)".into()));
+            assert_eq!(
+                handle.build_spl("myindex"),
+                "search (index=\"myindex\") | where isnotnull(foo)"
+            );
+        }
+
+        #[test]
+        fn with_sort() {
+            let handle = SplunkHandle::default().push(SplunkOp::Sort(vec![
+                ("foo".into(), true),
+                ("bar".into(), false),
+            ]));
+            assert_eq!(
+                handle.build_spl("myindex"),
+                "search (index=\"myindex\") | sort -foo, +bar"
+            );
+        }
+
+        #[test]
+        fn with_head() {
+            let handle = SplunkHandle::default().push(SplunkOp::Head(100));
+            assert_eq!(
+                handle.build_spl("myindex"),
+                "search (index=\"myindex\") | head 100"
+            );
+        }
+
+        #[test]
+        fn with_count() {
+            let handle = SplunkHandle::default().push(SplunkOp::Count);
+            assert_eq!(
+                handle.build_spl("myindex"),
+                "| tstats count as count where (index=\"myindex\")"
+            );
+        }
+
+        #[test]
+        fn with_count_and_filter() {
+            let handle = SplunkHandle::default()
+                .push(SplunkOp::Search("foo=CASE(\"bar\")".into()))
+                .push(SplunkOp::Count);
+            assert_eq!(
+                handle.build_spl("myindex"),
+                "search (index=\"myindex\") | search foo=CASE(\"bar\") | stats count"
+            );
+        }
+
+        #[test]
+        fn with_stats() {
+            let handle = SplunkHandle::default().push(SplunkOp::Stats {
+                aggs: "count as cnt, sum(value) as total".into(),
+                by: vec!["category".into()],
+                timestamp_agg_fields: HashSet::new(),
+                numeric_agg_fields: HashSet::new(),
+            });
+            assert_eq!(
+                handle.build_spl("myindex"),
+                "search (index=\"myindex\") | stats count as cnt, sum(value) as total by category"
+            );
+        }
+
+        #[test]
+        fn with_earliest_latest() {
+            let handle = SplunkHandle {
+                earliest: Some(1000),
+                latest: Some(2000),
+                ..Default::default()
+            };
+            assert_eq!(
+                handle.build_spl("myindex"),
+                "search (index=\"myindex\") earliest=1000 latest=2000"
+            );
+        }
+
+        #[test]
+        fn with_union() {
+            let handle = SplunkHandle::default().with_union("other_index");
+            let spl = handle.build_spl("myindex");
+            assert!(spl.contains("index=\"myindex\""));
+            assert!(spl.contains("index=\"other_index\""));
+            assert!(spl.contains(" OR "));
+        }
+
+        #[test]
+        fn tstats_with_time_constraints() {
+            let handle = SplunkHandle {
+                earliest: Some(1000),
+                latest: Some(2000),
+                pipeline: vec![SplunkOp::Count],
+                ..Default::default()
+            };
+            assert_eq!(
+                handle.build_spl("myindex"),
+                "| tstats count as count where (index=\"myindex\") earliest=1000 latest=2000"
+            );
+        }
+    }
+
+    mod compile_filter {
+        use super::*;
+
+        #[test]
+        fn eq_string() {
+            let expr = Expr::Eq(
+                Box::new(Expr::Field(field("foo"))),
+                Box::new(Expr::Literal(Value::String("bar".into()))),
+            );
+            let result = compile_filter_to_spl(&expr).unwrap();
+            assert!(matches!(result, FilterResult::Search(_)));
+            assert_eq!(result.unwrap_str(), "foo=CASE(\"bar\")");
+        }
+
+        #[test]
+        fn eq_int() {
+            let expr = Expr::Eq(
+                Box::new(Expr::Field(field("count"))),
+                Box::new(Expr::Literal(Value::Int(42))),
+            );
+            let result = compile_filter_to_spl(&expr).unwrap();
+            assert!(matches!(result, FilterResult::Search(_)));
+            assert_eq!(result.unwrap_str(), "count=42");
+        }
+
+        #[test]
+        fn ne() {
+            let expr = Expr::Ne(
+                Box::new(Expr::Field(field("status"))),
+                Box::new(Expr::Literal(Value::String("error".into()))),
+            );
+            let result = compile_filter_to_spl(&expr).unwrap();
+            assert_eq!(result.unwrap_str(), "status!=CASE(\"error\")");
+        }
+
+        #[test]
+        fn comparison_operators() {
+            let field_box = || Box::new(Expr::Field(field("value")));
+            let value_box = || Box::new(Expr::Literal(Value::Int(100)));
+
+            assert_eq!(
+                compile_filter_to_spl(&Expr::Gt(field_box(), value_box()))
+                    .unwrap()
+                    .unwrap_str(),
+                "value>100"
+            );
+            assert_eq!(
+                compile_filter_to_spl(&Expr::Gte(field_box(), value_box()))
+                    .unwrap()
+                    .unwrap_str(),
+                "value>=100"
+            );
+            assert_eq!(
+                compile_filter_to_spl(&Expr::Lt(field_box(), value_box()))
+                    .unwrap()
+                    .unwrap_str(),
+                "value<100"
+            );
+            assert_eq!(
+                compile_filter_to_spl(&Expr::Lte(field_box(), value_box()))
+                    .unwrap()
+                    .unwrap_str(),
+                "value<=100"
+            );
+        }
+
+        #[test]
+        fn logical_operators_use_search_when_possible() {
+            let eq_a = Box::new(Expr::Eq(
+                Box::new(Expr::Field(field("a"))),
+                Box::new(Expr::Literal(Value::Int(1))),
+            ));
+            let eq_b = Box::new(Expr::Eq(
+                Box::new(Expr::Field(field("b"))),
+                Box::new(Expr::Literal(Value::Int(2))),
+            ));
+
+            let and_result = compile_filter_to_spl(&Expr::And(eq_a.clone(), eq_b.clone())).unwrap();
+            assert!(matches!(and_result, FilterResult::Search(_)));
+            assert_eq!(and_result.unwrap_str(), "(a=1 AND b=2)");
+
+            let or_result = compile_filter_to_spl(&Expr::Or(eq_a, eq_b)).unwrap();
+            assert!(matches!(or_result, FilterResult::Search(_)));
+            assert_eq!(or_result.unwrap_str(), "(a=1 OR b=2)");
+        }
+
+        #[test]
+        fn not() {
+            let expr = Expr::Not(Box::new(Expr::Eq(
+                Box::new(Expr::Field(field("a"))),
+                Box::new(Expr::Literal(Value::Int(1))),
+            )));
+            let result = compile_filter_to_spl(&expr).unwrap();
+            assert_eq!(result.unwrap_str(), "NOT a=1");
+        }
+
+        #[test]
+        fn function_filters_use_where() {
+            // exists -> isnotnull()
+            let exists_expr = Expr::Exists(field("optional_field"));
+            let exists_result = compile_filter_to_spl(&exists_expr).unwrap();
+            assert!(matches!(exists_result, FilterResult::Where(_)));
+            assert_eq!(exists_result.unwrap_str(), "isnotnull(optional_field)");
+
+            // has -> like()
+            let has_expr = Expr::Has(
+                Box::new(Expr::Field(field("message"))),
+                Box::new(Expr::Literal(Value::String("error".into()))),
+            );
+            let has_result = compile_filter_to_spl(&has_expr).unwrap();
+            assert!(matches!(has_result, FilterResult::Where(_)));
+            assert_eq!(has_result.unwrap_str(), "like(message, \"%error%\")");
+        }
+
+        #[test]
+        fn and_with_exists_uses_where() {
+            let expr = Expr::And(
+                Box::new(Expr::Eq(
+                    Box::new(Expr::Field(field("a"))),
+                    Box::new(Expr::Literal(Value::Int(1))),
+                )),
+                Box::new(Expr::Exists(field("b"))),
+            );
+            let result = compile_filter_to_spl(&expr).unwrap();
+            assert!(matches!(result, FilterResult::Where(_)));
+            assert_eq!(result.unwrap_str(), "(a=1 AND isnotnull(b))");
+        }
+
+        #[test]
+        fn in_clause() {
+            let expr = Expr::In(
+                Box::new(Expr::Field(field("status"))),
+                vec![
+                    Expr::Literal(Value::String("a".into())),
+                    Expr::Literal(Value::String("b".into())),
+                ],
+            );
+            let result = compile_filter_to_spl(&expr).unwrap();
+            assert_eq!(
+                result.unwrap_str(),
+                "(status=CASE(\"a\") OR status=CASE(\"b\"))"
+            );
+        }
+
+        #[test]
+        fn starts_with() {
+            let expr = Expr::StartsWith(
+                Box::new(Expr::Field(field("path"))),
+                Box::new(Expr::Literal(Value::String("/api/".into()))),
+            );
+            let result = compile_filter_to_spl(&expr).unwrap();
+            assert_eq!(result.unwrap_str(), "path=/api/*");
+        }
+    }
+
+    mod format_value {
+        use super::*;
+
+        #[test]
+        fn string_formatting() {
+            // Escaping quotes
+            assert_eq!(
+                format_spl_value(&Value::String("hello \"world\"".into())),
+                "\"hello \\\"world\\\"\""
+            );
+            // CASE() wrapper for search
+            assert_eq!(
+                format_spl_value_for_search(&Value::String("hello".into())),
+                "CASE(\"hello\")"
+            );
+        }
+
+        #[test]
+        fn numeric_and_bool_formatting() {
+            assert_eq!(format_spl_value(&Value::Int(42)), "42");
+            assert_eq!(format_spl_value(&Value::Float(2.5)), "2.5");
+            assert_eq!(format_spl_value(&Value::Bool(true)), "true");
+            assert_eq!(format_spl_value(&Value::Bool(false)), "false");
+        }
+    }
+
+    mod is_timestamp {
+        use super::*;
+
+        #[test]
+        fn recognizes_time_fields() {
+            assert!(is_timestamp_field(&field("_time")));
+            assert!(is_timestamp_field(&field("@time")));
+            assert!(!is_timestamp_field(&field("created_at")));
+            assert!(!is_timestamp_field(&field("timestamp")));
+        }
+    }
+
+    mod can_use_tstats {
+        use super::*;
+
+        #[test]
+        fn only_for_simple_count() {
+            // Only count -> can use tstats
+            assert!(
+                SplunkHandle::default()
+                    .push(SplunkOp::Count)
+                    .can_use_tstats()
+            );
+
+            // Count with filter -> cannot use tstats
+            assert!(
+                !SplunkHandle::default()
+                    .push(SplunkOp::Search("foo=bar".into()))
+                    .push(SplunkOp::Count)
+                    .can_use_tstats()
+            );
+
+            // Empty pipeline -> cannot use tstats
+            assert!(!SplunkHandle::default().can_use_tstats());
+
+            // Stats (not count) -> cannot use tstats
+            assert!(
+                !SplunkHandle::default()
+                    .push(SplunkOp::Stats {
+                        aggs: "sum(x)".into(),
+                        by: vec![],
+                        timestamp_agg_fields: HashSet::new(),
+                        numeric_agg_fields: HashSet::new(),
+                    })
+                    .can_use_tstats()
+            );
+        }
+    }
+
+    mod time_constraints {
+        use super::*;
+
+        #[test]
+        fn merge_behavior() {
+            // Merge takes more restrictive values
+            let handle = SplunkHandle {
+                earliest: Some(1000),
+                latest: Some(3000),
+                ..Default::default()
+            };
+            let updated = handle.with_time_constraints(Some(1500), Some(2500));
+            assert_eq!(updated.earliest, Some(1500));
+            assert_eq!(updated.latest, Some(2500));
+
+            // Sets values when None
+            let handle = SplunkHandle::default();
+            let updated = handle.with_time_constraints(Some(1000), Some(2000));
+            assert_eq!(updated.earliest, Some(1000));
+            assert_eq!(updated.latest, Some(2000));
+        }
+    }
+}
