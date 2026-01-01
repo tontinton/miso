@@ -28,7 +28,7 @@ use crate::{
     filter::FilterIter,
     join::{DynamicFilterTx, join_rx},
     limit::LimitIter,
-    partial_stream::{PartialStream, PartialStreamIter, UnionIter},
+    partial_stream::{PartialStream, PartialStreamIter},
     project::ProjectIter,
     rename::RenameIter,
     scan::{Scan, scan_rx},
@@ -37,6 +37,7 @@ use crate::{
     summarize::create_summarize_iter,
     tee::{Tee, tee_iter},
     topn::{PartialTopNIter, TopNIter},
+    union::UnionIter,
 };
 
 use self::{cancel_iter::CancelIter, send_once::SendOnce};
@@ -60,6 +61,7 @@ mod spawn_thread;
 pub mod summarize;
 pub mod tee;
 pub mod topn;
+mod union;
 
 #[cfg(test)]
 mod tests;
