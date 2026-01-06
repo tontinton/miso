@@ -12,9 +12,8 @@ use ratatui::{
 };
 
 use crate::{
-    client::query_stream,
-    components::{Action, Component, Footer, QueryInput, ResultsWithPreview},
-    log::Log,
+    client::{StreamMessage, query_stream},
+    components::{Action, Component, ErrorModal, Footer, QueryInput, ResultsWithPreview},
 };
 
 macro_rules! act {
@@ -38,13 +37,14 @@ pub struct App {
     results_view: ResultsWithPreview,
     query_input_view: QueryInput,
     footer_view: Footer,
+    error_modal: ErrorModal,
 
     focused: FocusedWindow,
     redraw: bool,
     exit: bool,
     clipboard: Clipboard,
 
-    query_rx: Option<mpsc::Receiver<Log>>,
+    query_rx: Option<mpsc::Receiver<StreamMessage>>,
 }
 
 impl App {
@@ -55,6 +55,7 @@ impl App {
             results_view: ResultsWithPreview::default(),
             query_input_view: QueryInput::new(query.unwrap_or("".to_string())),
             footer_view: Footer::default(),
+            error_modal: ErrorModal::default(),
 
             focused: FocusedWindow::Query,
             redraw: true,
@@ -113,6 +114,8 @@ impl App {
         if add_footer {
             self.footer_view.draw(frame, rects[2]);
         }
+
+        self.error_modal.draw(frame, frame.area());
     }
 
     fn handle_events(&mut self) -> Result<()> {
@@ -125,10 +128,15 @@ impl App {
         while logs_received < LOGS_CHUNK {
             if let Some(rx) = &self.query_rx {
                 match rx.try_recv() {
-                    Ok(log) => {
+                    Ok(StreamMessage::Log(log)) => {
                         act!(self, self.results_view.results_list.push(log));
                         logs_received += 1;
                         continue;
+                    }
+                    Ok(StreamMessage::Error(error)) => {
+                        self.handle_action(Action::ShowError(error));
+                        self.query_rx = None;
+                        break;
                     }
                     Err(TryRecvError::Disconnected) => {
                         self.query_rx = None;
@@ -164,6 +172,12 @@ impl App {
     }
 
     fn handle_key_event(&mut self, key_event: KeyEvent) {
+        // Handle error modal keys first
+        if self.error_modal.is_visible() {
+            act!(self, self.error_modal.handle_key_event(key_event));
+            return;
+        }
+
         match key_event.code {
             KeyCode::Esc => match self.focused {
                 FocusedWindow::Results => {
@@ -242,9 +256,7 @@ impl App {
                 let (tx, rx) = mpsc::channel();
                 self.query_rx = Some(rx);
                 std::thread::spawn(move || {
-                    if let Err(e) = query_stream(&query, tx) {
-                        eprintln!("Query stream error: {e}");
-                    }
+                    query_stream(&query, tx);
                 });
             }
             Action::PreviewLog(log) => {
@@ -252,8 +264,14 @@ impl App {
             }
             Action::CopyToClipboard(text) => {
                 if let Err(e) = self.copy_to_clipboard(&text) {
-                    eprintln!("Failed to copy to clipboard: {e}");
+                    self.handle_action(Action::ShowError(format!(
+                        "Failed to copy to clipboard: {e}"
+                    )));
                 }
+            }
+            Action::ShowError(message) => {
+                self.error_modal.show(message);
+                self.redraw = true;
             }
         }
     }

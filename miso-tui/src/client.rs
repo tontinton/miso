@@ -1,7 +1,6 @@
 use std::io::{BufRead, BufReader};
 use std::sync::mpsc::Sender;
 
-use color_eyre::Result;
 use reqwest::blocking::Client;
 use serde_json::json;
 
@@ -9,7 +8,21 @@ use crate::log::Log;
 
 const SSE_DATA_PREFIX: &str = "data:";
 
-pub fn query_stream(query: &str, tx: Sender<Log>) -> Result<()> {
+pub enum StreamMessage {
+    Log(Log),
+    Error(String),
+}
+
+pub fn query_stream(query: &str, tx: Sender<StreamMessage>) {
+    if let Err(e) = query_stream_inner(query, &tx) {
+        let _ = tx.send(StreamMessage::Error(format!("Query stream error: {e}")));
+    }
+}
+
+fn query_stream_inner(
+    query: &str,
+    tx: &Sender<StreamMessage>,
+) -> Result<(), Box<dyn std::error::Error>> {
     let client = Client::new();
     let resp = client
         .post("http://localhost:8080/query")
@@ -42,7 +55,7 @@ pub fn query_stream(query: &str, tx: Sender<Log>) -> Result<()> {
             slice = &mut slice[..end];
 
             if let Ok(log) = Log::raw(slice) {
-                let _ = tx.send(log);
+                let _ = tx.send(StreamMessage::Log(log));
             }
         }
         buf.clear();

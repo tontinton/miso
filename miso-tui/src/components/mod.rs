@@ -1,3 +1,4 @@
+mod error_modal;
 mod footer;
 mod kql_syntax_highlight;
 mod log_view;
@@ -5,6 +6,7 @@ mod query_input;
 mod results_list;
 mod results_with_preview;
 
+pub use error_modal::ErrorModal;
 pub use footer::Footer;
 pub use query_input::QueryInput;
 pub use results_with_preview::ResultsWithPreview;
@@ -24,6 +26,7 @@ pub enum Action {
     RunQuery(String),
     PreviewLog(Map<String, Value>),
     CopyToClipboard(String),
+    ShowError(String),
 }
 
 pub trait Component: fmt::Debug {
