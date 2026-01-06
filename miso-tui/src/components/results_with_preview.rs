@@ -69,6 +69,9 @@ impl Component for ResultsWithPreview {
             Char('q') => {
                 return Action::Exit;
             }
+            Char('c') if is_ctrl => {
+                return Action::Exit;
+            }
             _ => {}
         }
 
