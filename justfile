@@ -61,3 +61,6 @@ test-local-splunk:
 
 # Full CI check
 ci: fmt-check lint test
+
+# Like `ci` but doesn't run predicate pushdown tests (which are long)
+ci-no-pp: fmt-check lint test-no-pp
