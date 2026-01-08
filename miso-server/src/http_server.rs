@@ -193,7 +193,7 @@ async fn query_stream(
 ) -> Result<Sse<impl Stream<Item = Result<Event, axum::Error>>>, HttpError> {
     let start = Instant::now();
     METRICS.running_queries.inc();
-    let _record_metrics = scopeguard::guard((), |_| {
+    let record_metrics = scopeguard::guard(start, |start| {
         debug!("Recording query metrics");
         METRICS.running_queries.dec();
         METRICS.query_latency.observe(start.elapsed().as_secs_f64());
@@ -221,7 +221,8 @@ async fn query_stream(
     })?;
 
     Ok(Sse::new(stream! {
-        // Keep the span going.
+        // Keep stuff from dropping.
+        let _record_metrics = record_metrics;
         let stream_span = stream_span;
         let _enter = stream_span.enter();
 
