@@ -27,6 +27,12 @@ pub struct Args {
         default_value = "10000"
     )]
     pub dynamic_filter_max_distinct_values: u64,
+
+    #[clap(
+        long,
+        help = "OTLP endpoint for exporting traces (e.g., http://localhost:4317)."
+    )]
+    pub otlp_endpoint: Option<String>,
 }
 
 #[must_use]

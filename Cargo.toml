@@ -48,6 +48,9 @@ miso-server = { path = "miso-server" }
 miso-workflow = { path = "miso-workflow" }
 miso-workflow-types = { path = "miso-workflow-types" }
 once_cell = "1.21.3"
+opentelemetry = "0.27"
+opentelemetry_sdk = { version = "0.27", features = ["rt-tokio"] }
+opentelemetry-otlp = { version = "0.27", features = ["grpc-tonic"] }
 parking_lot = "0.12.3"
 prometheus = "0.14.0"
 ratatui = "0.29.0"
@@ -68,6 +71,7 @@ tokio-test = "0.4.4"
 tokio-util = "0.7.15"
 tower-http = { version = "0.6.6", features = ["trace"] }
 tracing = "0.1.40"
+tracing-opentelemetry = "0.28"
 tracing-subscriber = { version = "0.3.18", features = ["json", "env-filter"] }
 typetag = "0.2.18"
 uuid = { version = "1.11.0", features = ["v7", "serde"] }
@@ -82,8 +86,12 @@ color-eyre.workspace = true
 mimalloc.workspace = true
 miso-common.workspace = true
 miso-server.workspace = true
+opentelemetry.workspace = true
+opentelemetry_sdk.workspace = true
+opentelemetry-otlp.workspace = true
 tokio.workspace = true
 tracing.workspace = true
+tracing-opentelemetry.workspace = true
 tracing-subscriber.workspace = true
 
 [dev-dependencies]

@@ -2,6 +2,12 @@ use color_eyre::eyre::{Context, Result};
 use mimalloc::MiMalloc;
 use miso_common::query_id_layer::{QueryIdJsonFormat, QueryIdLayer};
 use miso_server::http_server::{create_axum_app, OptimizationConfig};
+use opentelemetry::{trace::TracerProvider as _, KeyValue};
+use opentelemetry_otlp::WithExportConfig;
+use opentelemetry_sdk::{
+    trace::{Sampler, TracerProvider},
+    Resource,
+};
 use tokio::{net::TcpListener, signal};
 use tracing::info;
 
@@ -40,25 +46,58 @@ async fn shutdown_signal() {
     }
 }
 
+fn init_otlp_tracer(endpoint: &str) -> Result<TracerProvider> {
+    let exporter = opentelemetry_otlp::SpanExporter::builder()
+        .with_tonic()
+        .with_endpoint(endpoint)
+        .build()
+        .context("failed to create OTLP exporter")?;
+
+    let resource = Resource::new([KeyValue::new("service.name", "miso")]);
+
+    let provider = TracerProvider::builder()
+        .with_batch_exporter(exporter, opentelemetry_sdk::runtime::Tokio)
+        .with_sampler(Sampler::AlwaysOn)
+        .with_resource(resource)
+        .build();
+
+    Ok(provider)
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = parse_args();
 
-    if args.log_json {
-        let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
-        tracing_subscriber::registry()
-            .with(filter)
-            .with(QueryIdLayer::new())
-            .with(fmt::layer().event_format(QueryIdJsonFormat))
-            .init();
-
-        color_eyre::config::HookBuilder::default()
-            .theme(color_eyre::config::Theme::new())
-            .install()?;
-    } else {
-        tracing_subscriber::fmt().init();
-        color_eyre::install()?;
+    macro_rules! init_tracing {
+        ($fmt_layer:expr, $tracer:expr) => {{
+            let filter =
+                EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+            let otlp_layer = $tracer.map(|t| tracing_opentelemetry::layer().with_tracer(t));
+            tracing_subscriber::registry()
+                .with(filter)
+                .with(QueryIdLayer::new())
+                .with($fmt_layer)
+                .with(otlp_layer)
+                .init();
+        }};
     }
+
+    let tracer = args
+        .otlp_endpoint
+        .as_ref()
+        .map(|endpoint| init_otlp_tracer(endpoint))
+        .transpose()?
+        .map(|provider| provider.tracer("miso"));
+
+    if args.log_json {
+        init_tracing!(fmt::layer().event_format(QueryIdJsonFormat), tracer);
+    } else {
+        init_tracing!(fmt::layer(), tracer);
+    }
+
+    color_eyre::config::HookBuilder::default()
+        .theme(color_eyre::config::Theme::new())
+        .install()?;
 
     info!(?args, "Init");
 
