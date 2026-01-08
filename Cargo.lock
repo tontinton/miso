@@ -2035,12 +2035,17 @@ dependencies = [
 name = "miso-optimizations"
 version = "0.1.0"
 dependencies = [
+ "axum",
  "color-eyre",
  "hashbrown 0.15.5",
  "miso-common",
+ "miso-connectors",
  "miso-workflow",
  "miso-workflow-types",
+ "parking_lot",
+ "serde",
  "test-case",
+ "typetag",
 ]
 
 [[package]]
