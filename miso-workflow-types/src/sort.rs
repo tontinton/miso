@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::field::Field;
 
-#[derive(Debug, Serialize, Deserialize, Default, PartialEq, Clone)]
+#[derive(Debug, Serialize, Deserialize, Default, PartialEq, Clone, Copy)]
 #[serde(rename_all = "snake_case")]
 pub enum SortOrder {
     #[default]
@@ -12,7 +12,7 @@ pub enum SortOrder {
     Desc,
 }
 
-#[derive(Debug, Serialize, Deserialize, Default, PartialEq, Clone)]
+#[derive(Debug, Serialize, Deserialize, Default, PartialEq, Clone, Copy)]
 #[serde(rename_all = "snake_case")]
 pub enum NullsOrder {
     #[default]

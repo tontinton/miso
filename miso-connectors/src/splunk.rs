@@ -155,7 +155,7 @@ enum SplunkOp {
     Search(String),
     /// `| where` - slower, but needed for functions like isnotnull(), like()
     Where(String),
-    Sort(Vec<(String, bool)>),
+    Sort(Vec<(String, SortOrder)>),
     Head(u64),
     Stats {
         aggs: String,
@@ -261,12 +261,9 @@ impl SplunkHandle {
                     spl.push_str(" | sort ");
                     let sort_clause = sorts
                         .iter()
-                        .map(|(field, desc)| {
-                            if *desc {
-                                format!("-{}", field)
-                            } else {
-                                format!("+{}", field)
-                            }
+                        .map(|(field, order)| match order {
+                            SortOrder::Asc => format!("+{}", field),
+                            SortOrder::Desc => format!("-{}", field),
                         })
                         .collect::<Vec<_>>()
                         .join(", ");
@@ -334,7 +331,7 @@ impl SplunkHandle {
 
 impl fmt::Display for SplunkHandle {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut items = Vec::new();
+        let mut items = Vec::with_capacity(1 + self.pipeline.len());
 
         if !self.indexes.is_empty() {
             items.push(format!("unions=[{}]", self.indexes.join(", ")));
@@ -347,7 +344,16 @@ impl fmt::Display for SplunkHandle {
                 SplunkOp::Sort(sorts) => {
                     let s = sorts
                         .iter()
-                        .map(|(field, desc)| format!("{}{}", if *desc { "-" } else { "+" }, field))
+                        .map(|(field, order)| {
+                            format!(
+                                "{}{}",
+                                match order {
+                                    SortOrder::Asc => "+",
+                                    SortOrder::Desc => "-",
+                                },
+                                field
+                            )
+                        })
                         .collect::<Vec<_>>()
                         .join(", ");
                     items.push(format!("sort={}", s));
@@ -1211,13 +1217,13 @@ impl Connector for SplunkConnector {
 
         // Skip sort by _time desc - Splunk returns results in this order by default.
         // Adding `| sort -_time` forces Splunk to process the entire dataset.
-        let splunk_sorts: Vec<(String, bool)> = sorts
+        let splunk_sorts: Vec<(String, SortOrder)> = sorts
             .iter()
             .filter(|s| {
                 let is_desc = s.order == SortOrder::Desc;
                 !(is_timestamp_field(&s.by) && is_desc)
             })
-            .map(|s| (s.by.to_string(), s.order == SortOrder::Desc))
+            .map(|s| (s.by.to_string(), s.order))
             .collect();
 
         let mut new_handle = handle.clone();
@@ -1381,8 +1387,8 @@ mod tests {
         #[test]
         fn with_sort() {
             let handle = SplunkHandle::default().push(SplunkOp::Sort(vec![
-                ("foo".into(), true),
-                ("bar".into(), false),
+                ("foo".into(), SortOrder::Desc),
+                ("bar".into(), SortOrder::Asc),
             ]));
             assert_eq!(
                 handle.build_spl("myindex"),
