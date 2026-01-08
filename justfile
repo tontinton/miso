@@ -14,7 +14,7 @@ test-workflow-stress:
     WORKFLOW_TEST_RUNS=1000 cargo nextest run -p miso-workflow
 
 # Run all tests (`just test`) but without any connector predicate pushdown tests
-test-without-pp:
+test-no-pp:
     cargo nextest run --workspace -E 'not test(predicate_pushdown)'
 
 lint:
