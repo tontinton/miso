@@ -532,7 +532,8 @@ impl Workflow {
             threads.extend(inner_threads);
             async_tasks.extend(inner_async_tasks);
 
-            let iter = SendOnce::new(CancelIter::new(iter, cancel.clone()));
+            // SAFETY: iter is only accessed on the spawned thread via take()
+            let iter = unsafe { SendOnce::new(CancelIter::new(iter, cancel.clone())) };
             threads.push(spawn(
                 move || execute_pipeline(iter.take(), tx).context("pipe iter to tx"),
                 "pipeline",

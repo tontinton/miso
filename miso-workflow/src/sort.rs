@@ -164,7 +164,8 @@ pub fn sort_rx(
 ) -> (Receiver<LogItem>, ThreadRx) {
     let (tx, rx) = flume::bounded(CHANNEL_CAPACITY);
 
-    let input = SendOnce::new(input);
+    // SAFETY: input is only accessed on the spawned thread via take()
+    let input = unsafe { SendOnce::new(input) };
     let thread = spawn(
         move || {
             let config = SortConfig::new(sorts);

@@ -7,7 +7,9 @@ pub struct SendOnce<T>(Option<T>);
 unsafe impl<T> Send for SendOnce<T> {}
 
 impl<T> SendOnce<T> {
-    pub fn new(value: T) -> Self {
+    /// # Safety
+    /// The inner value must only be accessed on one thread (the destination thread).
+    pub unsafe fn new(value: T) -> Self {
         SendOnce(Some(value))
     }
 

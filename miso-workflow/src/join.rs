@@ -444,7 +444,8 @@ fn workflow_rx_to_rxs(rx: WorkflowRx) -> (Vec<Receiver<Log>>, Option<ThreadRx>) 
         WorkflowRx::None => panic!("join cannot be the first step"),
         WorkflowRx::Pipeline(iter) => {
             let (tx, rx) = flume::bounded(CHANNEL_CAPACITY);
-            let iter = SendOnce::new(iter);
+            // SAFETY: iter is only accessed on the spawned thread via take()
+            let iter = unsafe { SendOnce::new(iter) };
             let thread = spawn(move || pipe_logiter_to_tx(iter.take(), tx), "join-pipe");
             (vec![rx], Some(thread))
         }
