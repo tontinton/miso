@@ -193,6 +193,22 @@ fn remove_sorts_before_count() {
 }
 
 #[test]
+fn remove_sorts_before_summarize() {
+    let summarize = Summarize {
+        aggs: hashmap! { field("c") => Aggregation::Count },
+        by: vec![Expr::Field(field("x"))],
+    };
+    check_default(
+        vec![
+            S::Sort(vec![]),
+            S::Sort(vec![]),
+            S::Summarize(summarize.clone()),
+        ],
+        vec![S::Summarize(summarize)],
+    );
+}
+
+#[test]
 fn remove_redundant_steps_before_count() {
     check_default(
         vec![
