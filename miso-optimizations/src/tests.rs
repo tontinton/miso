@@ -352,18 +352,6 @@ fn reorder_filter_before_sort() {
     );
 }
 
-#[test]
-fn reorder_filter_before_mux() {
-    let filter = S::Filter(Expr::Eq(
-        Box::new(Expr::Field(field("a"))),
-        Box::new(Expr::Literal(Value::String("b".to_string()))),
-    ));
-    check_default(
-        vec![S::MuxLimit(1), filter.clone()],
-        vec![filter, S::MuxLimit(1)],
-    );
-}
-
 #[test_case(
     S::Project(vec![rename_project("a", "b")]),
     S::Filter(Expr::Eq(Box::new(Expr::Field(field("a"))), Box::new(Expr::Literal(string_val("test"))))),

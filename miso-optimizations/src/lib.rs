@@ -19,7 +19,6 @@ use remove_redundant_empty_steps::RemoveRedundantEmptySteps;
 use remove_redundant_sorts_before_count::RemoveRedundantSortsBeforeCount;
 use remove_redundant_steps_before_count::RemoveRedundantStepsBeforeCount;
 use reorder_filter_before_sort::ReorderFilterBeforeSort;
-use reorder_steps_before_mux::ReorderStepsBeforeMux;
 use split_scan_to_union::SplitScanIntoUnion;
 
 mod const_folding;
@@ -40,7 +39,6 @@ mod remove_redundant_empty_steps;
 mod remove_redundant_sorts_before_count;
 mod remove_redundant_steps_before_count;
 mod reorder_filter_before_sort;
-mod reorder_steps_before_mux;
 mod split_scan_to_union;
 
 #[cfg(test)]
@@ -128,7 +126,6 @@ impl Optimizer {
                 opt!(PushStepsIntoUnion),
                 // Mux.
                 opt!(MuxIntoUnion),
-                opt!(ReorderStepsBeforeMux),
                 // Join.
                 opt!(PushJoinIntoScan),
             ],
