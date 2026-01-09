@@ -1,13 +1,9 @@
-use std::str::FromStr;
-
 use hashbrown::HashMap;
 use miso_common::hashmap;
 use miso_workflow::{Workflow, WorkflowStep as S, display::DisplayableWorkflowSteps};
 use miso_workflow_types::{
-    expand::Expand,
     expr::Expr,
-    field::Field,
-    field_unwrap, json,
+    json,
     project::ProjectField,
     sort::{NullsOrder, Sort, SortOrder},
     summarize::{Aggregation, Summarize},
@@ -16,60 +12,7 @@ use miso_workflow_types::{
 use test_case::test_case;
 
 use super::Optimizer;
-
-fn field(name: &str) -> Field {
-    field_unwrap!(name)
-}
-
-fn sort_asc(by: Field) -> Sort {
-    Sort {
-        by,
-        order: SortOrder::Asc,
-        nulls: NullsOrder::Last,
-    }
-}
-
-fn sort_desc(by: Field) -> Sort {
-    Sort {
-        by,
-        order: SortOrder::Desc,
-        nulls: NullsOrder::Last,
-    }
-}
-
-fn project_field(to: &str, from: Expr) -> ProjectField {
-    ProjectField {
-        to: field(to),
-        from,
-    }
-}
-
-fn literal_project(to: &str, value: Value) -> ProjectField {
-    project_field(to, Expr::Literal(value))
-}
-
-fn rename_project(to: &str, from: &str) -> ProjectField {
-    project_field(to, Expr::Field(field(from)))
-}
-
-fn noop_project(to: &str) -> ProjectField {
-    project_field(to, Expr::Field(field(to)))
-}
-
-fn expand(fields: Vec<Field>) -> Expand {
-    Expand {
-        fields,
-        ..Default::default()
-    }
-}
-
-fn string_val(s: &str) -> Value {
-    Value::String(s.to_string())
-}
-
-fn int_val(n: i32) -> Value {
-    Value::from(n)
-}
+use crate::test_utils::*;
 
 fn check(optimizer: Optimizer, input: Vec<S>, expected: Vec<S>) {
     let result = optimizer.optimize(input.clone());

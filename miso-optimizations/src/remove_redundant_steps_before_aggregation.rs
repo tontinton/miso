@@ -47,39 +47,17 @@ fn get_defined_fields(step: &WorkflowStep) -> HashSet<Field> {
 
 #[cfg(test)]
 mod tests {
-    use std::str::FromStr;
-
     use miso_common::hashmap;
     use miso_workflow::WorkflowStep as S;
     use miso_workflow_types::{
         expr::Expr,
-        field::Field,
-        field_unwrap,
-        project::ProjectField,
         summarize::{Aggregation, Summarize},
     };
     use test_case::test_case;
 
     use super::RemoveRedundantStepsBeforeAggregation;
     use crate::Optimization;
-
-    fn field(name: &str) -> Field {
-        field_unwrap!(name)
-    }
-
-    fn project_field(name: &str, from: Expr) -> ProjectField {
-        ProjectField {
-            to: field(name),
-            from,
-        }
-    }
-
-    fn summarize(agg_field: &str, agg: Aggregation, by: Vec<Expr>) -> S {
-        S::Summarize(Summarize {
-            aggs: hashmap! { field(agg_field) => agg },
-            by,
-        })
-    }
+    use crate::test_utils::{field, project_field, summarize};
 
     #[test_case(
         S::Project(vec![project_field("unused", Expr::Field(field("a")))]),

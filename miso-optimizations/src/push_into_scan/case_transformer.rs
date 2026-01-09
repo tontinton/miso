@@ -97,48 +97,10 @@ impl CaseToOrTransformer {
 
 #[cfg(test)]
 mod tests {
-    use std::str::FromStr;
-
-    use miso_workflow_types::{field::Field, field_unwrap, value::Value};
     use test_case::test_case;
 
     use super::*;
-
-    fn field(name: &str) -> Expr {
-        Expr::Field(field_unwrap!(name))
-    }
-
-    fn lit(val: i64) -> Expr {
-        Expr::Literal(Value::Int(val))
-    }
-
-    fn gt(l: Expr, r: Expr) -> Expr {
-        Expr::Gt(Box::new(l), Box::new(r))
-    }
-
-    fn lt(l: Expr, r: Expr) -> Expr {
-        Expr::Lt(Box::new(l), Box::new(r))
-    }
-
-    fn mul(l: Expr, r: Expr) -> Expr {
-        Expr::Mul(Box::new(l), Box::new(r))
-    }
-
-    fn and(l: Expr, r: Expr) -> Expr {
-        Expr::And(Box::new(l), Box::new(r))
-    }
-
-    fn or(l: Expr, r: Expr) -> Expr {
-        Expr::Or(Box::new(l), Box::new(r))
-    }
-
-    fn not(e: Expr) -> Expr {
-        Expr::Not(Box::new(e))
-    }
-
-    fn case(predicates: Vec<(Expr, Expr)>, default: Expr) -> Expr {
-        Expr::Case(predicates, Box::new(default))
-    }
+    use crate::test_utils::{and, case, field_expr as field, gt, lit, lt, mul, not, or};
 
     #[test_case(
         // case(id > 10, 100, 50)

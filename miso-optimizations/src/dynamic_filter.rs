@@ -143,7 +143,7 @@ fn calculate_max_distinct_count(
 
 #[cfg(test)]
 mod tests {
-    use std::{any::Any, fmt, str::FromStr, sync::Arc};
+    use std::{any::Any, fmt, sync::Arc};
 
     use axum::async_trait;
     use color_eyre::Result;
@@ -152,12 +152,13 @@ mod tests {
         Collection, Connector, QueryHandle, QueryResponse, Split,
         stats::{CollectionStats, ConnectorStats, FieldStats},
     };
-    use miso_workflow::WorkflowStep;
-    use miso_workflow_types::{expr::Expr, field::Field, field_unwrap, summarize::Summarize};
+    use miso_workflow::{WorkflowStep, scan::Scan};
+    use miso_workflow_types::{expr::Expr, summarize::Summarize};
     use parking_lot::Mutex;
     use serde::{Deserialize, Serialize};
 
     use super::calculate_max_distinct_count;
+    use crate::test_utils::summarize_by;
 
     #[derive(Debug, Clone, Serialize, Deserialize, Default)]
     struct TestHandle;
@@ -205,7 +206,7 @@ mod tests {
         async fn close(&self) {}
     }
 
-    fn scan(field_stats: Vec<(&str, u64)>) -> miso_workflow::scan::Scan {
+    fn scan(field_stats: Vec<(&str, u64)>) -> Scan {
         let mut collection_stats = CollectionStats::new();
         for (field, distinct_count) in field_stats {
             collection_stats.insert(
@@ -218,7 +219,7 @@ mod tests {
         let mut connector_stats = ConnectorStats::new();
         connector_stats.insert("c".to_string(), collection_stats);
 
-        miso_workflow::scan::Scan {
+        Scan {
             connector_name: "test".to_string(),
             collection: "c".to_string(),
             static_fields: HashMap::new(),
@@ -231,18 +232,7 @@ mod tests {
         }
     }
 
-    fn field(name: &str) -> Field {
-        field_unwrap!(name)
-    }
-
-    fn summarize_by(fields: &[&str]) -> WorkflowStep {
-        WorkflowStep::Summarize(Summarize {
-            aggs: HashMap::new(),
-            by: fields.iter().map(|f| Expr::Field(field(f))).collect(),
-        })
-    }
-
-    fn calc(scan: &miso_workflow::scan::Scan, steps: &[WorkflowStep]) -> Option<u64> {
+    fn calc(scan: &Scan, steps: &[WorkflowStep]) -> Option<u64> {
         calculate_max_distinct_count("id".to_string(), scan, steps)
     }
 

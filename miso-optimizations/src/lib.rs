@@ -42,6 +42,8 @@ mod reorder_filter_before_sort;
 mod split_scan_to_union;
 
 #[cfg(test)]
+mod test_utils;
+#[cfg(test)]
 mod tests;
 
 macro_rules! opt {
