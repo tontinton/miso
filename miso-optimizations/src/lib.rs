@@ -17,7 +17,7 @@ use push_steps_into_union::PushStepsIntoUnion;
 use push_union_into_scan::PushUnionIntoScan;
 use remove_redundant_empty_steps::RemoveRedundantEmptySteps;
 use remove_redundant_sorts_before_aggregation::RemoveRedundantSortsBeforeAggregation;
-use remove_redundant_steps_before_count::RemoveRedundantStepsBeforeCount;
+use remove_redundant_steps_before_aggregation::RemoveRedundantStepsBeforeAggregation;
 use reorder_filter_before_sort::ReorderFilterBeforeSort;
 use split_scan_to_union::SplitScanIntoUnion;
 
@@ -37,7 +37,7 @@ mod push_steps_into_union;
 mod push_union_into_scan;
 mod remove_redundant_empty_steps;
 mod remove_redundant_sorts_before_aggregation;
-mod remove_redundant_steps_before_count;
+mod remove_redundant_steps_before_aggregation;
 mod reorder_filter_before_sort;
 mod split_scan_to_union;
 
@@ -120,7 +120,7 @@ impl Optimizer {
                 opt!(PushLimitIntoTopN),
                 // Count.
                 opt!(RemoveRedundantSortsBeforeAggregation),
-                opt!(RemoveRedundantStepsBeforeCount),
+                opt!(RemoveRedundantStepsBeforeAggregation),
                 // Union.
                 opt!(PushUnionIntoScan),
                 opt!(PushStepsIntoUnion),

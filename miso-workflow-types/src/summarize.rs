@@ -1,6 +1,6 @@
 use std::fmt;
 
-use hashbrown::HashMap;
+use hashbrown::{HashMap, HashSet};
 use serde::{Deserialize, Serialize};
 
 use crate::{expr::Expr, field::Field};
@@ -120,5 +120,29 @@ impl Summarize {
 
     pub fn is_empty(&self) -> bool {
         self.aggs.is_empty() && self.by.is_empty()
+    }
+
+    pub fn used_fields(&self) -> HashSet<Field> {
+        let mut fields = HashSet::new();
+
+        for agg in self.aggs.values() {
+            match agg {
+                Aggregation::Count => {}
+                Aggregation::Countif(expr) => fields.extend(expr.fields()),
+                Aggregation::DCount(f)
+                | Aggregation::Sum(f)
+                | Aggregation::Avg(f)
+                | Aggregation::Min(f)
+                | Aggregation::Max(f) => {
+                    fields.insert(f.clone());
+                }
+            }
+        }
+
+        for expr in &self.by {
+            fields.extend(expr.fields());
+        }
+
+        fields
     }
 }

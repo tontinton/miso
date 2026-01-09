@@ -222,6 +222,23 @@ fn remove_redundant_steps_before_count() {
 }
 
 #[test]
+fn remove_redundant_steps_before_summarize() {
+    let summarize = Summarize {
+        aggs: hashmap! { field("c") => Aggregation::Count },
+        by: vec![Expr::Field(field("x"))],
+    };
+    check_default(
+        vec![
+            S::Project(vec![]),
+            S::Extend(vec![]),
+            S::Rename(vec![]),
+            S::Summarize(summarize.clone()),
+        ],
+        vec![S::Summarize(summarize)],
+    );
+}
+
+#[test]
 fn dont_remove_sorts_before_limit_before_count() {
     let sort = S::Sort(vec![Sort {
         by: field("a"),
