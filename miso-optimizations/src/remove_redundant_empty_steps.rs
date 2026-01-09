@@ -8,7 +8,7 @@ pub struct RemoveRedundantEmptySteps;
 
 impl Optimization for RemoveRedundantEmptySteps {
     fn pattern(&self) -> Pattern {
-        pattern!([Rename Extend Sort])
+        pattern!([Rename Extend Sort Expand])
     }
 
     fn apply(&self, steps: &[WorkflowStep], _groups: &[Group]) -> Option<Vec<WorkflowStep>> {
