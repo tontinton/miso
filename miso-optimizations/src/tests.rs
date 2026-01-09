@@ -3,6 +3,7 @@ use miso_common::hashmap;
 use miso_workflow::{Workflow, WorkflowStep as S, display::DisplayableWorkflowSteps};
 use miso_workflow_types::{
     expr::Expr,
+    join::{Join, JoinType},
     json,
     project::ProjectField,
     sort::{NullsOrder, Sort, SortOrder},
@@ -1146,9 +1147,9 @@ fn remove_no_op_filter_where_true() {
 }
 
 #[test]
-fn no_op_filter_keeps_where_false() {
+fn where_false_short_circuits() {
     let filter = S::Filter(Expr::Literal(Value::Bool(false)));
-    check_default(vec![filter.clone()], vec![filter]);
+    check_default(vec![filter], vec![]);
 }
 
 #[test]
@@ -1288,4 +1289,34 @@ fn const_fold_only_affects_first_matched_step() {
     ];
 
     check_default(filter_then_project, expected);
+}
+
+#[test]
+fn union_inner_short_circuit_removes_union() {
+    let inner = Workflow::new(vec![S::Filter(Expr::Literal(Value::Bool(false)))]);
+    check_default(vec![S::Union(inner), S::Limit(10)], vec![S::Limit(10)]);
+}
+
+#[test_case(JoinType::Inner)]
+#[test_case(JoinType::Right)]
+fn join_inner_right_short_circuit_returns_empty(type_: JoinType) {
+    let join = Join {
+        on: (field("id"), field("id")),
+        type_,
+        partitions: 1,
+    };
+    let inner = Workflow::new(vec![S::Filter(Expr::Literal(Value::Bool(false)))]);
+    check_default(vec![S::Join(join, inner), S::Limit(10)], vec![]);
+}
+
+#[test_case(JoinType::Left)]
+#[test_case(JoinType::Outer)]
+fn join_left_outer_short_circuit_removes_join(type_: JoinType) {
+    let join = Join {
+        on: (field("id"), field("id")),
+        type_,
+        partitions: 1,
+    };
+    let inner = Workflow::new(vec![S::Filter(Expr::Literal(Value::Bool(false)))]);
+    check_default(vec![S::Join(join, inner), S::Limit(10)], vec![S::Limit(10)]);
 }

@@ -3,7 +3,7 @@ use miso_workflow::{WorkflowStep, scan::Scan};
 
 use crate::pattern;
 
-use super::{Group, Optimization, Pattern};
+use super::{Group, Optimization, OptimizationResult, Pattern};
 
 pub struct DynamicFilter {
     max_distinct_values: u64,
@@ -22,15 +22,15 @@ impl Optimization for DynamicFilter {
         pattern!(Scan [Count Limit TopN Summarize Sort Filter]*? Join)
     }
 
-    fn apply(&self, steps: &[WorkflowStep], _groups: &[Group]) -> Option<Vec<WorkflowStep>> {
+    fn apply(&self, steps: &[WorkflowStep], _groups: &[Group]) -> OptimizationResult {
         let WorkflowStep::Scan(left_scan) = &steps[0] else {
-            return None;
+            return OptimizationResult::Unchanged;
         };
         let WorkflowStep::Join(join, workflow) = &steps[steps.len() - 1] else {
-            return None;
+            return OptimizationResult::Unchanged;
         };
         let WorkflowStep::Scan(right_scan) = &workflow.steps[0] else {
-            return None;
+            return OptimizationResult::Unchanged;
         };
 
         let (left_join_field, right_join_field) = &join.on;
@@ -60,13 +60,13 @@ impl Optimization for DynamicFilter {
         .unwrap_or(self.max_distinct_values);
 
         if left_dcount >= self.max_distinct_values && right_dcount >= self.max_distinct_values {
-            return None;
+            return OptimizationResult::Unchanged;
         }
 
         let mut left_scan = left_scan.clone();
         let mut workflow = workflow.clone();
         let WorkflowStep::Scan(right_scan) = &mut workflow.steps[0] else {
-            return None;
+            return OptimizationResult::Unchanged;
         };
 
         let watch = Watch::default();
@@ -88,7 +88,7 @@ impl Optimization for DynamicFilter {
         *steps.first_mut().unwrap() = WorkflowStep::Scan(left_scan);
         *steps.last_mut().unwrap() = WorkflowStep::Join(join.clone(), workflow);
 
-        Some(steps)
+        OptimizationResult::Changed(steps)
     }
 }
 

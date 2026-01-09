@@ -1986,3 +1986,60 @@ async fn filter_with_nested_null_logic() -> Result<()> {
     )
     .await
 }
+
+#[tokio::test]
+async fn short_circuit_where_false() -> Result<()> {
+    check(
+        r#"test.c | where false"#,
+        r#"[{"x": 1}, {"x": 2}, {"x": 3}]"#,
+        r#"[]"#,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn short_circuit_union_where_false() -> Result<()> {
+    check_multi_collection()
+        .query(r#"test.x | union (test.y | where false)"#)
+        .input(btreemap! {
+            "x" => r#"[{"id": 1}, {"id": 2}]"#,
+            "y" => r#"[{"id": 3}, {"id": 4}]"#,
+        })
+        .expect(r#"[{"id": 1}, {"id": 2}]"#)
+        .call()
+        .await
+}
+
+#[tokio::test]
+#[test_case("inner")]
+#[test_case("right")]
+async fn short_circuit_join_returns_empty(kind: &str) -> Result<()> {
+    check_multi_collection()
+        .query(&format!(
+            r#"test.left | join kind={kind} (test.right | where false) on id"#
+        ))
+        .input(btreemap! {
+            "left"  => r#"[{"id": 1, "value": "a"}]"#,
+            "right" => r#"[{"id": 1, "value": "b"}]"#,
+        })
+        .expect(r#"[]"#)
+        .call()
+        .await
+}
+
+#[tokio::test]
+#[test_case("left")]
+#[test_case("outer")]
+async fn short_circuit_join_returns_left_side(kind: &str) -> Result<()> {
+    check_multi_collection()
+        .query(&format!(
+            r#"test.left | join kind={kind} (test.right | where false) on id"#
+        ))
+        .input(btreemap! {
+            "left"  => r#"[{"id": 1, "value": "a"}, {"id": 2, "value": "b"}]"#,
+            "right" => r#"[{"id": 1, "value": "A"}]"#,
+        })
+        .expect(r#"[{"id": 1, "value": "a"}, {"id": 2, "value": "b"}]"#)
+        .call()
+        .await
+}

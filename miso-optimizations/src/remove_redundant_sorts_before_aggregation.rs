@@ -2,17 +2,16 @@ use miso_workflow::WorkflowStep;
 
 use crate::pattern;
 
-use super::{Group, Optimization, Pattern};
+use super::{Group, Optimization, OptimizationResult, Pattern};
 
 pub struct RemoveRedundantSortsBeforeAggregation;
 
 impl Optimization for RemoveRedundantSortsBeforeAggregation {
     fn pattern(&self) -> Pattern {
-        // Sort -> Limit modifies count, so we don't want to match on limit between sort and aggregation.
         pattern!(Sort ([^Limit]*?) [Count Summarize MuxSummarize])
     }
 
-    fn apply(&self, steps: &[WorkflowStep], groups: &[Group]) -> Option<Vec<WorkflowStep>> {
+    fn apply(&self, steps: &[WorkflowStep], groups: &[Group]) -> OptimizationResult {
         assert_eq!(groups.len(), 1);
 
         let (start, end) = groups[0];
@@ -24,6 +23,6 @@ impl Optimization for RemoveRedundantSortsBeforeAggregation {
             .collect::<Vec<_>>();
         modified_steps.push(steps.last().unwrap().clone());
 
-        Some(modified_steps)
+        OptimizationResult::Changed(modified_steps)
     }
 }

@@ -3,7 +3,7 @@ pub mod partial_evaluator;
 use miso_workflow::WorkflowStep;
 use miso_workflow_types::project::ProjectField;
 
-use crate::{const_folding::partial_evaluator::partial_eval, pattern};
+use crate::{OptimizationResult, const_folding::partial_evaluator::partial_eval, pattern};
 
 use super::{Group, Optimization, Pattern};
 
@@ -15,8 +15,8 @@ impl Optimization for ConstFolding {
         pattern!([Filter Project Extend]+)
     }
 
-    fn apply(&self, steps: &[WorkflowStep], _groups: &[Group]) -> Option<Vec<WorkflowStep>> {
-        Some(
+    fn apply(&self, steps: &[WorkflowStep], _groups: &[Group]) -> OptimizationResult {
+        OptimizationResult::Changed(
             steps
                 .iter()
                 .map(|step| match step {

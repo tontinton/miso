@@ -13,7 +13,8 @@ use miso_workflow_types::{
 };
 
 use crate::{
-    Group, Optimization, Pattern, pattern, project_propagation::expr_substitude::ExprSubstitute,
+    Group, Optimization, OptimizationResult, Pattern, pattern,
+    project_propagation::expr_substitude::ExprSubstitute,
 };
 
 /// Propagate renames and literal assignments into later steps, to move the project step
@@ -36,8 +37,11 @@ impl Optimization for ProjectPropagationWithoutEnd {
         pattern!([Project Extend Rename] ([Filter Sort TopN Limit Extend Rename Expand]+))
     }
 
-    fn apply(&self, steps: &[WorkflowStep], groups: &[Group]) -> Option<Vec<WorkflowStep>> {
-        apply(steps, groups[0], false)
+    fn apply(&self, steps: &[WorkflowStep], groups: &[Group]) -> OptimizationResult {
+        match apply(steps, groups[0], false) {
+            Some(steps) => OptimizationResult::Changed(steps),
+            None => OptimizationResult::Unchanged,
+        }
     }
 }
 
@@ -46,8 +50,11 @@ impl Optimization for ProjectPropagationWithEnd {
         pattern!([Project Extend Rename] ([Filter Sort TopN Limit Extend Rename Expand]*?) [Project Summarize MuxSummarize])
     }
 
-    fn apply(&self, steps: &[WorkflowStep], groups: &[Group]) -> Option<Vec<WorkflowStep>> {
-        apply(steps, groups[0], true)
+    fn apply(&self, steps: &[WorkflowStep], groups: &[Group]) -> OptimizationResult {
+        match apply(steps, groups[0], true) {
+            Some(steps) => OptimizationResult::Changed(steps),
+            None => OptimizationResult::Unchanged,
+        }
     }
 }
 

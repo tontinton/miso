@@ -1,6 +1,7 @@
 use std::collections::BTreeSet;
 
 use miso_workflow::{WorkflowStep, WorkflowStepKind};
+use miso_workflow_types::join::JoinType;
 
 use const_folding::ConstFolding;
 use convert_sort_limit_to_topn::ConvertSortLimitToTopN;
@@ -20,6 +21,7 @@ use remove_redundant_empty_steps::RemoveRedundantEmptySteps;
 use remove_redundant_sorts_before_aggregation::RemoveRedundantSortsBeforeAggregation;
 use remove_redundant_steps_before_aggregation::RemoveRedundantStepsBeforeAggregation;
 use reorder_filter_before_sort::ReorderFilterBeforeSort;
+use short_circuit_false_filter::ShortCircuitFalseFilter;
 use split_scan_to_union::SplitScanIntoUnion;
 
 mod const_folding;
@@ -41,6 +43,7 @@ mod remove_redundant_empty_steps;
 mod remove_redundant_sorts_before_aggregation;
 mod remove_redundant_steps_before_aggregation;
 mod reorder_filter_before_sort;
+mod short_circuit_false_filter;
 mod split_scan_to_union;
 
 #[cfg(test)]
@@ -69,9 +72,16 @@ macro_rules! opt_once {
 /// Like dynamic-filtering.small.max-distinct-values-per-driver in trino.
 const DEFAULT_MAX_DISTINCT_COUNT_FOR_DYNAMIC_FILTER: u64 = 10000;
 
+#[derive(Debug, PartialEq)]
+pub enum OptimizationResult {
+    Unchanged,
+    Changed(Vec<WorkflowStep>),
+    ShortCircuit,
+}
+
 pub trait Optimization: Send + Sync {
     fn pattern(&self) -> Pattern;
-    fn apply(&self, steps: &[WorkflowStep], groups: &[Group]) -> Option<Vec<WorkflowStep>>;
+    fn apply(&self, steps: &[WorkflowStep], groups: &[Group]) -> OptimizationResult;
 }
 
 struct OptimizationStep {
@@ -118,6 +128,7 @@ impl Optimizer {
                 opt!(RemoveRedundantEmptySteps),
                 // Filter.
                 opt!(RemoveNoOpFilter),
+                opt!(ShortCircuitFalseFilter),
                 opt!(ReorderFilterBeforeSort),
                 // Limit.
                 opt!(PushLimitIntoLimit),
@@ -174,13 +185,19 @@ struct SubQueryAlreadyRan {
     join: BTreeSet<usize>,
 }
 
+enum PassResult {
+    NotOptimized,
+    Optimized,
+    ShortCircuit,
+}
+
 fn run_optimization_pass(
     optimizations: &[OptimizationStep],
     patterns: &[Pattern],
     steps: &mut Vec<WorkflowStep>,
     kinded_steps: &mut Vec<WorkflowStepKind>,
     already_ran: &mut BTreeSet<usize>,
-) -> bool {
+) -> PassResult {
     let mut optimized = false;
     let mut optimized_in_loop = true;
 
@@ -212,12 +229,16 @@ fn run_optimization_pass(
                 last_start = Some(current_start);
 
                 let matched_groups = std::mem::take(&mut groups);
-                let Some(new_steps) = optimization_step.optimization.apply(
+                let new_steps = match optimization_step.optimization.apply(
                     &steps[current_start + start..current_start + end],
                     &matched_groups,
-                ) else {
-                    current_start += end - start;
-                    continue;
+                ) {
+                    OptimizationResult::Unchanged => {
+                        current_start += end - start;
+                        continue;
+                    }
+                    OptimizationResult::Changed(new_steps) => new_steps,
+                    OptimizationResult::ShortCircuit => return PassResult::ShortCircuit,
                 };
 
                 current_start += end.saturating_sub(new_steps.len() + start);
@@ -234,7 +255,11 @@ fn run_optimization_pass(
         }
     }
 
-    optimized
+    if optimized {
+        PassResult::Optimized
+    } else {
+        PassResult::NotOptimized
+    }
 }
 
 impl Optimizer {
@@ -243,72 +268,99 @@ impl Optimizer {
             return steps;
         }
 
-        let mut kinded_steps = to_kind(&steps);
-
         for (optimizations, patterns) in self.optimizations.iter().zip(&self.patterns) {
             let mut already_ran = AlreadyRan::default();
 
-            // Optimize inner workflows before root, so optimizations like scan / join pushdown (which
-            // require the right side to only contain a single scan step) will have a greater
-            // chance to run.
-            self.optimize_sub_query_steps(
+            if self.optimize_sub_query_steps(
                 optimizations,
                 patterns,
                 &mut steps,
                 &mut already_ran.subquery,
-            );
+            ) {
+                return vec![];
+            }
+            let mut kinded_steps = to_kind(&steps);
 
-            while run_optimization_pass(
-                optimizations,
-                patterns,
-                &mut steps,
-                &mut kinded_steps,
-                &mut already_ran.root,
-            ) {}
+            loop {
+                match run_optimization_pass(
+                    optimizations,
+                    patterns,
+                    &mut steps,
+                    &mut kinded_steps,
+                    &mut already_ran.root,
+                ) {
+                    PassResult::NotOptimized => break,
+                    PassResult::Optimized => {}
+                    PassResult::ShortCircuit => return vec![],
+                }
+            }
 
-            // Optimize inner workflows again, because some optimizations on the root added
-            // steps to the inner workflows (e.g. when splitting a summarize into partial / final,
-            // and pushing partial into the union).
-            self.optimize_sub_query_steps(
+            if self.optimize_sub_query_steps(
                 optimizations,
                 patterns,
                 &mut steps,
                 &mut already_ran.subquery,
-            );
+            ) {
+                return vec![];
+            }
         }
 
         steps
     }
 
-    /// Optimize the query steps inside union and join.
+    /// Returns whether to short-circuit.
     fn optimize_sub_query_steps(
         &self,
         optimizations: &[OptimizationStep],
         patterns: &[Pattern],
         steps: &mut Vec<WorkflowStep>,
         already_ran: &mut SubQueryAlreadyRan,
-    ) {
+    ) -> bool {
         let run = |steps: &mut Vec<WorkflowStep>, already_ran: &mut BTreeSet<usize>| {
             let mut kinded_steps = to_kind(steps);
-            while run_optimization_pass(
-                optimizations,
-                patterns,
-                steps,
-                &mut kinded_steps,
-                already_ran,
-            ) {}
+            loop {
+                match run_optimization_pass(
+                    optimizations,
+                    patterns,
+                    steps,
+                    &mut kinded_steps,
+                    already_ran,
+                ) {
+                    PassResult::NotOptimized => return false,
+                    PassResult::Optimized => {}
+                    PassResult::ShortCircuit => return true,
+                }
+            }
         };
 
-        for step in steps {
-            match step {
+        let mut i = 0;
+        while i < steps.len() {
+            match &mut steps[i] {
                 WorkflowStep::Union(workflow) => {
-                    run(&mut workflow.steps, &mut already_ran.union);
+                    if run(&mut workflow.steps, &mut already_ran.union) {
+                        steps.remove(i);
+                        continue;
+                    }
                 }
-                WorkflowStep::Join(_, workflow) => {
-                    run(&mut workflow.steps, &mut already_ran.join);
+                WorkflowStep::Join(join, workflow) => {
+                    if run(&mut workflow.steps, &mut already_ran.join) {
+                        match join.type_ {
+                            JoinType::Inner | JoinType::Right => return true,
+                            JoinType::Left | JoinType::Outer => {
+                                if let WorkflowStep::Scan(scan) = &mut steps[0] {
+                                    scan.dynamic_filter_tx = None;
+                                    scan.dynamic_filter_rx = None;
+                                }
+                                steps.remove(i);
+                                continue;
+                            }
+                        }
+                    }
                 }
                 _ => {}
             }
+            i += 1;
         }
+        false
     }
 }
