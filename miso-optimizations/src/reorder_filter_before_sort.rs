@@ -2,7 +2,7 @@ use miso_workflow::WorkflowStep;
 
 use crate::pattern;
 
-use super::{Group, Optimization, Pattern};
+use super::{Group, Optimization, OptimizationResult, Pattern};
 
 /// Allows for:
 ///  * Sorting less items.
@@ -15,7 +15,7 @@ impl Optimization for ReorderFilterBeforeSort {
         pattern!(Sort Filter)
     }
 
-    fn apply(&self, steps: &[WorkflowStep], _groups: &[Group]) -> Option<Vec<WorkflowStep>> {
-        Some(vec![steps[1].clone(), steps[0].clone()])
+    fn apply(&self, steps: &[WorkflowStep], _groups: &[Group]) -> OptimizationResult {
+        OptimizationResult::Changed(vec![steps[1].clone(), steps[0].clone()])
     }
 }

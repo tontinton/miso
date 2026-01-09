@@ -4,7 +4,7 @@ use miso_workflow_types::field::Field;
 
 use crate::pattern;
 
-use super::{Group, Optimization, Pattern};
+use super::{Group, Optimization, OptimizationResult, Pattern};
 
 pub struct RemoveRedundantStepsBeforeAggregation;
 
@@ -13,24 +13,24 @@ impl Optimization for RemoveRedundantStepsBeforeAggregation {
         pattern!([Project Extend Rename] [Count Summarize MuxSummarize])
     }
 
-    fn apply(&self, steps: &[WorkflowStep], _groups: &[Group]) -> Option<Vec<WorkflowStep>> {
+    fn apply(&self, steps: &[WorkflowStep], _groups: &[Group]) -> OptimizationResult {
         let agg_step = steps.last().unwrap();
 
         if matches!(agg_step, WorkflowStep::Count) {
-            return Some(vec![agg_step.clone()]);
+            return OptimizationResult::Changed(vec![agg_step.clone()]);
         }
 
         let summarize = match agg_step {
             WorkflowStep::Summarize(s) | WorkflowStep::MuxSummarize(s) => s,
-            _ => return None,
+            _ => return OptimizationResult::Unchanged,
         };
 
         let defined_fields = get_defined_fields(&steps[0]);
 
         if defined_fields.is_disjoint(&summarize.used_fields()) {
-            Some(vec![agg_step.clone()])
+            OptimizationResult::Changed(vec![agg_step.clone()])
         } else {
-            None
+            OptimizationResult::Unchanged
         }
     }
 }
@@ -56,8 +56,8 @@ mod tests {
     use test_case::test_case;
 
     use super::RemoveRedundantStepsBeforeAggregation;
-    use crate::Optimization;
     use crate::test_utils::{field, project_field, summarize};
+    use crate::{Optimization, OptimizationResult};
 
     #[test_case(
         S::Project(vec![project_field("unused", Expr::Field(field("a")))]),
@@ -77,7 +77,10 @@ mod tests {
     fn removes_step_when_fields_unused(step: S, summarize: S) {
         let opt = RemoveRedundantStepsBeforeAggregation;
         let steps = vec![step, summarize.clone()];
-        assert_eq!(opt.apply(&steps, &[]), Some(vec![summarize]));
+        assert_eq!(
+            opt.apply(&steps, &[]),
+            OptimizationResult::Changed(vec![summarize])
+        );
     }
 
     #[test_case(
@@ -98,6 +101,6 @@ mod tests {
     fn keeps_step_when_fields_used(step: S, summarize: S) {
         let opt = RemoveRedundantStepsBeforeAggregation;
         let steps = vec![step, summarize];
-        assert_eq!(opt.apply(&steps, &[]), None);
+        assert_eq!(opt.apply(&steps, &[]), OptimizationResult::Unchanged);
     }
 }

@@ -2,7 +2,7 @@ use miso_workflow::WorkflowStep;
 
 use crate::pattern;
 
-use super::{Group, Optimization, Pattern};
+use super::{Group, Optimization, OptimizationResult, Pattern};
 
 /// Some steps after unions, when inserted as a step into the union subquery, can allow for
 /// predicate pushdowns.
@@ -15,7 +15,7 @@ impl Optimization for MuxIntoUnion {
         pattern!(Union+ [Limit TopN Count Summarize])
     }
 
-    fn apply(&self, steps: &[WorkflowStep], _groups: &[Group]) -> Option<Vec<WorkflowStep>> {
+    fn apply(&self, steps: &[WorkflowStep], _groups: &[Group]) -> OptimizationResult {
         let orig_step = &steps[steps.len() - 1];
 
         let (partial_step, mux_step) = match orig_step {
@@ -32,7 +32,7 @@ impl Optimization for MuxIntoUnion {
                 WorkflowStep::MuxSummarize(summarize.clone().convert_to_mux()),
             ),
 
-            _ => return None,
+            _ => return OptimizationResult::Unchanged,
         };
 
         let mut new_steps = Vec::with_capacity(1 + steps.len());
@@ -46,6 +46,6 @@ impl Optimization for MuxIntoUnion {
             }
         }
 
-        Some(new_steps)
+        OptimizationResult::Changed(new_steps)
     }
 }
