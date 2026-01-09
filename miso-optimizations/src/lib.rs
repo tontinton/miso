@@ -15,6 +15,7 @@ use push_limit_into_limit::PushLimitIntoLimit;
 use push_limit_into_topn::PushLimitIntoTopN;
 use push_steps_into_union::PushStepsIntoUnion;
 use push_union_into_scan::PushUnionIntoScan;
+use remove_no_op_filter::RemoveNoOpFilter;
 use remove_redundant_empty_steps::RemoveRedundantEmptySteps;
 use remove_redundant_sorts_before_aggregation::RemoveRedundantSortsBeforeAggregation;
 use remove_redundant_steps_before_aggregation::RemoveRedundantStepsBeforeAggregation;
@@ -35,6 +36,7 @@ mod push_limit_into_limit;
 mod push_limit_into_topn;
 mod push_steps_into_union;
 mod push_union_into_scan;
+mod remove_no_op_filter;
 mod remove_redundant_empty_steps;
 mod remove_redundant_sorts_before_aggregation;
 mod remove_redundant_steps_before_aggregation;
@@ -115,6 +117,7 @@ impl Optimizer {
                 opt!(ProjectPropagationWithoutEnd),
                 opt!(RemoveRedundantEmptySteps),
                 // Filter.
+                opt!(RemoveNoOpFilter),
                 opt!(ReorderFilterBeforeSort),
                 // Limit.
                 opt!(PushLimitIntoLimit),

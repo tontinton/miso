@@ -1138,6 +1138,20 @@ fn test_project_propagation_partial_optimization_with_mixed_expressions() {
 }
 
 #[test]
+fn remove_no_op_filter_where_true() {
+    check_default(
+        vec![S::Filter(Expr::Literal(Value::Bool(true))), S::Limit(10)],
+        vec![S::Limit(10)],
+    );
+}
+
+#[test]
+fn no_op_filter_keeps_where_false() {
+    let filter = S::Filter(Expr::Literal(Value::Bool(false)));
+    check_default(vec![filter.clone()], vec![filter]);
+}
+
+#[test]
 fn const_fold_in_filter_simple_arith() {
     let filter = S::Filter(Expr::Gt(
         Box::new(Expr::Field(field("x"))),
