@@ -212,9 +212,7 @@ fn apply(
         }
         WorkflowStep::Project(fields) => {
             let new_fields = rewrite_project_fields(fields.to_vec(), &renames, &literals);
-            if !new_fields.is_empty() {
-                out.push(WorkflowStep::Project(new_fields));
-            }
+            out.push(WorkflowStep::Project(new_fields));
         }
         _ => unreachable!("not in end pattern"),
     }
