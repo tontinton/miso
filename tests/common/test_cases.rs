@@ -66,10 +66,40 @@ pub const BASE_PREDICATE_PUSHDOWN_TESTS: &[TestCase] = &[
         name: "filter_eq",
     },
     TestCase {
-        query: r#"test.stack | where body has_cs "isn't""#,
-        expected: expected!("test.stack"),
+        query: r#"test.stack | where body has_cs "This""#,
+        expected: expected!(
+            "test.stack",
+            Elastic => r#"test.stack | where body has_cs "This""#,
+        ),
         count: 1,
-        name: "filter_has_cs",
+        name: "filter_has_cs_uppercase",
+    },
+    TestCase {
+        query: r#"test.stack | where body has_cs "this""#,
+        expected: expected!(
+            "test.stack",
+            Elastic => r#"test.stack | where body has_cs "this""#,
+        ),
+        count: 4,
+        name: "filter_has_cs_lowercase",
+    },
+    TestCase {
+        query: r#"test.stack | where body has "This""#,
+        expected: expected!(
+            "test.stack",
+            Quickwit => r#"test.stack | where body has "This""#,
+        ),
+        count: 4,
+        name: "filter_has_uppercase",
+    },
+    TestCase {
+        query: r#"test.stack | where body has "this""#,
+        expected: expected!(
+            "test.stack",
+            Quickwit => r#"test.stack | where body has "this""#,
+        ),
+        count: 4,
+        name: "filter_has_lowercase",
     },
     TestCase {
         query: r#"test.stack | where acceptedAnswerId in (12446, 31)"#,

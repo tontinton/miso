@@ -667,8 +667,8 @@ fn compile_filter_to_spl(expr: &Expr) -> Option<FilterResult> {
             };
             FilterResult::Search(format!("{}={}*", field, prefix_str))
         }
-        Expr::HasCs(lhs, rhs) | Expr::Has(lhs, rhs) => {
-            let (Expr::Field(field), Expr::Literal(phrase)) = (&**lhs, &**rhs) else {
+        Expr::HasCs(lhs, rhs) => {
+            let (Expr::Field(field), Expr::Literal(Value::String(value))) = (&**lhs, &**rhs) else {
                 return None;
             };
             if field.has_array_access() {
@@ -677,13 +677,27 @@ fn compile_filter_to_spl(expr: &Expr) -> Option<FilterResult> {
             FilterResult::Where(format!(
                 "like({}, \"%{}%\")",
                 field,
-                match phrase {
-                    Value::String(s) => s
-                        .replace('\\', "\\\\")
-                        .replace('"', "\\\"")
-                        .replace('%', "\\%"),
-                    _ => return None,
-                }
+                value
+                    .replace('\\', "\\\\")
+                    .replace('"', "\\\"")
+                    .replace('%', "\\%"),
+            ))
+        }
+        Expr::Has(lhs, rhs) => {
+            let (Expr::Field(field), Expr::Literal(Value::String(value))) = (&**lhs, &**rhs) else {
+                return None;
+            };
+            if field.has_array_access() {
+                return None;
+            }
+            FilterResult::Where(format!(
+                "like(lower({}), \"%{}%\")",
+                field,
+                value
+                    .to_lowercase()
+                    .replace('\\', "\\\\")
+                    .replace('"', "\\\"")
+                    .replace('%', "\\%"),
             ))
         }
 
