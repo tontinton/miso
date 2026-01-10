@@ -23,9 +23,7 @@ impl MemorySink {
     pub fn new(logs: Arc<RwLock<HashMap<String, Vec<Log>>>>, collection: String) -> Self {
         {
             let mut guard = logs.write();
-            if !guard.contains_key(&collection) {
-                guard.insert(collection.clone(), Vec::new());
-            }
+            guard.entry(collection.clone()).or_default();
         }
         Self { logs, collection }
     }
@@ -119,7 +117,6 @@ impl Connector for MemoryConnector {
     }
 
     fn create_sink(&self, collection: &str) -> Option<Box<dyn Sink>> {
-        // Ensure the collection exists
         self.collections
             .write()
             .entry(collection.to_string())
