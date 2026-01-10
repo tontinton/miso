@@ -667,8 +667,8 @@ fn compile_filter_to_spl(expr: &Expr) -> Option<FilterResult> {
             };
             FilterResult::Search(format!("{}={}*", field, prefix_str))
         }
-        Expr::HasCs(lhs, rhs) | Expr::Has(lhs, rhs) => {
-            let (Expr::Field(field), Expr::Literal(phrase)) = (&**lhs, &**rhs) else {
+        Expr::HasCs(lhs, rhs) => {
+            let (Expr::Field(field), Expr::Literal(Value::String(value))) = (&**lhs, &**rhs) else {
                 return None;
             };
             if field.has_array_access() {
@@ -677,13 +677,27 @@ fn compile_filter_to_spl(expr: &Expr) -> Option<FilterResult> {
             FilterResult::Where(format!(
                 "like({}, \"%{}%\")",
                 field,
-                match phrase {
-                    Value::String(s) => s
-                        .replace('\\', "\\\\")
-                        .replace('"', "\\\"")
-                        .replace('%', "\\%"),
-                    _ => return None,
-                }
+                value
+                    .replace('\\', "\\\\")
+                    .replace('"', "\\\"")
+                    .replace('%', "\\%"),
+            ))
+        }
+        Expr::Has(lhs, rhs) => {
+            let (Expr::Field(field), Expr::Literal(Value::String(value))) = (&**lhs, &**rhs) else {
+                return None;
+            };
+            if field.has_array_access() {
+                return None;
+            }
+            FilterResult::Where(format!(
+                "like(lower({}), \"%{}%\")",
+                field,
+                value
+                    .to_lowercase()
+                    .replace('\\', "\\\\")
+                    .replace('"', "\\\"")
+                    .replace('%', "\\%"),
             ))
         }
 
@@ -1580,14 +1594,14 @@ mod tests {
             assert!(matches!(exists_result, FilterResult::Where(_)));
             assert_eq!(exists_result.unwrap_str(), "isnotnull(optional_field)");
 
-            // has -> like()
+            // has -> like(lower(), ...)
             let has_expr = Expr::Has(
                 Box::new(Expr::Field(field("message"))),
                 Box::new(Expr::Literal(Value::String("error".into()))),
             );
             let has_result = compile_filter_to_spl(&has_expr).unwrap();
             assert!(matches!(has_result, FilterResult::Where(_)));
-            assert_eq!(has_result.unwrap_str(), "like(message, \"%error%\")");
+            assert_eq!(has_result.unwrap_str(), "like(lower(message), \"%error%\")");
         }
 
         #[test]

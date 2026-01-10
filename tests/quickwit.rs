@@ -190,7 +190,7 @@ impl Default for DynamicMapping {
         Self {
             indexed: true,
             stored: true,
-            tokenizer: "default".to_string(),
+            tokenizer: "simple".to_string(),
             expand_dots: true,
             fast: true,
             record: Some("position".to_string()),
@@ -199,12 +199,38 @@ impl Default for DynamicMapping {
 }
 
 #[derive(Serialize, Default)]
+struct Tokenizer {
+    name: String,
+    #[serde(rename = "type")]
+    ty: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    filters: Vec<String>,
+}
+
+#[derive(Serialize)]
 struct DocMapping {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     mode: Option<String>,
     dynamic_mapping: DynamicMapping,
     field_mappings: Vec<FieldMapping>,
     timestamp_field: String,
+    tokenizers: Vec<Tokenizer>,
+}
+
+impl Default for DocMapping {
+    fn default() -> Self {
+        Self {
+            mode: None,
+            dynamic_mapping: DynamicMapping::default(),
+            field_mappings: Vec::default(),
+            timestamp_field: "".to_string(),
+            tokenizers: vec![Tokenizer {
+                name: "simple".to_string(),
+                ty: "simple".to_string(),
+                filters: vec!["remove_long".to_string()],
+            }],
+        }
+    }
 }
 
 #[derive(Serialize)]

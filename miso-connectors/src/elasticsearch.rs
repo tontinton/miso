@@ -524,8 +524,8 @@ fn compile_filter_ast(expr: &Expr) -> Option<Value> {
                 }
             })
         }
-        Expr::HasCs(lhs, rhs) => {
-            let (Expr::Field(field), Expr::Literal(phrase)) = (&**lhs, &**rhs) else {
+        Expr::Has(lhs, rhs) => {
+            let (Expr::Field(field), Expr::Literal(Value::String(value))) = (&**lhs, &**rhs) else {
                 return None;
             };
             if field.has_array_access() {
@@ -533,7 +533,7 @@ fn compile_filter_ast(expr: &Expr) -> Option<Value> {
             }
             json!({
                 "match_phrase": {
-                    field: format_value(phrase),
+                    field: value.as_str(),
                 }
             })
         }
