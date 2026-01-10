@@ -66,7 +66,7 @@ mod union;
 #[cfg(test)]
 mod tests;
 
-pub const CHANNEL_CAPACITY: usize = 4096;
+pub const CHANNEL_CAPACITY: usize = 256;
 const MISO_METADATA_FIELD_NAME: &str = "_miso";
 
 pub type AsyncTask = tokio::task::JoinHandle<Result<()>>;
