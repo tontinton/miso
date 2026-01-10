@@ -6,6 +6,7 @@ use miso_connectors::Sink;
 use miso_workflow_types::log::{Log, LogItem, LogIter};
 use tracing::Instrument;
 
+use crate::log_iter_creator::{IterCreator, fn_creator};
 use crate::log_utils::PartialStreamItem;
 use crate::{AsyncTask, CHANNEL_CAPACITY};
 
@@ -74,7 +75,7 @@ impl Iterator for TeeIter {
     }
 }
 
-pub fn tee_iter(input: LogIter, tee: Tee) -> (TeeIter, AsyncTask) {
+pub fn tee_creator(input: IterCreator, tee: Tee) -> (IterCreator, AsyncTask) {
     let (tx, rx) = flume::bounded::<Log>(CHANNEL_CAPACITY);
 
     let task = tokio::spawn(
@@ -88,5 +89,8 @@ pub fn tee_iter(input: LogIter, tee: Tee) -> (TeeIter, AsyncTask) {
         .in_current_span(),
     );
 
-    (TeeIter::new(input, tx), task)
+    (
+        fn_creator(move || Box::new(TeeIter::new(input.create(), tx))),
+        task,
+    )
 }

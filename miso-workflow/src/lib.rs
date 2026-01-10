@@ -35,12 +35,12 @@ use crate::{
     sort::sort_rx,
     spawn_thread::{ThreadRx, spawn},
     summarize::create_summarize_iter,
-    tee::{Tee, tee_iter},
+    tee::{Tee, tee_creator},
     topn::{PartialTopNIter, TopNIter},
     union::UnionIter,
 };
 
-use self::{cancel_iter::CancelIter, send_once::SendOnce};
+use self::log_iter_creator::{CancelIterCreator, IterCreator, fn_creator};
 
 mod cancel_iter;
 mod count;
@@ -50,12 +50,12 @@ pub mod filter;
 pub mod interpreter;
 pub mod join;
 pub mod limit;
+mod log_iter_creator;
 mod log_utils;
 pub mod partial_stream;
 pub mod project;
 mod rename;
 pub mod scan;
-mod send_once;
 pub mod sort;
 mod spawn_thread;
 pub mod summarize;
@@ -70,7 +70,7 @@ pub const CHANNEL_CAPACITY: usize = 4096;
 const MISO_METADATA_FIELD_NAME: &str = "_miso";
 
 pub type AsyncTask = tokio::task::JoinHandle<Result<()>>;
-type PipelineRunResult = Result<(LogIter, Vec<ThreadRx>, Vec<AsyncTask>)>;
+type PipelineRunResult = Result<(IterCreator, Vec<ThreadRx>, Vec<AsyncTask>)>;
 type WorkflowRunResult = Result<(Vec<Receiver<Log>>, Vec<ThreadRx>, Vec<AsyncTask>)>;
 
 #[derive(Kinded, Clone, Debug, PartialEq)]
@@ -143,7 +143,7 @@ pub enum WorkflowRx {
     None,
 
     /// Continue doing something with the input logs in the same pipeline.
-    Pipeline(LogIter),
+    Pipeline(IterCreator),
 
     /// Aggregate multiple pipelines.
     MuxPipelines(Vec<Receiver<Log>>),
@@ -184,11 +184,11 @@ fn rxs_to_iter(mut rxs: Vec<Receiver<Log>>) -> LogIter {
 }
 
 impl WorkflowRx {
-    fn into_iter(self) -> LogIter {
+    fn into_creator(self) -> IterCreator {
         match self {
             WorkflowRx::None => panic!("first step doesn't have any input logs"),
-            WorkflowRx::Pipeline(logs) => logs,
-            WorkflowRx::MuxPipelines(rxs) => rxs_to_iter(rxs),
+            WorkflowRx::Pipeline(creator) => creator,
+            WorkflowRx::MuxPipelines(rxs) => fn_creator(move || rxs_to_iter(rxs)),
         }
     }
 }
@@ -204,64 +204,89 @@ impl WorkflowStep {
         let mut threads = Vec::new();
         let mut async_tasks = Vec::new();
 
-        let iter = match self {
+        let creator: IterCreator = match self {
             WorkflowStep::Scan(scan) => {
                 assert!(matches!(rx, WorkflowRx::None));
-                let (rx, task) = scan_rx(scan, cancel);
+                let (item_rx, task) = scan_rx(scan, cancel);
                 async_tasks.push(task);
-                Box::new(LogItemReceiverIter { rx })
+                fn_creator(move || Box::new(LogItemReceiverIter { rx: item_rx }))
             }
             WorkflowStep::Union(workflow) if workflow.steps.is_empty() => {
-                Box::new(iter::empty()) as LogIter
+                fn_creator(|| Box::new(iter::empty()))
             }
             WorkflowStep::Union(workflow) => {
                 assert!(matches!(rx, WorkflowRx::None));
                 let (rxs, inner_threads, inner_async_tasks) = workflow.create_pipelines(cancel)?;
                 threads.extend(inner_threads);
                 async_tasks.extend(inner_async_tasks);
-                rxs_to_iter(rxs)
+                fn_creator(move || rxs_to_iter(rxs))
             }
-            WorkflowStep::Filter(expr) => Box::new(FilterIter::new(rx.into_iter(), expr)),
+            WorkflowStep::Filter(expr) => {
+                let prev = rx.into_creator();
+                fn_creator(move || Box::new(FilterIter::new(prev.create(), expr)))
+            }
             WorkflowStep::Project(fields) => {
-                Box::new(ProjectIter::new_project(rx.into_iter(), fields))
+                let prev = rx.into_creator();
+                fn_creator(move || Box::new(ProjectIter::new_project(prev.create(), fields)))
             }
             WorkflowStep::Extend(fields) => {
-                Box::new(ProjectIter::new_extend(rx.into_iter(), fields))
+                let prev = rx.into_creator();
+                fn_creator(move || Box::new(ProjectIter::new_extend(prev.create(), fields)))
             }
-            WorkflowStep::Rename(renames) => Box::new(RenameIter::new(rx.into_iter(), renames)),
-            WorkflowStep::Expand(expand) => Box::new(ExpandIter::new(rx.into_iter(), expand)),
+            WorkflowStep::Rename(renames) => {
+                let prev = rx.into_creator();
+                fn_creator(move || Box::new(RenameIter::new(prev.create(), renames)))
+            }
+            WorkflowStep::Expand(expand) => {
+                let prev = rx.into_creator();
+                fn_creator(move || Box::new(ExpandIter::new(prev.create(), expand)))
+            }
             WorkflowStep::Limit(limit) | WorkflowStep::MuxLimit(limit) => {
-                Box::new(LimitIter::new(rx.into_iter(), limit))
+                let prev = rx.into_creator();
+                fn_creator(move || Box::new(LimitIter::new(prev.create(), limit)))
             }
             WorkflowStep::Sort(sorts) => {
-                let (rx, thread) = sort_rx(rx.into_iter(), sorts, cancel);
+                let (item_rx, thread) = sort_rx(rx.into_creator(), sorts, cancel);
                 threads.push(thread);
-                Box::new(LogItemReceiverIter { rx })
+                fn_creator(move || Box::new(LogItemReceiverIter { rx: item_rx }))
             }
             WorkflowStep::MuxTopN(sorts, limit) if partial_stream.is_some() => {
-                Box::new(PartialStreamIter::new(
-                    Box::new(PartialTopNIter::new(rx.into_iter(), sorts, limit)),
-                    partial_stream.unwrap(),
-                ))
+                let prev = rx.into_creator();
+                let partial_stream = partial_stream.unwrap();
+                fn_creator(move || {
+                    Box::new(PartialStreamIter::new(
+                        Box::new(PartialTopNIter::new(prev.create(), sorts, limit)),
+                        partial_stream,
+                    ))
+                })
             }
             WorkflowStep::TopN(sorts, limit) | WorkflowStep::MuxTopN(sorts, limit) => {
-                Box::new(TopNIter::new(rx.into_iter(), sorts, limit as usize))
+                let prev = rx.into_creator();
+                fn_creator(move || Box::new(TopNIter::new(prev.create(), sorts, limit as usize)))
             }
             WorkflowStep::MuxSummarize(config) if partial_stream.is_some() => {
-                Box::new(PartialStreamIter::new(
-                    create_summarize_iter(rx.into_iter(), config, true),
-                    partial_stream.unwrap(),
-                ))
+                let prev = rx.into_creator();
+                let partial_stream = partial_stream.unwrap();
+                fn_creator(move || {
+                    Box::new(PartialStreamIter::new(
+                        create_summarize_iter(prev.create(), config, true),
+                        partial_stream,
+                    ))
+                })
             }
             WorkflowStep::MuxSummarize(config) => {
-                create_summarize_iter(rx.into_iter(), config, true)
+                let prev = rx.into_creator();
+                fn_creator(move || create_summarize_iter(prev.create(), config, true))
             }
-            WorkflowStep::Summarize(config) => create_summarize_iter(rx.into_iter(), config, false),
+            WorkflowStep::Summarize(config) => {
+                let prev = rx.into_creator();
+                fn_creator(move || create_summarize_iter(prev.create(), config, false))
+            }
             WorkflowStep::Join(join, workflow) if workflow.steps.is_empty() => {
                 if matches!(join.type_, JoinType::Left | JoinType::Outer) {
-                    rx.into_iter()
+                    rx.into_creator()
                 } else {
-                    Box::new(iter::empty())
+                    fn_creator(|| Box::new(iter::empty()))
                 }
             }
             WorkflowStep::Join(join, workflow) => {
@@ -284,25 +309,38 @@ impl WorkflowStep {
                 threads.extend(inner_threads);
                 async_tasks.extend(inner_async_tasks);
 
-                let (rx, join_threads) = join_rx(join, rx, right_rxs, dynamic_filter_tx, cancel);
+                let (join_out_rx, join_threads) =
+                    join_rx(join, rx, right_rxs, dynamic_filter_tx, cancel);
                 threads.extend(join_threads);
 
-                Box::new(rx.into_iter().map(LogItem::Log))
+                fn_creator(move || Box::new(join_out_rx.into_iter().map(LogItem::Log)))
             }
-            WorkflowStep::MuxCount if partial_stream.is_some() => Box::new(PartialStreamIter::new(
-                Box::new(CountIter::new_mux(rx.into_iter())),
-                partial_stream.unwrap(),
-            )),
-            WorkflowStep::MuxCount => Box::new(CountIter::new_mux(rx.into_iter())),
-            WorkflowStep::Count => Box::new(CountIter::new_simple(rx.into_iter())),
+            WorkflowStep::MuxCount if partial_stream.is_some() => {
+                let prev = rx.into_creator();
+                let partial_stream = partial_stream.unwrap();
+                fn_creator(move || {
+                    Box::new(PartialStreamIter::new(
+                        Box::new(CountIter::new_mux(prev.create())),
+                        partial_stream,
+                    ))
+                })
+            }
+            WorkflowStep::MuxCount => {
+                let prev = rx.into_creator();
+                fn_creator(move || Box::new(CountIter::new_mux(prev.create())))
+            }
+            WorkflowStep::Count => {
+                let prev = rx.into_creator();
+                fn_creator(move || Box::new(CountIter::new_simple(prev.create())))
+            }
             WorkflowStep::Tee(tee) => {
-                let (iter, task) = tee_iter(rx.into_iter(), tee);
+                let (creator, task) = tee_creator(rx.into_creator(), tee);
                 async_tasks.push(task);
-                Box::new(iter)
+                creator
             }
         };
 
-        Ok((iter, threads, async_tasks))
+        Ok((creator, threads, async_tasks))
     }
 
     #[inline]
@@ -356,21 +394,21 @@ fn prepare_execute_pipeline(
     let mut threads = Vec::new();
     let mut async_tasks = Vec::new();
     for (step, partial_stream) in pipeline {
-        let (iter, inner_threads, inner_async_tasks) = step
+        let (creator, inner_threads, inner_async_tasks) = step
             .execute(workflow_rx, partial_stream, cancel.clone())
             .context("execute pipeline step")?;
 
         threads.extend(inner_threads);
         async_tasks.extend(inner_async_tasks);
 
-        workflow_rx = WorkflowRx::Pipeline(iter);
+        workflow_rx = WorkflowRx::Pipeline(creator);
     }
 
-    let WorkflowRx::Pipeline(iter) = workflow_rx else {
+    let WorkflowRx::Pipeline(creator) = workflow_rx else {
         panic!("last rx must be of a pipeline");
     };
 
-    Ok((iter, threads, async_tasks))
+    Ok((creator, threads, async_tasks))
 }
 
 #[instrument(skip_all)]
@@ -526,16 +564,15 @@ impl Workflow {
                 Some(std::mem::replace(&mut rxs, vec![rx]))
             };
 
-            let (iter, inner_threads, inner_async_tasks) =
+            let (creator, inner_threads, inner_async_tasks) =
                 prepare_execute_pipeline(pipeline, rxs_opt, cancel.clone())
                     .context("prepare execute pipeline")?;
             threads.extend(inner_threads);
             async_tasks.extend(inner_async_tasks);
 
-            // SAFETY: iter is only accessed on the spawned thread via take()
-            let iter = unsafe { SendOnce::new(CancelIter::new(iter, cancel.clone())) };
+            let creator = CancelIterCreator::wrap(creator, cancel.clone());
             threads.push(spawn(
-                move || execute_pipeline(iter.take(), tx).context("pipe iter to tx"),
+                move || execute_pipeline(creator.create(), tx).context("pipe iter to tx"),
                 "pipeline",
             ));
         }

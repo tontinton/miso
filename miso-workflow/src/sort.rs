@@ -5,7 +5,7 @@ use flume::Receiver;
 use miso_common::metrics::{METRICS, STEP_SORT};
 use miso_workflow_types::{
     field::Field,
-    log::{Log, LogItem, LogIter},
+    log::{Log, LogItem},
     sort::{NullsOrder, Sort, SortOrder},
     value::Value,
 };
@@ -17,7 +17,7 @@ use crate::{
     CHANNEL_CAPACITY,
     cancel_iter::CancelIter,
     interpreter::get_field_value,
-    send_once::SendOnce,
+    log_iter_creator::IterCreator,
     spawn_thread::{ThreadRx, spawn},
 };
 
@@ -158,18 +158,19 @@ fn sort_thread_pool() -> Result<ThreadPool> {
 }
 
 pub fn sort_rx(
-    input: LogIter,
+    creator: IterCreator,
     sorts: Vec<Sort>,
     cancel: CancellationToken,
 ) -> (Receiver<LogItem>, ThreadRx) {
     let (tx, rx) = flume::bounded(CHANNEL_CAPACITY);
 
-    // SAFETY: input is only accessed on the spawned thread via take()
-    let input = unsafe { SendOnce::new(input) };
     let thread = spawn(
         move || {
             let config = SortConfig::new(sorts);
-            let mut logs = collect_logs(&config.by, CancelIter::new(input.take(), cancel.clone()))?;
+            let mut logs = collect_logs(
+                &config.by,
+                CancelIter::new(creator.create(), cancel.clone()),
+            )?;
             let rows_processed = logs.len() as u64;
 
             let sorted = if logs.len() < PARALLEL_SORT_THRESHOLD {

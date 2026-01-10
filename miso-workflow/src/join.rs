@@ -25,7 +25,6 @@ use crate::{
     CHANNEL_CAPACITY, WorkflowRx,
     cancel_iter::CancelIter,
     interpreter::get_field_value,
-    send_once::SendOnce,
     spawn_thread::{ThreadRx, spawn},
 };
 
@@ -442,11 +441,12 @@ fn spawn_join_thread(
 fn workflow_rx_to_rxs(rx: WorkflowRx) -> (Vec<Receiver<Log>>, Option<ThreadRx>) {
     match rx {
         WorkflowRx::None => panic!("join cannot be the first step"),
-        WorkflowRx::Pipeline(iter) => {
+        WorkflowRx::Pipeline(creator) => {
             let (tx, rx) = flume::bounded(CHANNEL_CAPACITY);
-            // SAFETY: iter is only accessed on the spawned thread via take()
-            let iter = unsafe { SendOnce::new(iter) };
-            let thread = spawn(move || pipe_logiter_to_tx(iter.take(), tx), "join-pipe");
+            let thread = spawn(
+                move || pipe_logiter_to_tx(creator.create(), tx),
+                "join-pipe",
+            );
             (vec![rx], Some(thread))
         }
         WorkflowRx::MuxPipelines(rxs) => (rxs, None),
