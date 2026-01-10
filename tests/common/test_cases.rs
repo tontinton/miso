@@ -66,6 +66,62 @@ pub const BASE_PREDICATE_PUSHDOWN_TESTS: &[TestCase] = &[
         name: "filter_eq",
     },
     TestCase {
+        query: r#"test.stack | where questionId != 4"#,
+        expected: expected!("test.stack"),
+        count: 8,
+        name: "filter_ne",
+    },
+    TestCase {
+        query: r#"test.stack | where acceptedAnswerId in (12446, 31)"#,
+        expected: expected!("test.stack"),
+        count: 2,
+        name: "filter_in",
+    },
+    TestCase {
+        query: r#"test.stack | where questionId >= 4 and questionId < 15"#,
+        expected: expected!("test.stack"),
+        count: 8,
+        name: "filter_range",
+    },
+    TestCase {
+        query: r#"test.stack | where questionId == 4 or questionId == 6 or questionId == 11"#,
+        expected: expected!("test.stack"),
+        count: 5,
+        name: "filter_multiple_or",
+    },
+    TestCase {
+        query: r#"test.stack | where exists(answerId)"#,
+        expected: expected!("test.stack"),
+        count: 2,
+        name: "filter_exists",
+    },
+    TestCase {
+        query: r#"test.stack | where not(exists(answerId))"#,
+        expected: expected!("test.stack"),
+        count: 8,
+        name: "filter_not_exists",
+    },
+    TestCase {
+        query: r#"test.stack | where not(questionId == 4)"#,
+        expected: expected!("test.stack"),
+        count: 8,
+        name: "filter_not",
+    },
+    TestCase {
+        query: r#"test.stack | where (questionId > 10 and questionId < 15) or questionId == 4"#,
+        expected: expected!("test.stack"),
+        count: 6,
+        name: "filter_nested_and_or",
+    },
+    // True negative test
+    TestCase {
+        query: r#"test.stack | where questionId == 99999"#,
+        expected: expected!("test.stack"),
+        count: 0,
+        name: "filter_no_match",
+    },
+    // String predicates - has/has_cs
+    TestCase {
         query: r#"test.stack | where body has_cs "This""#,
         expected: expected!(
             "test.stack",
@@ -102,28 +158,33 @@ pub const BASE_PREDICATE_PUSHDOWN_TESTS: &[TestCase] = &[
         name: "filter_has_lowercase",
     },
     TestCase {
-        query: r#"test.stack | where acceptedAnswerId in (12446, 31)"#,
+        query: r#"test.stack | where body has "code""#,
+        expected: expected!(
+            "test.stack",
+            Quickwit => r#"test.stack | where body has "code""#,
+        ),
+        count: 1,
+        name: "filter_has_word_boundary",
+    },
+    // String predicates - startswith and contains
+    TestCase {
+        query: r#"test.stack | where title startswith "Calculate""#,
         expected: expected!("test.stack"),
         count: 2,
-        name: "filter_in",
+        name: "filter_startswith",
     },
     TestCase {
-        query: r#"test.stack | where questionId >= 4 and questionId < 15"#,
-        expected: expected!("test.stack"),
-        count: 8,
-        name: "filter_range",
+        query: r#"test.stack | where body contains "DateTime""#,
+        expected: expected!(r#"test.stack | where body contains "DateTime""#),
+        count: 3,
+        name: "filter_contains",
     },
+    // Chained filters
     TestCase {
-        query: r#"test.stack | where questionId == 4 or questionId == 6 or questionId == 11"#,
+        query: r#"test.stack | where questionId > 4 | where exists(acceptedAnswerId)"#,
         expected: expected!("test.stack"),
         count: 5,
-        name: "filter_multiple_or",
-    },
-    TestCase {
-        query: r#"test.stack | where exists(answerId)"#,
-        expected: expected!("test.stack"),
-        count: 2,
-        name: "filter_exists",
+        name: "filter_chained_with_exists",
     },
     // Projections
     TestCase {
@@ -151,7 +212,7 @@ pub const BASE_PREDICATE_PUSHDOWN_TESTS: &[TestCase] = &[
         count: 5,
         name: "distinct",
     },
-    // Complex aggregations - comprehensive test with all agg types
+    // Complex aggregations
     TestCase {
         query: r#"
     test.stack
@@ -222,7 +283,7 @@ pub const BASE_PREDICATE_PUSHDOWN_TESTS: &[TestCase] = &[
             Elastic | Quickwit => "test.stack | top 3 by c",
         ),
         count: 3,
-        name: "summarize_then_topn",
+        name: "summarize_count_then_topn",
     },
     TestCase {
         query: r#"test.stack | sort by @time desc | take 3"#,
