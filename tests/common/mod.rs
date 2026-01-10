@@ -296,7 +296,7 @@ pub async fn run_predicate_pushdown_tests(
             let logs = layer.drain_logs(test_name);
             if !logs.is_empty() {
                 eprintln!(
-                    "════════ Test: {} (PASSED in {:.2}s) ════════",
+                    "\x1b[32m════════ Test: {} (PASSED in {:.2}s) ════════\x1b[0m",
                     test_name,
                     duration.as_secs_f64()
                 );
@@ -309,7 +309,10 @@ pub async fn run_predicate_pushdown_tests(
 
         for (test_name, err) in &failed_tests {
             let logs = layer.drain_logs(test_name);
-            eprintln!("════════ Test: {} (FAILED) ════════", test_name);
+            eprintln!(
+                "\x1b[31m════════ Test: {} (FAILED) ════════\x1b[0m",
+                test_name
+            );
             if !logs.is_empty() {
                 for log in logs {
                     eprintln!("{}", log);
@@ -319,7 +322,9 @@ pub async fn run_predicate_pushdown_tests(
             eprintln!();
         }
 
-        eprintln!("════════════════════════════════════════════════════════════════");
+        eprintln!(
+            "\x1b[31m════════════════════════════════════════════════════════════════\x1b[0m"
+        );
     }
 
     if !failed_tests.is_empty() {
