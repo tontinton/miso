@@ -160,6 +160,7 @@ async fn build_query_workflow(
     state: Arc<App>,
     req: QueryRequest,
     query_id: Uuid,
+    non_optimized_output: &mut Option<String>,
 ) -> Result<Workflow, HttpError> {
     let query_id = query_id.to_string();
 
@@ -174,6 +175,13 @@ async fn build_query_workflow(
         ast,
     )
     .map_err(|e| e.with_query_id(query_id))?;
+
+    if let Some(non_optimized) = non_optimized_output {
+        *non_optimized = format!(
+            "{}",
+            Workflow::new_with_partial_stream(steps.clone(), req.partial_stream.clone())
+        );
+    }
 
     let optimized_steps =
         spawn_blocking(move || Span::current().in_scope(|| state.optimizer.optimize(steps)))
@@ -206,10 +214,11 @@ async fn query_stream(
     let stream_span = span.clone();
     let _enter = span.enter();
 
-    info!(?req.query, "Starting to run a new query");
-    let workflow = build_query_workflow(state.clone(), req, query_id).await?;
+    info!(?req.query, "Building query workflow");
+    let mut non_optimized = Some(String::new());
+    let workflow = build_query_workflow(state.clone(), req, query_id, &mut non_optimized).await?;
 
-    debug!(?workflow, "Executing workflow");
+    info!(non_optimized=non_optimized.unwrap(), optimized=%workflow, "Starting to run a new query");
 
     let cancel = CancellationToken::new();
     let mut logs_stream = workflow.execute(cancel.clone()).map_err(|e| {
@@ -270,7 +279,7 @@ async fn explain(
     let span = span!(Level::INFO, "explain", ?query_id);
     let _enter = span.enter();
 
-    let workflow = build_query_workflow(state.clone(), req, query_id).await?;
+    let workflow = build_query_workflow(state.clone(), req, query_id, &mut None).await?;
 
     Ok(format!("{workflow}").into_response())
 }
