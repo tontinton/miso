@@ -7,6 +7,7 @@ use const_folding::ConstFolding;
 use convert_sort_limit_to_topn::ConvertSortLimitToTopN;
 use dynamic_filter::DynamicFilter;
 use merge_filters_into_and_filter::MergeFiltersIntoAndFilter;
+use merge_topns::MergeTopNs;
 use mux_into_union::MuxIntoUnion;
 use pattern::{Group, Pattern};
 use project_propagation::{ProjectPropagationWithEnd, ProjectPropagationWithoutEnd};
@@ -18,6 +19,7 @@ use push_steps_into_union::PushStepsIntoUnion;
 use push_union_into_scan::PushUnionIntoScan;
 use remove_no_op_filter::RemoveNoOpFilter;
 use remove_redundant_empty_steps::RemoveRedundantEmptySteps;
+use remove_redundant_sort_before_topn::RemoveRedundantSortBeforeTopN;
 use remove_redundant_sorts_before_aggregation::RemoveRedundantSortsBeforeAggregation;
 use remove_redundant_steps_before_aggregation::RemoveRedundantStepsBeforeAggregation;
 use reorder_filter_before_sort::ReorderFilterBeforeSort;
@@ -29,6 +31,7 @@ mod convert_sort_limit_to_topn;
 mod dynamic_filter;
 mod field_replacer;
 mod merge_filters_into_and_filter;
+mod merge_topns;
 mod mux_into_union;
 mod pattern;
 mod project_propagation;
@@ -40,6 +43,7 @@ mod push_steps_into_union;
 mod push_union_into_scan;
 mod remove_no_op_filter;
 mod remove_redundant_empty_steps;
+mod remove_redundant_sort_before_topn;
 mod remove_redundant_sorts_before_aggregation;
 mod remove_redundant_steps_before_aggregation;
 mod reorder_filter_before_sort;
@@ -130,10 +134,12 @@ impl Optimizer {
                 opt!(RemoveNoOpFilter),
                 opt!(ShortCircuitFalseFilter),
                 opt!(ReorderFilterBeforeSort),
-                // Limit.
+                // Limit & TopN.
                 opt!(PushLimitIntoLimit),
                 opt!(ConvertSortLimitToTopN),
                 opt!(PushLimitIntoTopN),
+                opt!(MergeTopNs),
+                opt!(RemoveRedundantSortBeforeTopN),
                 // Count.
                 opt!(RemoveRedundantSortsBeforeAggregation),
                 opt!(RemoveRedundantStepsBeforeAggregation),

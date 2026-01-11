@@ -68,7 +68,29 @@ fn limit_limit_into_limit() {
 }
 
 #[test]
-fn topn_limit_into_topn() {
+fn push_limit_into_topn() {
+    let sorts = vec![sort_asc(field("a"))];
+    check_default(
+        vec![S::TopN(sorts.clone(), 100), S::Limit(50)],
+        vec![S::TopN(sorts, 50)],
+    );
+}
+
+#[test]
+fn push_limit_into_mux_topn() {
+    let sorts = vec![sort_desc(field("b"))];
+    check_default(
+        vec![S::MuxTopN(sorts.clone(), 20), S::Limit(30)],
+        vec![S::MuxTopN(sorts.clone(), 20)],
+    );
+    check_default(
+        vec![S::MuxTopN(sorts.clone(), 30), S::Limit(20)],
+        vec![S::MuxTopN(sorts, 20)],
+    );
+}
+
+#[test]
+fn combined_topn_limit_optimizations() {
     check_default(
         vec![
             S::Limit(1),
@@ -79,12 +101,7 @@ fn topn_limit_into_topn() {
             S::MuxTopN(vec![], 7),
             S::Limit(4),
         ],
-        vec![
-            S::Limit(1),
-            S::TopN(vec![], 10),
-            S::TopN(vec![], 15),
-            S::MuxTopN(vec![], 4),
-        ],
+        vec![S::Limit(1), S::MuxTopN(vec![], 4)],
     );
 }
 
@@ -1319,4 +1336,107 @@ fn join_left_outer_short_circuit_removes_join(type_: JoinType) {
     };
     let inner = Workflow::new(vec![S::Filter(Expr::Literal(Value::Bool(false)))]);
     check_default(vec![S::Join(join, inner), S::Limit(10)], vec![S::Limit(10)]);
+}
+
+#[test]
+fn merge_topns_same_sort() {
+    let sorts = vec![sort_asc(field("a")), sort_desc(field("b"))];
+    check_default(
+        vec![S::TopN(sorts.clone(), 100), S::TopN(sorts.clone(), 50)],
+        vec![S::TopN(sorts, 50)],
+    );
+}
+
+#[test]
+fn merge_topns_different_sorts_unchanged() {
+    let sorts_a = vec![sort_asc(field("a"))];
+    let sorts_b = vec![sort_desc(field("a"))];
+    check_default(
+        vec![S::TopN(sorts_a.clone(), 100), S::TopN(sorts_b.clone(), 50)],
+        vec![S::TopN(sorts_a, 100), S::TopN(sorts_b, 50)],
+    );
+}
+
+#[test]
+fn merge_topns_mux_variants() {
+    let sorts = vec![sort_asc(field("x"))];
+    check_default(
+        vec![S::TopN(sorts.clone(), 20), S::MuxTopN(sorts.clone(), 30)],
+        vec![S::MuxTopN(sorts.clone(), 20)],
+    );
+    check_default(
+        vec![S::MuxTopN(sorts.clone(), 15), S::TopN(sorts.clone(), 25)],
+        vec![S::MuxTopN(sorts, 15)],
+    );
+}
+
+#[test]
+fn merge_topns_chain() {
+    let sorts = vec![sort_desc(field("ts"))];
+    check_default(
+        vec![
+            S::TopN(sorts.clone(), 100),
+            S::TopN(sorts.clone(), 75),
+            S::TopN(sorts.clone(), 50),
+        ],
+        vec![S::TopN(sorts, 50)],
+    );
+}
+
+#[test]
+fn remove_redundant_sort_before_topn_exact_match() {
+    let sorts = vec![sort_asc(field("a")), sort_desc(field("b"))];
+    check_default(
+        vec![S::Sort(sorts.clone()), S::TopN(sorts.clone(), 10)],
+        vec![S::TopN(sorts, 10)],
+    );
+}
+
+#[test]
+fn remove_redundant_sort_before_topn_prefix() {
+    let sort_prefix = vec![sort_asc(field("a"))];
+    let topn_sorts = vec![sort_asc(field("a")), sort_desc(field("b"))];
+    check_default(
+        vec![S::Sort(sort_prefix), S::TopN(topn_sorts.clone(), 10)],
+        vec![S::TopN(topn_sorts, 10)],
+    );
+}
+
+#[test]
+fn remove_redundant_sort_before_topn_not_prefix() {
+    let sort_fields = vec![sort_desc(field("a"))];
+    let topn_sorts = vec![sort_asc(field("a")), sort_desc(field("b"))];
+    check_default(
+        vec![
+            S::Sort(sort_fields.clone()),
+            S::TopN(topn_sorts.clone(), 10),
+        ],
+        vec![S::Sort(sort_fields), S::TopN(topn_sorts, 10)],
+    );
+}
+
+#[test]
+fn remove_redundant_sort_before_mux_topn() {
+    let sorts = vec![sort_asc(field("x"))];
+    check_default(
+        vec![S::Sort(sorts.clone()), S::MuxTopN(sorts.clone(), 5)],
+        vec![S::MuxTopN(sorts, 5)],
+    );
+}
+
+#[test]
+fn sort_longer_than_topn_unchanged() {
+    let sort_fields = vec![
+        sort_asc(field("a")),
+        sort_desc(field("b")),
+        sort_asc(field("c")),
+    ];
+    let topn_sorts = vec![sort_asc(field("a")), sort_desc(field("b"))];
+    check_default(
+        vec![
+            S::Sort(sort_fields.clone()),
+            S::TopN(topn_sorts.clone(), 10),
+        ],
+        vec![S::Sort(sort_fields), S::TopN(topn_sorts, 10)],
+    );
 }
