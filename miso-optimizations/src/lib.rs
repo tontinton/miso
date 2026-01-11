@@ -6,6 +6,7 @@ use miso_workflow_types::join::JoinType;
 use const_folding::ConstFolding;
 use convert_sort_limit_to_topn::ConvertSortLimitToTopN;
 use dynamic_filter::DynamicFilter;
+use eliminate_unused_fields::EliminateUnusedFields;
 use merge_filters_into_and_filter::MergeFiltersIntoAndFilter;
 use merge_topns::MergeTopNs;
 use mux_into_union::MuxIntoUnion;
@@ -29,6 +30,7 @@ use split_scan_to_union::SplitScanIntoUnion;
 mod const_folding;
 mod convert_sort_limit_to_topn;
 mod dynamic_filter;
+mod eliminate_unused_fields;
 mod field_replacer;
 mod merge_filters_into_and_filter;
 mod merge_topns;
@@ -122,6 +124,7 @@ impl Optimizer {
                 opt_once!(SplitScanIntoUnion),
                 // Always returns something, even if the step is unmodified, so run only once.
                 opt_once!(ConstFolding),
+                opt_once!(EliminateUnusedFields),
             ],
             // Predicate pushdowns + optimizations that help predicate pushdowns.
             vec![
