@@ -435,7 +435,7 @@ impl Iterator for SummarizeGroupByIter {
     type Item = LogItem;
 
     fn next(&mut self) -> Option<Self::Item> {
-        while let Some(log) = try_next!(self.input) {
+        'next_log: while let Some(log) = try_next!(self.input) {
             self.rows_processed += 1;
             let interpreter = LogInterpreter { log: &log };
             let mut group_keys = Vec::with_capacity(self.group_by.len());
@@ -455,6 +455,9 @@ impl Iterator for SummarizeGroupByIter {
                 };
 
                 let value = value_cow.into_owned();
+                if value == Value::Null {
+                    continue 'next_log;
+                }
 
                 if let Err(e) = self.type_tracker.check(i, &value, expr) {
                     return Some(LogItem::Err(e));
