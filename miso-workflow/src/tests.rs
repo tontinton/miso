@@ -968,6 +968,7 @@ async fn summarize_bin() -> Result<()> {
         "#,
         r#"[{"x": 3, "y": 0}, {"x": 5, "y": 1}, {"x": 1, "y": 4}, {"x": 9, "y": 5}, {"x": 5}]"#,
         r#"[
+            {"max_x": 5, "min_x": 5, "sum_x": 5.0, "dcount_x": 1, "c": 1, "y": null},
             {"max_x": 5, "min_x": 3, "sum_x": 8.0, "dcount_x": 2, "c": 2, "y": 0.0},
             {"max_x": 9, "min_x": 1, "sum_x": 10.0, "dcount_x": 2, "c": 2, "y": 4.0}
         ]"#,
@@ -990,6 +991,7 @@ async fn project_summarize_bin() -> Result<()> {
         "#,
         r#"[{"a": 3, "b": 0}, {"a": 5, "b": 1}, {"a": 1, "b": 4}, {"a": 9, "b": 5}, {"a": 5}]"#,
         r#"[
+            {"max_x": 5, "min_x": 5, "sum_x": 5.0, "dcount_x": 1, "cnt": 1, "y": null},
             {"max_x": 5, "min_x": 3, "sum_x": 8.0, "dcount_x": 2, "cnt": 2, "y": 0.0},
             {"max_x": 9, "min_x": 1, "sum_x": 10.0, "dcount_x": 2, "cnt": 2, "y": 4.0}
         ]"#,
@@ -2042,4 +2044,51 @@ async fn short_circuit_join_returns_left_side(kind: &str) -> Result<()> {
         .expect(r#"[{"id": 1, "value": "a"}, {"id": 2, "value": "b"}]"#)
         .call()
         .await
+}
+
+#[tokio::test]
+async fn summarize_group_by_with_null_key() -> Result<()> {
+    check(
+        r#"
+        test.c
+        | summarize cnt=count() by y
+        "#,
+        r#"[{"x": 1, "y": "a"}, {"x": 2, "y": null}, {"x": 3, "y": "a"}, {"x": 4, "y": null}]"#,
+        r#"[
+            {"cnt": 2, "y": "a"},
+            {"cnt": 2, "y": null}
+        ]"#,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn summarize_group_by_missing_field() -> Result<()> {
+    check(
+        r#"
+        test.c
+        | summarize cnt=count() by y
+        "#,
+        r#"[{"x": 1, "y": "a"}, {"x": 2}, {"x": 3, "y": "a"}]"#,
+        r#"[
+            {"cnt": 2, "y": "a"},
+            {"cnt": 1, "y": null}
+        ]"#,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn summarize_group_by_all_nulls() -> Result<()> {
+    check(
+        r#"
+        test.c
+        | summarize cnt=count() by y
+        "#,
+        r#"[{"x": 1, "y": null}, {"x": 2, "y": null}]"#,
+        r#"[
+            {"cnt": 2, "y": null}
+        ]"#,
+    )
+    .await
 }

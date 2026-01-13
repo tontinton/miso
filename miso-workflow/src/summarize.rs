@@ -435,7 +435,7 @@ impl Iterator for SummarizeGroupByIter {
     type Item = LogItem;
 
     fn next(&mut self) -> Option<Self::Item> {
-        'next_log: while let Some(log) = try_next!(self.input) {
+        while let Some(log) = try_next!(self.input) {
             self.rows_processed += 1;
             let interpreter = LogInterpreter { log: &log };
             let mut group_keys = Vec::with_capacity(self.group_by.len());
@@ -454,23 +454,22 @@ impl Iterator for SummarizeGroupByIter {
                     }
                 };
 
-                if value_cow.as_ref() == &Value::Null {
-                    continue 'next_log;
-                }
                 let value = value_cow.into_owned();
 
-                let value_type = std::mem::discriminant(&value);
-                if let Some(t) = tracked_type {
-                    if *t != value_type {
-                        return Some(LogItem::Err(eyre!(
-                            "cannot summarize over differing types (key '{}'): {:?} != {:?}",
-                            expr,
-                            *t,
-                            value_type
-                        )));
+                if value != Value::Null {
+                    let value_type = std::mem::discriminant(&value);
+                    if let Some(t) = tracked_type {
+                        if *t != value_type {
+                            return Some(LogItem::Err(eyre!(
+                                "cannot summarize over differing types (key '{}'): {:?} != {:?}",
+                                expr,
+                                *t,
+                                value_type
+                            )));
+                        }
+                    } else {
+                        *tracked_type = Some(value_type);
                     }
-                } else {
-                    *tracked_type = Some(value_type);
                 }
 
                 group_keys.push(value);
