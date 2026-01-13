@@ -1,6 +1,5 @@
-use std::{borrow::Cow, cmp::Ordering, iter, mem::Discriminant};
+use std::{borrow::Cow, cmp::Ordering, iter};
 
-use color_eyre::eyre::eyre;
 use hashbrown::{HashMap, HashSet};
 use miso_common::metrics::{ERROR_EVAL, METRICS, STEP_SUMMARIZE};
 use miso_workflow_types::{
@@ -13,6 +12,7 @@ use miso_workflow_types::{
 use tracing::warn;
 
 use crate::interpreter::{LogInterpreter, Val, get_field_value, insert_field_value};
+use crate::type_tracker::TypeTracker;
 
 use super::{partial_stream::PartialLogIter, try_next};
 
@@ -352,7 +352,7 @@ pub struct SummarizeGroupByIter {
     output_fields: Vec<Field>,
     aggregations: Vec<Aggregation>,
     is_mux: bool,
-    tracked_types: Vec<Option<Discriminant<Value>>>,
+    type_tracker: TypeTracker,
 
     // All of HashMap, HashSet, BTreeMap and BtreeSet rely on either the hash or the order of keys
     // be unchanging, so having types with interior mutability is a bad idea.
@@ -373,14 +373,14 @@ impl SummarizeGroupByIter {
         aggregations: Vec<Aggregation>,
         is_mux: bool,
     ) -> Self {
-        let tracked_types = vec![None; group_by.len()];
+        let type_tracker = TypeTracker::new(group_by.len());
         Self {
             input,
             group_by,
             output_fields,
             aggregations,
             is_mux,
-            tracked_types,
+            type_tracker,
             group_aggregates: GroupAggregates::new(),
             output: Box::new(iter::empty()),
             done: false,
@@ -440,7 +440,7 @@ impl Iterator for SummarizeGroupByIter {
             let interpreter = LogInterpreter { log: &log };
             let mut group_keys = Vec::with_capacity(self.group_by.len());
 
-            for (tracked_type, expr) in self.tracked_types.iter_mut().zip(&self.group_by) {
+            for (i, expr) in self.group_by.iter().enumerate() {
                 let value_cow = match interpreter.eval(expr) {
                     Ok(Val(None)) => Cow::Owned(Value::Null),
                     Ok(v) => v.0.unwrap(),
@@ -456,20 +456,8 @@ impl Iterator for SummarizeGroupByIter {
 
                 let value = value_cow.into_owned();
 
-                if value != Value::Null {
-                    let value_type = std::mem::discriminant(&value);
-                    if let Some(t) = tracked_type {
-                        if *t != value_type {
-                            return Some(LogItem::Err(eyre!(
-                                "cannot summarize over differing types (key '{}'): {:?} != {:?}",
-                                expr,
-                                *t,
-                                value_type
-                            )));
-                        }
-                    } else {
-                        *tracked_type = Some(value_type);
-                    }
+                if let Err(e) = self.type_tracker.check(i, &value, expr) {
+                    return Some(LogItem::Err(e));
                 }
 
                 group_keys.push(value);

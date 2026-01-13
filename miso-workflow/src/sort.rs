@@ -1,6 +1,6 @@
 use std::{cmp::Ordering, num::NonZero, thread::available_parallelism};
 
-use color_eyre::eyre::{Context, Result, bail};
+use color_eyre::eyre::{Context, Result};
 use flume::Receiver;
 use miso_common::metrics::{METRICS, STEP_SORT};
 use miso_workflow_types::{
@@ -19,6 +19,7 @@ use crate::{
     interpreter::get_field_value,
     log_iter_creator::IterCreator,
     spawn_thread::{ThreadRx, spawn},
+    type_tracker::TypeTracker,
 };
 
 /// If the sorting set is smaller than this, just sort immediately without building a thread pool
@@ -94,7 +95,7 @@ pub fn cmp_logs(a: &Log, b: &Log, config: &SortConfig) -> Ordering {
 }
 
 fn collect_logs(by: &[Field], input: impl Iterator<Item = LogItem>) -> Result<Vec<Log>> {
-    let mut tracked_types = vec![None; by.len()];
+    let mut type_tracker = TypeTracker::new(by.len());
 
     let mut logs = Vec::new();
     for log in input {
@@ -108,23 +109,9 @@ fn collect_logs(by: &[Field], input: impl Iterator<Item = LogItem>) -> Result<Ve
             }
         };
 
-        for (tracked_type, key) in tracked_types.iter_mut().zip(by) {
-            if let Some(value) = get_field_value(&log, key)
-                && value != &Value::Null
-            {
-                let value_type = std::mem::discriminant(value);
-                if let Some(t) = tracked_type {
-                    if *t != value_type {
-                        bail!(
-                            "cannot sort over differing types (key '{}'): {:?} != {:?}",
-                            key,
-                            *t,
-                            value_type
-                        );
-                    }
-                } else {
-                    *tracked_type = Some(value_type);
-                }
+        for (i, key) in by.iter().enumerate() {
+            if let Some(value) = get_field_value(&log, key) {
+                type_tracker.check(i, value, key)?;
             }
         }
 

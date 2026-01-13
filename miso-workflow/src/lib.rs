@@ -61,6 +61,7 @@ mod spawn_thread;
 pub mod summarize;
 pub mod tee;
 pub mod topn;
+mod type_tracker;
 mod union;
 
 #[cfg(test)]
