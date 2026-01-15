@@ -56,6 +56,9 @@ jobs:
       - name: Compile
         run: cargo nextest run --no-run --locked --workspace
 
+      - name: Run workflow stress
+        run: WORKFLOW_TEST_RUNS=30 cargo nextest run -p miso-workflow
+
       - name: Run
         run: cargo nextest run --workspace
 
