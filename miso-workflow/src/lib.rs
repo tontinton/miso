@@ -68,7 +68,7 @@ mod union;
 mod tests;
 
 pub const CHANNEL_CAPACITY: usize = 256;
-const MISO_METADATA_FIELD_NAME: &str = "_miso";
+pub const MISO_METADATA_FIELD_NAME: &str = "_miso";
 
 pub type AsyncTask = tokio::task::JoinHandle<Result<()>>;
 type PipelineRunResult = Result<(IterCreator, Vec<ThreadRx>, Vec<AsyncTask>)>;

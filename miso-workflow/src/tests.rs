@@ -23,7 +23,10 @@ use miso_connectors::{
 use miso_kql::parse;
 use miso_optimizations::Optimizer;
 use miso_server::query_to_workflow::to_workflow_steps;
-use miso_workflow::Workflow;
+use miso_workflow::{
+    MISO_METADATA_FIELD_NAME, Workflow,
+    partial_stream::{PARTIAL_STREAM_DONE_FIELD_NAME, PartialStream},
+};
 use miso_workflow_types::{expr::Expr, field::Field, field_unwrap, json, log::Log, value::Value};
 use serde::{Deserialize, Serialize};
 use test_case::test_case;
@@ -350,6 +353,80 @@ async fn check_cancel(query: &str, input: &str) -> Result<()> {
         .cancel(true)
         .call()
         .await
+}
+
+struct PartialStreamResult {
+    partials: Vec<Log>,
+    finals: Vec<Log>,
+}
+
+#[bon::builder]
+async fn check_partial_stream(
+    query: &str,
+    input: BTreeMap<&str, &str>,
+    expect_final: &str,
+) -> Result<PartialStreamResult> {
+    let mut connector = TestConnector::new(None, false);
+    for (collection, raw_logs) in input {
+        let logs: Vec<Log> = serde_json::from_str(raw_logs)?;
+        connector.insert(collection.to_string(), logs);
+    }
+
+    let connector = Arc::new(connector);
+    let stats = connector.fetch_stats().await;
+    let connector_state = Arc::new(ConnectorState::new_with_static_stats(connector, stats));
+    let connectors = btreemap! { "test".to_string() => connector_state };
+
+    let steps = to_workflow_steps(&connectors, &BTreeMap::new(), parse(query).unwrap()).unwrap();
+    let optimizer = Optimizer::default();
+    let optimized_steps = spawn_blocking(move || optimizer.optimize(steps)).await?;
+
+    let workflow = Workflow::new_with_partial_stream(
+        optimized_steps,
+        Some(PartialStream {
+            debounce: Duration::ZERO,
+        }),
+    );
+
+    let mut stream = workflow.execute(CancellationToken::new())?;
+    let mut all_logs = Vec::new();
+    while let Some(log) = stream.try_next().await? {
+        all_logs.push(log);
+    }
+
+    let mut partials: Vec<Log> = Vec::new();
+    let mut done_count = 0usize;
+    let mut finals: Vec<Log> = Vec::new();
+
+    for log in all_logs {
+        let metadata = log.get(MISO_METADATA_FIELD_NAME).and_then(|v| match v {
+            Value::Object(obj) => Some(obj.clone()),
+            _ => None,
+        });
+
+        if let Some(metadata) = metadata {
+            if metadata.contains_key(PARTIAL_STREAM_DONE_FIELD_NAME) {
+                done_count += 1;
+            } else {
+                let mut log = log.clone();
+                log.remove(MISO_METADATA_FIELD_NAME);
+                partials.push(log);
+            }
+        } else {
+            finals.push(log);
+        }
+    }
+
+    assert!(!partials.is_empty(), "expected at least one partial");
+    assert!(done_count >= 1, "expected at least one done marker");
+
+    let mut expected: Vec<Value> = serde_json::from_str(expect_final)?;
+    let mut actual: Vec<Value> = finals.iter().cloned().map(Value::Object).collect();
+    expected.sort();
+    actual.sort();
+    assert_eq!(actual, expected, "final logs mismatch");
+
+    Ok(PartialStreamResult { partials, finals })
 }
 
 #[tokio::test]
@@ -2085,4 +2162,148 @@ async fn summarize_group_by_all_nulls() -> Result<()> {
         r#"[]"#,
     )
     .await
+}
+
+#[tokio::test]
+async fn partial_stream_count() -> Result<()> {
+    let r = check_partial_stream()
+        .query("test.a | union (test.b) | count")
+        .input(btreemap! { "a" => r#"[{"x": 1}]"#, "b" => r#"[{"x": 2}]"# })
+        .expect_final(r#"[{"Count": 2}]"#)
+        .call()
+        .await?;
+    let final_count = r.finals[0].get("Count").unwrap().as_i64().unwrap();
+    for p in &r.partials {
+        assert!(p.get("Count").unwrap().as_i64().unwrap() <= final_count);
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn partial_stream_summarize() -> Result<()> {
+    let r = check_partial_stream()
+        .query("test.a | union (test.b) | summarize s=sum(x)")
+        .input(btreemap! { "a" => r#"[{"x": 1}, {"x": 2}]"#, "b" => r#"[{"x": 3}]"# })
+        .expect_final(r#"[{"s": 6}]"#)
+        .call()
+        .await?;
+    let final_sum = r.finals[0].get("s").unwrap().as_i64().unwrap();
+    for p in &r.partials {
+        assert!(p.get("s").unwrap().as_i64().unwrap() <= final_sum);
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn partial_stream_summarize_group_by() -> Result<()> {
+    let r = check_partial_stream()
+        .query("test.a | union (test.b) | summarize cnt=count() by y")
+        .input(btreemap! {
+            "a" => r#"[{"x": 1, "y": "foo"}, {"x": 2, "y": "bar"}]"#,
+            "b" => r#"[{"x": 3, "y": "foo"}]"#
+        })
+        .expect_final(r#"[{"y": "bar", "cnt": 1}, {"y": "foo", "cnt": 2}]"#)
+        .call()
+        .await?;
+    for p in &r.partials {
+        assert!(p.contains_key("y") && p.contains_key("cnt"));
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn partial_stream_topn() -> Result<()> {
+    let r = check_partial_stream()
+        .query("test.a | union (test.b) | top 2 by x desc")
+        .input(btreemap! {
+            "a" => r#"[{"x": 5}, {"x": 3}, {"x": 1}]"#,
+            "b" => r#"[{"x": 10}, {"x": 2}]"#
+        })
+        .expect_final(r#"[{"x": 10}, {"x": 5}]"#)
+        .call()
+        .await?;
+    assert!(r.partials.len() <= 2);
+    for p in &r.partials {
+        assert!(p.contains_key("x"));
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn partial_stream_filter() -> Result<()> {
+    let r = check_partial_stream()
+        .query("test.a | union (test.b) | count | where Count > 0")
+        .input(btreemap! { "a" => r#"[{"x": 1}]"#, "b" => r#"[{"x": 2}]"# })
+        .expect_final(r#"[{"Count": 2}]"#)
+        .call()
+        .await?;
+    for p in &r.partials {
+        assert!(p.get("Count").unwrap().as_i64().unwrap() > 0);
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn partial_stream_project() -> Result<()> {
+    let r = check_partial_stream()
+        .query("test.a | union (test.b) | count | project c=Count")
+        .input(btreemap! { "a" => r#"[{"x": 1}]"#, "b" => r#"[{"x": 2}]"# })
+        .expect_final(r#"[{"c": 2}]"#)
+        .call()
+        .await?;
+    let final_c = r.finals[0].get("c").unwrap().as_i64().unwrap();
+    for p in &r.partials {
+        assert!(!p.contains_key("Count"));
+        assert!(p.get("c").unwrap().as_i64().unwrap() <= final_c);
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn partial_stream_extend() -> Result<()> {
+    let r = check_partial_stream()
+        .query("test.a | union (test.b) | summarize s=sum(x) | extend d=s*2")
+        .input(btreemap! { "a" => r#"[{"x": 1}]"#, "b" => r#"[{"x": 2}]"# })
+        .expect_final(r#"[{"s": 3, "d": 6}]"#)
+        .call()
+        .await?;
+    let final_d = r.finals[0].get("d").unwrap().as_i64().unwrap();
+    for p in &r.partials {
+        assert!(p.get("d").unwrap().as_i64().unwrap() <= final_d);
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn partial_stream_limit() -> Result<()> {
+    let r = check_partial_stream()
+        .query("test.a | union (test.b) | top 3 by x desc | take 2")
+        .input(btreemap! {
+            "a" => r#"[{"x": 5}, {"x": 3}, {"x": 1}]"#,
+            "b" => r#"[{"x": 10}]"#
+        })
+        .expect_final(r#"[{"x": 10}, {"x": 5}]"#)
+        .call()
+        .await?;
+    assert!(r.partials.len() <= 2);
+    Ok(())
+}
+
+#[tokio::test]
+async fn partial_stream_multi_union() -> Result<()> {
+    let r = check_partial_stream()
+        .query("test.a | union (test.b) | union (test.c) | count")
+        .input(btreemap! {
+            "a" => r#"[{"x": 1}]"#,
+            "b" => r#"[{"x": 2}]"#,
+            "c" => r#"[{"x": 3}]"#
+        })
+        .expect_final(r#"[{"Count": 3}]"#)
+        .call()
+        .await?;
+    let final_count = r.finals[0].get("Count").unwrap().as_i64().unwrap();
+    for p in &r.partials {
+        assert!(p.get("Count").unwrap().as_i64().unwrap() <= final_count);
+    }
+    Ok(())
 }
