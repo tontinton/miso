@@ -10,8 +10,8 @@ run *ARGS:
 test *ARGS:
     cargo nextest run --workspace {{ARGS}}
 
-test-workflow-stress:
-    WORKFLOW_TEST_RUNS=1000 cargo nextest run -p miso-workflow
+test-workflow-stress runs="1000":
+    WORKFLOW_TEST_RUNS={{runs}} cargo nextest run -p miso-workflow
 
 # Run all tests (`just test`) but without any connector predicate pushdown tests
 test-no-pp:
