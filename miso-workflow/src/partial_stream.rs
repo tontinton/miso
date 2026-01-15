@@ -14,7 +14,7 @@ use serde::Deserialize;
 use super::MISO_METADATA_FIELD_NAME;
 
 const PARTIAL_STREAM_ID_FIELD_NAME: &str = "id";
-const PARTIAL_STREAM_DONE_FIELD_NAME: &str = "done";
+pub const PARTIAL_STREAM_DONE_FIELD_NAME: &str = "done";
 
 fn default_debounce() -> Duration {
     Duration::from_secs(1)
@@ -28,7 +28,7 @@ pub struct PartialStream {
         default = "default_debounce",
         deserialize_with = "deserialize_duration"
     )]
-    debounce: Duration,
+    pub debounce: Duration,
 }
 
 pub trait PartialLogIter: Iterator<Item = LogItem> {
@@ -140,5 +140,130 @@ impl Iterator for PartialStreamIter {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::VecDeque;
+
+    struct MockPartialIter {
+        items: VecDeque<LogItem>,
+        partial_count: u64,
+    }
+
+    impl MockPartialIter {
+        fn new(items: Vec<LogItem>) -> Self {
+            Self {
+                items: items.into(),
+                partial_count: 0,
+            }
+        }
+    }
+
+    impl Iterator for MockPartialIter {
+        type Item = LogItem;
+        fn next(&mut self) -> Option<Self::Item> {
+            let item = self.items.pop_front()?;
+            if matches!(item, LogItem::Log(_)) {
+                self.partial_count += 1;
+            }
+            Some(item)
+        }
+    }
+
+    impl PartialLogIter for MockPartialIter {
+        fn get_partial(&self) -> LogIter {
+            let mut log = Log::new();
+            log.insert("count".into(), Value::from(self.partial_count));
+            Box::new(iter::once(LogItem::Log(log)))
+        }
+    }
+
+    fn no_debounce() -> PartialStream {
+        PartialStream {
+            debounce: Duration::ZERO,
+        }
+    }
+
+    fn log(key: &str, val: i64) -> LogItem {
+        let mut l = Log::new();
+        l.insert(key.into(), Value::from(val));
+        LogItem::Log(l)
+    }
+
+    #[test]
+    fn union_done() {
+        let mock = MockPartialIter::new(vec![
+            log("x", 1),
+            log("x", 2),
+            LogItem::UnionSomePipelineDone,
+            log("x", 3),
+        ]);
+        let mut iter = PartialStreamIter::new(Box::new(mock), no_debounce());
+
+        let items: Vec<_> = iter.by_ref().collect();
+
+        assert_eq!(items.len(), 5);
+        assert!(matches!(&items[0], LogItem::Log(_)));
+        assert!(matches!(&items[1], LogItem::Log(_)));
+        assert!(matches!(&items[2], LogItem::PartialStreamLog(_, 0)));
+        assert!(matches!(&items[3], LogItem::PartialStreamDone(0)));
+        assert!(matches!(&items[4], LogItem::Log(_)));
+    }
+
+    #[test]
+    fn multiple_unions_increment_ids() {
+        let mock = MockPartialIter::new(vec![
+            log("x", 1),
+            LogItem::UnionSomePipelineDone,
+            log("x", 2),
+            LogItem::UnionSomePipelineDone,
+        ]);
+        let mut iter = PartialStreamIter::new(Box::new(mock), no_debounce());
+
+        let items: Vec<_> = iter.by_ref().collect();
+
+        let partial_logs: Vec<_> = items
+            .iter()
+            .filter_map(|i| match i {
+                LogItem::PartialStreamLog(_, id) => Some(*id),
+                _ => None,
+            })
+            .collect();
+        let done_markers: Vec<_> = items
+            .iter()
+            .filter_map(|i| match i {
+                LogItem::PartialStreamDone(id) => Some(*id),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(partial_logs, vec![0, 1]);
+        assert_eq!(done_markers, vec![0, 1]);
+    }
+
+    #[test]
+    fn debounce_skips_second_done() {
+        let mock = MockPartialIter::new(vec![
+            log("x", 1),
+            LogItem::UnionSomePipelineDone,
+            LogItem::UnionSomePipelineDone,
+        ]);
+        let iter = PartialStreamIter::new(
+            Box::new(mock),
+            PartialStream {
+                debounce: Duration::from_secs(30),
+            },
+        );
+
+        let items: Vec<_> = iter.collect();
+
+        let partial_count = items
+            .iter()
+            .filter(|i| matches!(i, LogItem::PartialStreamLog(..)))
+            .count();
+        assert_eq!(partial_count, 1);
     }
 }
