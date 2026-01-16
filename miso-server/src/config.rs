@@ -35,9 +35,39 @@ pub struct ConnectorConfig {
 #[derive(Deserialize)]
 struct Config {
     connectors: BTreeMap<String, ConnectorConfig>,
+    query_status_collection: Option<String>,
 }
 
-pub fn load_connectors_from_config<P: AsRef<Path>>(path: P) -> Result<ConnectorsMap> {
+/// Configuration for writing query status records.
+#[derive(Debug, Clone)]
+pub struct QueryStatusConfig {
+    pub connector_name: String,
+    pub collection_name: String,
+}
+
+impl QueryStatusConfig {
+    /// Parse a "connector.collection" string into a QueriesStatusConfig.
+    pub fn parse(value: &str) -> Result<Self> {
+        let (connector_name, collection_name) = value.split_once('.').ok_or_else(|| {
+            color_eyre::eyre::eyre!(
+                "query_status_collection must be in format 'connector.collection', got: {value}"
+            )
+        })?;
+
+        if connector_name.is_empty() || collection_name.is_empty() {
+            bail!(
+                "query_status_collection must have non-empty connector and collection names, got: {value}"
+            );
+        }
+
+        Ok(Self {
+            connector_name: connector_name.to_string(),
+            collection_name: collection_name.to_string(),
+        })
+    }
+}
+
+pub fn load_config<P: AsRef<Path>>(path: P) -> Result<(ConnectorsMap, Option<QueryStatusConfig>)> {
     let path = path.as_ref();
 
     let content = std::fs::read_to_string(path)
@@ -62,5 +92,10 @@ pub fn load_connectors_from_config<P: AsRef<Path>>(path: P) -> Result<Connectors
         );
     }
 
-    Ok(connectors)
+    let query_status_config = match config.query_status_collection {
+        Some(value) => Some(QueryStatusConfig::parse(&value)?),
+        None => None,
+    };
+
+    Ok((connectors, query_status_config))
 }

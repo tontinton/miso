@@ -1,6 +1,6 @@
 use std::{
     collections::BTreeMap,
-    sync::Arc,
+    sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 
@@ -12,7 +12,10 @@ use axum::{
     response::{IntoResponse, Response, Sse, sse::Event},
     routing::{delete, get, post},
 };
-use color_eyre::{Result, eyre::Context};
+use color_eyre::{
+    Result,
+    eyre::{Context, eyre},
+};
 use futures_util::{Stream, TryStreamExt};
 use miso_common::{
     metrics::{ERROR_CONNECTOR, ERROR_INTERNAL, METRICS},
@@ -34,7 +37,8 @@ use uuid::Uuid;
 
 use crate::{
     VIEWS_CONNECTOR_NAME, ViewsMap,
-    config::{ConnectorConfig, ConnectorsMap, load_connectors_from_config},
+    config::{ConnectorConfig, ConnectorsMap, load_config},
+    query_status::{QUERY_ID_FIELD, QueryStatus, QueryStatusWriter},
     query_to_workflow::to_workflow_steps,
 };
 
@@ -46,11 +50,16 @@ struct App {
     connectors: RwLock<ConnectorsMap>,
     optimizer: Arc<Optimizer>,
     views: RwLock<ViewsMap>,
+    query_status_writer: Option<QueryStatusWriter>,
     _tokio_metrics_task: ShutdownFuture,
 }
 
 impl App {
-    fn new(connectors: ConnectorsMap, optimizer: Optimizer) -> Result<Self> {
+    fn new(
+        connectors: ConnectorsMap,
+        optimizer: Optimizer,
+        query_status_writer: Option<QueryStatusWriter>,
+    ) -> Result<Self> {
         let tokio_metrics_task =
             ShutdownFuture::new(collect_tokio_metrics(), "Tokio metrics collector");
 
@@ -58,6 +67,7 @@ impl App {
             connectors: RwLock::new(connectors),
             optimizer: Arc::new(optimizer),
             views: RwLock::new(BTreeMap::new()),
+            query_status_writer,
             _tokio_metrics_task: tokio_metrics_task,
         })
     }
@@ -207,16 +217,26 @@ async fn query_stream(
 
     // Must be called the same as the const QUERY_ID_FIELD so it will be in all logs.
     let query_id = req.query_id.unwrap_or_else(Uuid::now_v7);
+    let query_text = req.query.clone();
 
     let span = span!(Level::INFO, "query", ?query_id, ?req.query);
     let stream_span = span.clone();
     let _enter = span.enter();
 
-    info!(?req.query, "Building query workflow");
+    let status_handle = match state.query_status_writer.as_ref() {
+        Some(writer) => Some(writer.start(query_id, query_text).await),
+        None => None,
+    };
+
+    info!("Building query workflow");
     let mut non_optimized = Some(String::new());
     let workflow = build_query_workflow(state.clone(), req, query_id, &mut non_optimized).await?;
 
     info!(non_optimized=non_optimized.unwrap(), optimized=%workflow, "Starting to run a new query");
+
+    if let Some(ref handle) = status_handle {
+        handle.update(QueryStatus::Running).await;
+    }
 
     let cancel = CancellationToken::new();
     let mut logs_stream = workflow.execute(cancel.clone()).map_err(|e| {
@@ -238,6 +258,18 @@ async fn query_stream(
             cancel.cancel();
         });
 
+        let final_status = Arc::new(Mutex::new(QueryStatus::Cancelled));
+        let _status_guard = scopeguard::guard(
+            (final_status.clone(), status_handle.clone()),
+            |(final_status, status_handle)| {
+                if let Some(handle) = status_handle {
+                    let status = final_status.lock().unwrap().clone();
+                    tokio::spawn(async move {
+                        handle.finish(status).await;
+                    });
+                }
+            });
+
         loop {
             match logs_stream.try_next().await {
                 Ok(None) => break,
@@ -245,18 +277,17 @@ async fn query_stream(
                     yield Event::default().json_data(log);
                 }
                 Err(e) => {
-                    let (msg, label) = if let Some(e) = e.downcast_ref::<ConnectorError>() {
+                    let (status, msg, label) = if let Some(e) = e.downcast_ref::<ConnectorError>() {
                         error!("Workflow connector error: {e:?}");
-                        (e.to_string(), ERROR_CONNECTOR)
+                        let msg = e.to_string();
+                        (QueryStatus::ConnectorError(msg.clone()), msg, ERROR_CONNECTOR)
                     } else {
-                        METRICS
-                            .query_errors_total
-                            .with_label_values(&[ERROR_INTERNAL])
-                            .inc();
                         error!("Workflow internal error: {e:?}");
-                        (INTERNAL_SERVER_ERROR.to_string(), ERROR_INTERNAL)
+                        let msg = INTERNAL_SERVER_ERROR.to_string();
+                        (QueryStatus::InternalError(e.to_string()), msg, ERROR_INTERNAL)
                     };
 
+                    *final_status.lock().unwrap() = status;
                     METRICS.query_errors_total.with_label_values(&[label]).inc();
 
                     yield Event::default().json_data(json!({ERROR_LOG_FIELD_NAME: msg}));
@@ -264,6 +295,15 @@ async fn query_stream(
                 }
             }
         }
+
+        {
+            let mut guard = final_status.lock().unwrap();
+            if *guard == QueryStatus::Cancelled {
+                *guard = QueryStatus::Success;
+            }
+        }
+
+        info!("Query done");
     }))
 }
 
@@ -426,9 +466,32 @@ pub enum OptimizationConfig {
 }
 
 pub fn create_app(config: OptimizationConfig, config_path: Option<&str>) -> Result<Router> {
-    let connectors = match config_path {
-        Some(path) => load_connectors_from_config(path)?,
-        None => BTreeMap::new(),
+    let (connectors, query_status_config) = match config_path {
+        Some(path) => load_config(path)?,
+        None => (BTreeMap::new(), None),
+    };
+
+    let query_status_writer = if let Some(cfg) = query_status_config {
+        let connector = connectors.get(&cfg.connector_name).ok_or_else(|| {
+            eyre!(
+                "query_status_collection references unknown connector '{}'. Available connectors: {:?}",
+                cfg.connector_name,
+                connectors.keys().collect::<Vec<_>>()
+            )
+        })?;
+
+        let sink = connector
+            .connector
+            .create_updatable_sink(&cfg.collection_name, QUERY_ID_FIELD)
+            .ok_or_else(|| {
+                eyre!(
+                    "Connector '{}' does not support upsert operations required for query status tracking",
+                    cfg.connector_name
+                )
+            })?;
+        Some(QueryStatusWriter::new(sink))
+    } else {
+        None
     };
 
     let optimizer = match config {
@@ -438,7 +501,8 @@ pub fn create_app(config: OptimizationConfig, config_path: Option<&str>) -> Resu
         } => Optimizer::with_dynamic_filtering(dynamic_filter_max_distinct_values),
     };
 
-    let app = App::new(connectors, optimizer).context("create axum app state")?;
+    let app =
+        App::new(connectors, optimizer, query_status_writer).context("create axum app state")?;
 
     Ok(Router::new()
         .route("/health", get(health_check))

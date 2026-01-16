@@ -142,6 +142,20 @@ pub trait Sink: Debug + Send + Sync {
     async fn flush(&self) {}
 }
 
+#[derive(Debug, Error)]
+pub enum SinkUpsertError {
+    #[error("primary key field '{0}' not found in log")]
+    PrimaryKeyNotFound(String),
+}
+
+/// A mutable sink that supports updating previously written logs.
+#[async_trait]
+pub trait UpdatableSink: Sink {
+    /// Update or insert a log by the primary key.
+    /// If a record with the same primary key value exists, it will be replaced.
+    async fn upsert(&self, log: Log) -> Result<(), SinkUpsertError>;
+}
+
 #[async_trait]
 #[typetag::serde(tag = "type")]
 pub trait Connector: Debug + Send + Sync {
@@ -282,8 +296,18 @@ pub trait Connector: Debug + Send + Sync {
     }
 
     /// Create a sink that can write logs to a collection in this connector.
-    /// Returns None if the connector doesn't support sink operations.
+    /// Returns None if the connector doesn't support write operations (e.g. tee).
     fn create_sink(&self, _collection: &str) -> Option<Box<dyn Sink>> {
+        None
+    }
+
+    /// Create an updatable sink that supports upsert operations.
+    /// Returns None if the connector doesn't support upsert operations.
+    fn create_updatable_sink(
+        &self,
+        _collection: &str,
+        _primary_key: &str,
+    ) -> Option<Box<dyn UpdatableSink>> {
         None
     }
 
