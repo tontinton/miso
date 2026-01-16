@@ -87,7 +87,7 @@ impl Default for MemoryConnector {
 }
 
 #[async_trait]
-#[typetag::serde]
+#[typetag::serde(name = "memory")]
 impl Connector for MemoryConnector {
     fn get_collection(&self, collection: &str) -> Option<Collection> {
         if self.collections.read().contains_key(collection) {
