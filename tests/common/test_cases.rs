@@ -1,4 +1,9 @@
-use crate::common::TestConnector;
+#[derive(Clone, Copy, PartialEq)]
+pub enum TestConnector {
+    Elastic,
+    Quickwit,
+    Splunk,
+}
 
 #[derive(Clone)]
 pub struct TestCase {

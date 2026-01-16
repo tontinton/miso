@@ -6,7 +6,14 @@ use time::{Duration, OffsetDateTime};
 use tracing::error;
 use uuid::Uuid;
 
-pub(crate) const QUERY_ID_FIELD: &str = "id";
+pub const QUERY_ID_FIELD: &str = "id";
+pub const STATUS_FIELD: &str = "status";
+pub const ERROR_FIELD: &str = "error";
+pub const START_TIME_FIELD: &str = "start_time";
+pub const END_TIME_FIELD: &str = "end_time";
+pub const RUN_TIME_FIELD: &str = "run_time";
+pub const UPDATE_TIME_FIELD: &str = "update_time";
+pub const QUERY_FIELD: &str = "query";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum QueryStatus {
@@ -84,22 +91,22 @@ impl QueryStatusHandle {
 
         let log = Log::from([
             (QUERY_ID_FIELD.to_string(), self.query_id.to_string().into()),
-            ("status".to_string(), status.as_str().into()),
+            (STATUS_FIELD.to_string(), status.as_str().into()),
             (
-                "error".to_string(),
+                ERROR_FIELD.to_string(),
                 status.error_message().map_or(Value::Null, |msg| msg.into()),
             ),
-            ("start_time".to_string(), self.start_time.into()),
+            (START_TIME_FIELD.to_string(), self.start_time.into()),
             (
-                "end_time".to_string(),
+                END_TIME_FIELD.to_string(),
                 end_time.map_or(Value::Null, |t: OffsetDateTime| t.into()),
             ),
             (
-                "run_time".to_string(),
+                RUN_TIME_FIELD.to_string(),
                 run_time.map_or(Value::Null, |d: Duration| d.into()),
             ),
-            ("update_time".to_string(), update_time.into()),
-            ("query".to_string(), self.query.as_str().into()),
+            (UPDATE_TIME_FIELD.to_string(), update_time.into()),
+            (QUERY_FIELD.to_string(), self.query.as_str().into()),
         ]);
 
         if let Err(e) = self.sink.upsert(log).await {

@@ -24,10 +24,8 @@ use testcontainers::{
 use tokio_retry::{strategy::FixedInterval, Retry};
 use tracing::info;
 
-use common::{
-    init_test_tracing, run_predicate_pushdown_tests, TestConnector, BASE_PREDICATE_PUSHDOWN_TESTS,
-    INDEXES,
-};
+use common::init_test_tracing;
+use common::predicate_pushdown::{run_tests, TestConnector, INDEXES, TESTS};
 
 const QUICKWIT_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
 
@@ -345,10 +343,5 @@ async fn quickwit_predicate_pushdown() -> Result<()> {
         }
     };
     let connectors = Arc::new(setup(url).await?);
-    run_predicate_pushdown_tests(
-        TestConnector::Quickwit,
-        connectors,
-        &[BASE_PREDICATE_PUSHDOWN_TESTS],
-    )
-    .await
+    run_tests(TestConnector::Quickwit, connectors, &[TESTS]).await
 }
