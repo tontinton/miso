@@ -15,7 +15,7 @@ use color_eyre::{
 use futures_util::{FutureExt, TryStreamExt};
 use miso_kql::parse;
 use miso_optimizations::Optimizer;
-use miso_server::http_server::ConnectorsMap;
+use miso_server::config::ConnectorsMap;
 use miso_server::query_to_workflow::to_workflow_steps;
 use miso_workflow::Workflow;
 use miso_workflow_types::value::Value;

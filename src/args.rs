@@ -6,6 +6,13 @@ pub struct Args {
     #[clap(
         short,
         long,
+        help = "Path to JSON file with configurations (e.g. connectors to create on startup)."
+    )]
+    pub config: Option<String>,
+
+    #[clap(
+        short,
+        long,
         help = "Listen address (host:port).",
         default_value = "0.0.0.0:8080"
     )]

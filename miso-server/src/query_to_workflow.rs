@@ -10,10 +10,7 @@ use miso_workflow_types::{
 };
 use tracing::info;
 
-use crate::{
-    VIEWS_CONNECTOR_NAME, ViewsMap,
-    http_server::{ConnectorsMap, HttpError},
-};
+use crate::{VIEWS_CONNECTOR_NAME, ViewsMap, config::ConnectorsMap, http_server::HttpError};
 
 pub fn to_workflow_steps(
     connectors: &ConnectorsMap,

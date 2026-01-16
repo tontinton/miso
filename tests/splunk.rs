@@ -13,7 +13,7 @@ use miso_connectors::{
     splunk::{SplunkAuth, SplunkConfig, SplunkConnector},
     Connector, ConnectorState,
 };
-use miso_server::http_server::ConnectorsMap;
+use miso_server::config::ConnectorsMap;
 use reqwest::Client;
 use testcontainers::{
     core::{IntoContainerPort, WaitFor},

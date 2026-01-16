@@ -15,14 +15,11 @@ use axum::{
 use color_eyre::{Result, eyre::Context};
 use futures_util::{Stream, TryStreamExt};
 use miso_common::{
-    humantime_utils::deserialize_duration,
     metrics::{ERROR_CONNECTOR, ERROR_INTERNAL, METRICS},
     run_at_interval::run_at_interval,
     shutdown_future::ShutdownFuture,
 };
-use miso_connectors::{
-    Connector, ConnectorError, ConnectorState, memory::MemoryConnector, quickwit::QuickwitConnector,
-};
+use miso_connectors::{Connector, ConnectorError, ConnectorState};
 use miso_kql::{ParseError, parse};
 use miso_optimizations::Optimizer;
 use miso_workflow::{Workflow, partial_stream::PartialStream};
@@ -35,14 +32,15 @@ use tower_http::trace::TraceLayer;
 use tracing::{Level, Span, debug, error, info, span};
 use uuid::Uuid;
 
-use crate::{VIEWS_CONNECTOR_NAME, ViewsMap, query_to_workflow::to_workflow_steps};
+use crate::{
+    VIEWS_CONNECTOR_NAME, ViewsMap,
+    config::{ConnectorConfig, ConnectorsMap, load_connectors_from_config},
+    query_to_workflow::to_workflow_steps,
+};
 
-const DEFAULT_STATS_FETCH_INTERVAL: Duration = Duration::from_secs(60 * 60 * 3); // 3 hours.
 const TOKIO_METRICS_UPDATE_INTERVAL: Duration = Duration::from_secs(1);
 const INTERNAL_SERVER_ERROR: &str = "Internal server error";
 const ERROR_LOG_FIELD_NAME: &str = "_error";
-
-pub type ConnectorsMap = BTreeMap<String, Arc<ConnectorState>>;
 
 struct App {
     connectors: RwLock<ConnectorsMap>,
@@ -306,30 +304,13 @@ async fn get_connector(
     Ok(Json(connector).into_response())
 }
 
-fn default_stats_fetch_interval() -> Duration {
-    DEFAULT_STATS_FETCH_INTERVAL
-}
-
-#[derive(Deserialize)]
-struct PostConnectorBody {
-    /// The interval to fetch statistics (e.g. distinct count of each field), and cache in memory.
-    #[serde(
-        default = "default_stats_fetch_interval",
-        deserialize_with = "deserialize_duration"
-    )]
-    stats_fetch_interval: Duration,
-
-    /// The connector config to set.
-    connector: Box<dyn Connector>,
-}
-
 async fn post_connector(
     State(state): State<Arc<App>>,
     Path(id): Path<String>,
-    Json(PostConnectorBody {
+    Json(ConnectorConfig {
         stats_fetch_interval,
         connector,
-    }): Json<PostConnectorBody>,
+    }): Json<ConnectorConfig>,
 ) -> Result<(), HttpError> {
     if id == VIEWS_CONNECTOR_NAME {
         return Err(HttpError::from_string(
@@ -444,24 +425,11 @@ pub enum OptimizationConfig {
     },
 }
 
-pub fn create_axum_app(config: OptimizationConfig) -> Result<Router> {
-    let mut connectors = BTreeMap::new();
-    connectors.insert(
-        "mem".to_string(),
-        Arc::new(ConnectorState::new(Arc::new(MemoryConnector::new()))),
-    );
-    connectors.insert(
-        "tony".to_string(),
-        Arc::new(ConnectorState::new_with_stats(
-            Arc::new(QuickwitConnector::new(serde_json::from_str(
-                r#"{
-                    "url": "http://127.0.0.1:7280",
-                    "refresh_interval": "5s"
-                }"#,
-            )?)),
-            DEFAULT_STATS_FETCH_INTERVAL,
-        )),
-    );
+pub fn create_app(config: OptimizationConfig, config_path: Option<&str>) -> Result<Router> {
+    let connectors = match config_path {
+        Some(path) => load_connectors_from_config(path)?,
+        None => BTreeMap::new(),
+    };
 
     let optimizer = match config {
         OptimizationConfig::NoOptimizations => Optimizer::empty(),

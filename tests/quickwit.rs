@@ -13,7 +13,7 @@ use miso_connectors::{
     quickwit::{QuickwitConfig, QuickwitConnector},
     Connector, ConnectorState,
 };
-use miso_server::http_server::ConnectorsMap;
+use miso_server::config::ConnectorsMap;
 use reqwest::{header::CONTENT_TYPE, Client, Response};
 use serde::Serialize;
 use testcontainers::{
