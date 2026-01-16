@@ -19,6 +19,7 @@ prometheus.workspace = true
 scopeguard.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+time.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
 tower-http.workspace = true
