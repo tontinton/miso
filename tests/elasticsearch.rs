@@ -24,10 +24,8 @@ use testcontainers::{
 use tokio_retry::{strategy::FixedInterval, Retry};
 use tracing::info;
 
-use common::{
-    init_test_tracing, run_predicate_pushdown_tests, TestConnector, BASE_PREDICATE_PUSHDOWN_TESTS,
-    INDEXES,
-};
+use common::init_test_tracing;
+use common::predicate_pushdown::{run_tests, TestConnector, INDEXES, TESTS};
 
 #[ctor]
 fn init() {
@@ -274,10 +272,5 @@ async fn elasticsearch_predicate_pushdown() -> Result<()> {
         }
     };
     let connectors = Arc::new(setup(url).await?);
-    run_predicate_pushdown_tests(
-        TestConnector::Elastic,
-        connectors,
-        &[BASE_PREDICATE_PUSHDOWN_TESTS],
-    )
-    .await
+    run_tests(TestConnector::Elastic, connectors, &[TESTS]).await
 }

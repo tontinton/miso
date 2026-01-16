@@ -115,6 +115,7 @@ testcontainers.workspace = true
 tokio-retry.workspace = true
 tokio-test.workspace = true
 tokio-util.workspace = true
+uuid.workspace = true
 
 [profile.release]
 strip = "none"
