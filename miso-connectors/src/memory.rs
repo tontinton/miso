@@ -201,3 +201,83 @@ impl Connector for MemoryConnector {
         // Nothing to close
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn log(fields: &[(&str, Value)]) -> Log {
+        fields
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.clone()))
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn sink_write_appends_to_vec() {
+        let connector = MemoryConnector::new();
+        let sink = connector.create_sink("test").unwrap();
+
+        sink.write(log(&[("a", Value::Int(1))])).await;
+        sink.write(log(&[("a", Value::Int(2))])).await;
+
+        let logs = connector.get_logs("test");
+        assert_eq!(logs.len(), 2);
+        assert_eq!(logs[0].get("a"), Some(&Value::Int(1)));
+        assert_eq!(logs[1].get("a"), Some(&Value::Int(2)));
+    }
+
+    #[tokio::test]
+    async fn updatable_sink_upsert_replaces_by_key() {
+        let connector = MemoryConnector::new();
+        let sink = connector.create_updatable_sink("test", "id").unwrap();
+
+        sink.upsert(log(&[
+            ("id", Value::String("k1".into())),
+            ("v", Value::Int(1)),
+        ]))
+        .await
+        .unwrap();
+        sink.upsert(log(&[
+            ("id", Value::String("k1".into())),
+            ("v", Value::Int(2)),
+        ]))
+        .await
+        .unwrap();
+
+        let logs = connector.get_logs("test");
+        assert_eq!(logs.len(), 1);
+        assert_eq!(logs[0].get("v"), Some(&Value::Int(2)));
+    }
+
+    #[tokio::test]
+    async fn upsert_returns_error_when_primary_key_missing() {
+        let connector = MemoryConnector::new();
+        let sink = connector.create_updatable_sink("test", "id").unwrap();
+
+        let result = sink.upsert(log(&[("other", Value::Int(1))])).await;
+
+        assert!(matches!(result, Err(SinkUpsertError::PrimaryKeyNotFound(key)) if key == "id"));
+    }
+
+    #[test]
+    fn get_collection_reflects_sink_creation() {
+        let connector = MemoryConnector::new();
+        assert!(connector.get_collection("test").is_none());
+        let _sink = connector.create_sink("test");
+        assert!(connector.get_collection("test").is_some());
+    }
+
+    #[tokio::test]
+    async fn collections_are_isolated() {
+        let connector = MemoryConnector::new();
+        let s1 = connector.create_sink("a").unwrap();
+        let s2 = connector.create_sink("b").unwrap();
+
+        s1.write(log(&[("x", Value::Int(1))])).await;
+        s2.write(log(&[("x", Value::Int(2))])).await;
+
+        assert_eq!(connector.get_logs("a")[0].get("x"), Some(&Value::Int(1)));
+        assert_eq!(connector.get_logs("b")[0].get("x"), Some(&Value::Int(2)));
+    }
+}
