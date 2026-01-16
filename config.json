@@ -8,5 +8,6 @@
       "url": "http://127.0.0.1:7280",
       "refresh_interval": "5s"
     }
-  }
+  },
+  "query_status_collection": "mem.queries"
 }
