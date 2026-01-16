@@ -33,6 +33,12 @@ pub struct Args {
         help = "OTLP endpoint for exporting traces (e.g., http://localhost:4317)."
     )]
     pub otlp_endpoint: Option<String>,
+
+    #[clap(
+        long,
+        help = "Path to JSON file with initial connector configurations."
+    )]
+    pub init_connectors: Option<String>,
 }
 
 #[must_use]

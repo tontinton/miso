@@ -1,7 +1,7 @@
 use color_eyre::eyre::{Context, Result};
 use mimalloc::MiMalloc;
 use miso_common::query_id_layer::{QueryIdJsonFormat, QueryIdLayer};
-use miso_server::http_server::{create_axum_app, OptimizationConfig};
+use miso_server::http_server::{create_app, OptimizationConfig};
 use opentelemetry::{trace::TracerProvider as _, KeyValue};
 use opentelemetry_otlp::WithExportConfig;
 use opentelemetry_sdk::{
@@ -109,7 +109,7 @@ async fn main() -> Result<()> {
         }
     };
 
-    let app = create_axum_app(config)?;
+    let app = create_app(config, args.init_connectors.as_deref())?;
     let listener = TcpListener::bind(&args.listen).await?;
 
     info!("Listening on {}", args.listen);

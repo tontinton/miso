@@ -20,9 +20,7 @@ use miso_common::{
     run_at_interval::run_at_interval,
     shutdown_future::ShutdownFuture,
 };
-use miso_connectors::{
-    Connector, ConnectorError, ConnectorState, memory::MemoryConnector, quickwit::QuickwitConnector,
-};
+use miso_connectors::{Connector, ConnectorError, ConnectorState};
 use miso_kql::{ParseError, parse};
 use miso_optimizations::Optimizer;
 use miso_workflow::{Workflow, partial_stream::PartialStream};
@@ -35,9 +33,12 @@ use tower_http::trace::TraceLayer;
 use tracing::{Level, Span, debug, error, info, span};
 use uuid::Uuid;
 
-use crate::{VIEWS_CONNECTOR_NAME, ViewsMap, query_to_workflow::to_workflow_steps};
+use crate::{
+    VIEWS_CONNECTOR_NAME, ViewsMap, init_connectors::load_connectors_from_file,
+    query_to_workflow::to_workflow_steps,
+};
 
-const DEFAULT_STATS_FETCH_INTERVAL: Duration = Duration::from_secs(60 * 60 * 3); // 3 hours.
+pub(crate) const DEFAULT_STATS_FETCH_INTERVAL: Duration = Duration::from_secs(60 * 60 * 3);
 const TOKIO_METRICS_UPDATE_INTERVAL: Duration = Duration::from_secs(1);
 const INTERNAL_SERVER_ERROR: &str = "Internal server error";
 const ERROR_LOG_FIELD_NAME: &str = "_error";
@@ -444,24 +445,14 @@ pub enum OptimizationConfig {
     },
 }
 
-pub fn create_axum_app(config: OptimizationConfig) -> Result<Router> {
-    let mut connectors = BTreeMap::new();
-    connectors.insert(
-        "mem".to_string(),
-        Arc::new(ConnectorState::new(Arc::new(MemoryConnector::new()))),
-    );
-    connectors.insert(
-        "tony".to_string(),
-        Arc::new(ConnectorState::new_with_stats(
-            Arc::new(QuickwitConnector::new(serde_json::from_str(
-                r#"{
-                    "url": "http://127.0.0.1:7280",
-                    "refresh_interval": "5s"
-                }"#,
-            )?)),
-            DEFAULT_STATS_FETCH_INTERVAL,
-        )),
-    );
+pub fn create_app(
+    config: OptimizationConfig,
+    init_connectors_path: Option<&str>,
+) -> Result<Router> {
+    let connectors = match init_connectors_path {
+        Some(path) => load_connectors_from_file(path)?,
+        None => BTreeMap::new(),
+    };
 
     let optimizer = match config {
         OptimizationConfig::NoOptimizations => Optimizer::empty(),
