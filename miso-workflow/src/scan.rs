@@ -14,7 +14,7 @@ use miso_connectors::{
 };
 use miso_workflow_types::{
     expr::Expr,
-    log::{LogItem, LogTryStream},
+    log::{Log, LogItem, LogItemTryStream},
 };
 use parking_lot::Mutex;
 use tokio_util::sync::CancellationToken;
@@ -81,8 +81,18 @@ impl Scan {
     }
 }
 
-fn count_to_stream(count: u64) -> LogTryStream {
-    Box::pin(once(async move { Ok(count_to_log(count)) }))
+fn count_to_stream(count: u64) -> LogItemTryStream {
+    Box::pin(once(async move { Ok(LogItem::Log(count_to_log(count))) }))
+}
+
+#[inline]
+fn apply_static_fields(mut log: Log, static_fields: &HashMap<String, String>) -> Log {
+    for (to, from) in static_fields {
+        if let Some(value) = log.remove(from) {
+            log.insert(to.clone(), value);
+        }
+    }
+    log
 }
 
 async fn apply_dynamic_filter(
@@ -104,7 +114,7 @@ async fn apply_dynamic_filter(
     Some(dynamic_filtered_handle.into())
 }
 
-async fn scan_stream(scan: Scan) -> Result<LogTryStream> {
+async fn scan_stream(scan: Scan) -> Result<LogItemTryStream> {
     let Scan {
         collection,
         connector,
@@ -125,22 +135,26 @@ async fn scan_stream(scan: Scan) -> Result<LogTryStream> {
     let response = connector
         .query(&collection, handle.as_ref(), split.as_deref())
         .await?;
-    let stream = match response {
-        QueryResponse::Logs(logs) if static_fields.is_empty() => {
-            Box::pin(logs.map(Into::into)) as LogTryStream
-        }
-        QueryResponse::Logs(logs) => Box::pin(logs.map(move |mut res| {
-            if let Ok(log) = &mut res {
-                for (to, from) in &static_fields {
-                    if let Some(value) = log.remove(from) {
-                        log.insert(to.clone(), value);
-                    }
-                }
+    let stream: LogItemTryStream =
+        match response {
+            QueryResponse::Logs(logs) if static_fields.is_empty() => {
+                Box::pin(logs.map(|res| res.map(LogItem::Log)))
             }
-            res
-        })) as LogTryStream,
-        QueryResponse::Count(count) => count_to_stream(count),
-    };
+            QueryResponse::Logs(logs) => Box::pin(logs.map(move |res| {
+                res.map(|log| LogItem::Log(apply_static_fields(log, &static_fields)))
+            })),
+            QueryResponse::PartialLogs(items) if static_fields.is_empty() => items,
+            QueryResponse::PartialLogs(items) => Box::pin(items.map(move |res| {
+                res.map(|item| match item {
+                    LogItem::Log(log) => LogItem::Log(apply_static_fields(log, &static_fields)),
+                    LogItem::PartialStreamLog(log, id) => {
+                        LogItem::PartialStreamLog(apply_static_fields(log, &static_fields), id)
+                    }
+                    other => other,
+                })
+            })),
+            QueryResponse::Count(count) => count_to_stream(count),
+        };
 
     Ok(stream)
 }
@@ -168,8 +182,16 @@ pub fn scan_rx(scan: Scan, cancel: CancellationToken) -> (Receiver<LogItem>, Asy
 
             let mut stream = scan_stream(scan).await.context("create scan stream")?;
             while let Some(Some(item)) = cancel_or(&cancel, stream.next()).await {
-                rows_processed += 1;
-                if let Err(e) = tx.send_async(item.into()).await {
+                let log_item = match item {
+                    Ok(log_item) => {
+                        if matches!(log_item, LogItem::Log(_) | LogItem::PartialStreamLog(..)) {
+                            rows_processed += 1;
+                        }
+                        log_item
+                    }
+                    Err(e) => LogItem::Err(e),
+                };
+                if let Err(e) = tx.send_async(log_item).await {
                     debug!("Closing scan task: {e:?}");
                     break;
                 }

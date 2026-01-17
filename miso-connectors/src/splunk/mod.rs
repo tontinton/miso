@@ -1,3 +1,5 @@
+mod preview_poller;
+
 use std::{
     any::Any,
     fmt,
@@ -88,6 +90,10 @@ fn default_result_batch_size() -> u32 {
     50000
 }
 
+fn default_preview_interval() -> Duration {
+    Duration::from_secs(2)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SplunkConfig {
     pub url: String,
@@ -121,6 +127,16 @@ pub struct SplunkConfig {
 
     #[serde(default)]
     pub accept_invalid_certs: bool,
+
+    #[serde(default)]
+    pub enable_partial_stream: bool,
+
+    #[serde(
+        default = "default_preview_interval",
+        serialize_with = "serialize_duration",
+        deserialize_with = "deserialize_duration"
+    )]
+    pub preview_interval: Duration,
 }
 
 impl SplunkConfig {
@@ -133,6 +149,8 @@ impl SplunkConfig {
             job_timeout: default_job_timeout(),
             result_batch_size: default_result_batch_size(),
             accept_invalid_certs: false,
+            enable_partial_stream: false,
+            preview_interval: default_preview_interval(),
         }
     }
 
@@ -145,6 +163,8 @@ impl SplunkConfig {
             job_timeout: default_job_timeout(),
             result_batch_size: default_result_batch_size(),
             accept_invalid_certs: false,
+            enable_partial_stream: false,
+            preview_interval: default_preview_interval(),
         }
     }
 }
@@ -417,35 +437,35 @@ impl<'de> Deserialize<'de> for SplunkConnector {
 
 // Splunk API response types
 #[derive(Debug, Deserialize)]
-struct CreateJobResponse {
-    sid: String,
+pub(super) struct CreateJobResponse {
+    pub sid: String,
 }
 
 #[derive(Debug, Deserialize)]
-struct JobStatusEntry {
+pub(super) struct JobStatusEntry {
     #[serde(rename = "dispatchState")]
-    dispatch_state: String,
+    pub dispatch_state: String,
 
     #[serde(rename = "isDone")]
-    is_done: bool,
+    pub is_done: bool,
 
     #[serde(rename = "resultCount", default)]
-    result_count: u64,
+    pub result_count: u64,
 }
 
 #[derive(Debug, Deserialize)]
-struct JobStatusResponse {
-    entry: Vec<JobStatusResponseEntry>,
+pub(super) struct JobStatusResponse {
+    pub entry: Vec<JobStatusResponseEntry>,
 }
 
 #[derive(Debug, Deserialize)]
-struct JobStatusResponseEntry {
-    content: JobStatusEntry,
+pub(super) struct JobStatusResponseEntry {
+    pub content: JobStatusEntry,
 }
 
 #[derive(Debug, Deserialize)]
-struct ResultsResponse {
-    results: Vec<Log>,
+pub(super) struct ResultsResponse {
+    pub results: Vec<Log>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -473,7 +493,7 @@ async fn response_to_bytes(response: Response, connector: &str) -> Result<BytesM
 }
 
 #[instrument(skip_all, name = "splunk send_request")]
-async fn send_request(req: RequestBuilder) -> Result<BytesMut> {
+pub(super) async fn send_request(req: RequestBuilder) -> Result<BytesMut> {
     match req.send().await {
         Ok(response) => response_to_bytes(response, CONNECTOR_SPLUNK).await,
         Err(e) => Err(eyre!(ConnectorError::Http(e))),
@@ -790,7 +810,7 @@ async fn refresh_indexes_at_interval(
 }
 
 #[instrument(skip(client, auth), name = "splunk create_job")]
-async fn create_search_job(
+pub(super) async fn create_search_job(
     client: &Client,
     base_url: &str,
     spl: &str,
@@ -920,7 +940,7 @@ async fn fetch_results(
 }
 
 impl SplunkConnector {
-    fn transform_log(mut log: Log) -> Result<Log> {
+    pub(crate) fn transform_log(mut log: Log) -> Result<Log> {
         // Parse _raw field if it's valid JSON to get properly-typed values.
         // Splunk only extracts fields that are searched for, but _raw contains
         // the original event with all fields and proper JSON types.
@@ -1165,6 +1185,18 @@ impl Connector for SplunkConnector {
                 )
                 .await?,
             ));
+        }
+
+        if self.config.enable_partial_stream {
+            let poller = preview_poller::PreviewPoller::new(
+                self.client.clone(),
+                url,
+                auth,
+                self.config.preview_interval,
+                self.config.job_timeout,
+                self.config.result_batch_size,
+            );
+            return Ok(QueryResponse::PartialLogs(poller.poll_with_previews(spl)));
         }
 
         let sid = create_search_job(&self.client, &url, &spl, &auth).await?;

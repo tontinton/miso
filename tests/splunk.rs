@@ -91,6 +91,8 @@ async fn setup(url: String) -> Result<ConnectorsMap> {
         job_timeout: Duration::from_secs(60),
         result_batch_size: 50000,
         accept_invalid_certs: true,
+        enable_partial_stream: false,
+        preview_interval: Duration::from_secs(2),
     };
 
     let connector = Arc::new(SplunkConnector::new(config)) as Arc<dyn Connector>;
