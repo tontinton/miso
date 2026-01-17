@@ -16,7 +16,12 @@ use hashbrown::HashMap;
 use miso_workflow_types::field::Field;
 use miso_workflow_types::log::Log;
 use miso_workflow_types::{
-    expand::Expand, expr::Expr, join::Join, log::LogTryStream, project::ProjectField, sort::Sort,
+    expand::Expand,
+    expr::Expr,
+    join::Join,
+    log::{LogItemTryStream, LogTryStream},
+    project::ProjectField,
+    sort::Sort,
     summarize::Summarize,
 };
 use parking_lot::Mutex;
@@ -103,6 +108,7 @@ impl ConnectorState {
 
 pub enum QueryResponse {
     Logs(LogTryStream),
+    PartialLogs(LogItemTryStream),
     Count(u64),
 }
 
