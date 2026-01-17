@@ -9,6 +9,7 @@ pub type Log = Map<String, Value>;
 pub type LogIter = Box<dyn Iterator<Item = LogItem>>;
 pub type LogStream = Pin<Box<dyn Stream<Item = Log> + Send>>;
 pub type LogTryStream = Pin<Box<dyn Stream<Item = Result<Log>> + Send>>;
+pub type LogItemTryStream = Pin<Box<dyn Stream<Item = Result<LogItem>> + Send>>;
 
 #[derive(Debug)]
 pub enum LogItem<E = Report> {
