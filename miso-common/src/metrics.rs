@@ -1,7 +1,8 @@
 use once_cell::sync::Lazy;
 use prometheus::{
-    Histogram, HistogramVec, IntCounterVec, IntGauge, IntGaugeVec, register_histogram,
-    register_histogram_vec, register_int_counter_vec, register_int_gauge, register_int_gauge_vec,
+    Histogram, HistogramVec, IntCounterVec, IntGauge, IntGaugeVec, exponential_buckets,
+    register_histogram, register_histogram_vec, register_int_counter_vec, register_int_gauge,
+    register_int_gauge_vec,
 };
 
 pub static METRICS: Lazy<Metrics> = Lazy::new(Metrics::default);
@@ -58,11 +59,20 @@ pub struct Metrics {
     pub query_errors_total: IntCounterVec,
 }
 
+/// From 0.05s to 508.798s
+fn duration_buckets() -> Vec<f64> {
+    exponential_buckets(0.05, 1.85, 15).unwrap()
+}
+
 impl Default for Metrics {
     fn default() -> Self {
         Self {
-            query_latency: register_histogram!("query_latency", "Duration of /query route")
-                .expect("create query_latency"),
+            query_latency: register_histogram!(
+                "query_latency",
+                "Duration of /query route",
+                duration_buckets()
+            )
+            .expect("create query_latency"),
 
             running_queries: register_int_gauge!(
                 "running_queries",
@@ -99,7 +109,8 @@ impl Default for Metrics {
             connector_request_duration: register_histogram_vec!(
                 "miso_connector_request_duration",
                 "Duration of connector requests in seconds",
-                &["connector", "operation"]
+                &["connector", "operation"],
+                duration_buckets(),
             )
             .expect("create connector_request_duration"),
 
