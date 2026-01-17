@@ -223,7 +223,7 @@ async fn query_stream(
     let query_id = req.query_id.unwrap_or_else(Uuid::now_v7);
     let query_text = req.query.clone();
 
-    let span = span!(Level::INFO, "query", ?query_id, ?req.query);
+    let span = span!(parent: None, Level::INFO, "query", ?query_id, query=req.query);
     let stream_span = span.clone();
     let _enter = span.enter();
 
@@ -340,7 +340,7 @@ async fn explain(
     // Must be called the same as the const QUERY_ID_FIELD so it will be in all logs.
     let query_id = req.query_id.unwrap_or_else(Uuid::now_v7);
 
-    let span = span!(Level::INFO, "explain", ?query_id);
+    let span = span!(parent: None, Level::INFO, "explain", ?query_id);
     let _enter = span.enter();
 
     let workflow = build_query_workflow(state.clone(), req, query_id, &mut None).await?;
