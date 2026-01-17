@@ -274,6 +274,12 @@ pub async fn run_tests(
             }
         }
 
+        if !passed_tests.is_empty() {
+            eprintln!(
+                "\x1b[32m════════════════════════════════════════════════════════════════\x1b[0m"
+            );
+        }
+
         for (test_name, err) in &failed_tests {
             let logs = layer.drain_logs(test_name);
             eprintln!(
@@ -289,9 +295,11 @@ pub async fn run_tests(
             eprintln!();
         }
 
-        eprintln!(
-            "\x1b[31m════════════════════════════════════════════════════════════════\x1b[0m"
-        );
+        if !failed_tests.is_empty() {
+            eprintln!(
+                "\x1b[31m════════════════════════════════════════════════════════════════\x1b[0m"
+            );
+        }
     }
 
     if !failed_tests.is_empty() {
