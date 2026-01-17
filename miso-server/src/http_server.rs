@@ -33,13 +33,13 @@ use time::OffsetDateTime;
 use tokio::{sync::RwLock, task::spawn_blocking};
 use tokio_util::sync::CancellationToken;
 use tower_http::trace::TraceLayer;
-use tracing::{Level, Span, debug, error, info, span};
+use tracing::{Instrument, Level, Span, debug, error, info, span};
 use uuid::Uuid;
 
 use crate::{
     VIEWS_CONNECTOR_NAME, ViewsMap,
     config::{ConnectorConfig, ConnectorsMap, load_config},
-    query_status::{QUERY_ID_FIELD, QueryStatus, QueryStatusWriter},
+    query_status::{QUERY_ID_FIELD, QueryStatus, QueryStatusHandle, QueryStatusWriter},
     query_to_workflow::to_workflow_steps,
 };
 
@@ -203,6 +203,64 @@ async fn build_query_workflow(
     ))
 }
 
+struct QueryStreamSetup {
+    workflow_str: String,
+    non_optimized_workflow_str: String,
+    status_handle: Option<QueryStatusHandle>,
+    cancel: CancellationToken,
+    logs_stream: miso_workflow_types::log::LogTryStream,
+}
+
+// span.enter() doesn't work with async yielding, for more information read the Span::enter() docs.
+async fn query_stream_setup(
+    state: Arc<App>,
+    req: QueryRequest,
+    query_id: Uuid,
+    query_text: String,
+    start: OffsetDateTime,
+) -> Result<QueryStreamSetup, HttpError> {
+    let status_handle = match state.query_status_writer.as_ref() {
+        Some(writer) => Some(writer.start(query_id, query_text.clone()).await),
+        None => None,
+    };
+
+    info!("Building query workflow");
+    let mut non_optimized = Some(String::new());
+    let workflow = build_query_workflow(state, req, query_id, &mut non_optimized).await?;
+
+    let non_optimized_workflow_str = non_optimized.unwrap();
+    let workflow_str = format!("{workflow}");
+
+    info!(
+        %start,
+        query = query_text,
+        non_optimized = non_optimized_workflow_str,
+        optimized = workflow_str,
+        "Query started"
+    );
+
+    if let Some(ref handle) = status_handle {
+        handle.update(QueryStatus::Running).await;
+    }
+
+    let cancel = CancellationToken::new();
+    let logs_stream = workflow.execute(cancel.clone()).map_err(|e| {
+        HttpError::from_string(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("failed to execute workflow: {e}"),
+        )
+        .with_query_id(query_id.to_string())
+    })?;
+
+    Ok(QueryStreamSetup {
+        workflow_str,
+        non_optimized_workflow_str,
+        status_handle,
+        cancel,
+        logs_stream,
+    })
+}
+
 /// Starts running a new query.
 async fn query_stream(
     State(state): State<Arc<App>>,
@@ -225,55 +283,32 @@ async fn query_stream(
 
     let span = span!(parent: None, Level::INFO, "query", ?query_id, query=req.query);
     let stream_span = span.clone();
-    let _enter = span.enter();
 
-    let status_handle = match state.query_status_writer.as_ref() {
-        Some(writer) => Some(writer.start(query_id, query_text.clone()).await),
-        None => None,
-    };
+    let setup = query_stream_setup(state, req, query_id, query_text.clone(), start)
+        .instrument(span)
+        .await?;
 
-    info!("Building query workflow");
-    let mut non_optimized = Some(String::new());
-    let workflow = build_query_workflow(state.clone(), req, query_id, &mut non_optimized).await?;
-
-    let non_optimized_workflow_str = non_optimized.unwrap();
-    let workflow_str = format!("{workflow}");
-
-    info!(
-        %start,
-        query = query_text,
-        non_optimized = non_optimized_workflow_str,
-        optimized = workflow_str,
-        "Query started"
-    );
-
-    if let Some(ref handle) = status_handle {
-        handle.update(QueryStatus::Running).await;
-    }
-
-    let cancel = CancellationToken::new();
-    let mut logs_stream = workflow.execute(cancel.clone()).map_err(|e| {
-        HttpError::from_string(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("failed to execute workflow: {e}"),
-        )
-        .with_query_id(query_id.to_string())
-    })?;
+    let QueryStreamSetup {
+        workflow_str,
+        non_optimized_workflow_str,
+        status_handle,
+        cancel,
+        mut logs_stream,
+    } = setup;
 
     Ok(Sse::new(stream! {
-        // Keep stuff from dropping.
+        // Extend lifetime.
         let _record_metrics = record_metrics;
-        let stream_span = stream_span;
-        let _enter = stream_span.enter();
+        let span = stream_span;
+        let _span = span.enter();
 
         let final_status = Arc::new(Mutex::new(QueryStatus::Cancelled));
 
         // Because this guard is created after the span above, it will be dropped before,
         // so no need to move the span inside.
         let _query_done_guard = scopeguard::guard(
-            (cancel, start, final_status.clone(), status_handle.clone()),
-            |(cancel, start, final_status, status_handle)| {
-                info!("Query dropped");
+            (final_status.clone(), status_handle.clone()),
+            move |(final_status, status_handle)| {
                 cancel.cancel();
 
                 let end = OffsetDateTime::now_utc();
@@ -294,9 +329,7 @@ async fn query_stream(
 
                 if let Some(handle) = status_handle {
                     let status = final_status.lock().unwrap().clone();
-                    tokio::spawn(async move {
-                        handle.finish(status, end).await;
-                    });
+                    tokio::spawn(handle.finish(status, end).in_current_span());
                 }
             });
 
