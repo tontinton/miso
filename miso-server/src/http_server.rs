@@ -277,13 +277,15 @@ async fn query_stream(
                 cancel.cancel();
 
                 let end = OffsetDateTime::now_utc();
+                let duration = end - start;
                 let status = final_status.lock().unwrap().clone();
 
                 info!(
                     %status,
                     %start,
                     %end,
-                    duration = %(end - start),
+                    duration_secs = duration.as_seconds_f64(),
+                    duration_str = %duration,
                     query = query_text,
                     non_optimized = non_optimized_workflow_str,
                     workflow = workflow_str,
