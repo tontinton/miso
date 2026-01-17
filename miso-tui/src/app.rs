@@ -271,6 +271,9 @@ impl App {
             }
             Action::ShowError(message) => {
                 self.error_modal.show(message);
+                act!(self, self.query_input_view.handle_focus_event(true));
+                self.focused = FocusedWindow::Query;
+                act!(self, self.results_view.handle_focus_event(false));
                 self.redraw = true;
             }
         }
