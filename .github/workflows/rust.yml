@@ -40,6 +40,10 @@ jobs:
   test:
     name: Test
     runs-on: ubuntu-latest
+    env:
+      # Override target-cpu=native from .cargo/config.toml.
+      # Cached artifacts may target CPU features unavailable on this runner
+      RUSTFLAGS: ""
 
     steps:
       - name: Checkout
