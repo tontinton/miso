@@ -1,5 +1,6 @@
 use miso_common::watch::Watch;
 use miso_workflow::{WorkflowStep, scan::Scan};
+use miso_workflow_types::join::JoinType;
 
 use crate::pattern;
 
@@ -72,16 +73,27 @@ impl Optimization for DynamicFilter {
         let watch = Watch::default();
         right_scan.dynamic_filter_tx = Some(watch.clone());
 
-        if left_dcount < self.max_distinct_values {
-            if left_dcount > right_dcount {
-                left_scan.dynamic_filter_rx = Some(watch);
-            } else {
-                right_scan.dynamic_filter_rx = Some(watch);
-            }
-        } else if right_dcount < self.max_distinct_values {
-            left_scan.dynamic_filter_rx = Some(watch);
+        fn is_join_allowed(join: JoinType, required: JoinType) -> bool {
+            join == JoinType::Inner || join == required
+        }
+
+        let try_left =
+            left_dcount < self.max_distinct_values && is_join_allowed(join.type_, JoinType::Left);
+
+        let try_right =
+            right_dcount < self.max_distinct_values && is_join_allowed(join.type_, JoinType::Right);
+
+        let producer_is_left = match (try_left, try_right) {
+            (true, true) => left_dcount <= right_dcount,
+            (true, false) => true,
+            (false, true) => false,
+            (false, false) => return OptimizationResult::Unchanged,
+        };
+
+        if producer_is_left {
+            right_scan.dynamic_filter_rx = Some(watch);
         } else {
-            panic!("just checked that the two distinct counts are more than max");
+            left_scan.dynamic_filter_rx = Some(watch);
         }
 
         let mut steps = steps.to_vec();

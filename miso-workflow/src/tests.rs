@@ -1086,7 +1086,7 @@ async fn join_inner(partitions: usize) -> Result<()> {
         )
         .input(btreemap!{
             "left"  => r#"[{"id": 1, "value": "one"}, {"id": 1, "value": "dup"}, {"id": 2, "value": "two"}, {"id": 3, "value": "three"}]"#,
-            "right" => r#"[{"id": 1, "value": "ONE"}, {"id": 2, "value": "DUP"}, {"id": 2, "value": "TWO"}, {"id": 4, "value": "FOUR"}]"#,
+            "right" => r#"[{"id": 1, "value": "ONE"}, {"id": 2, "value": "DUP"}, {"id": 2, "value": "TWO"}, {"id": 4, "value": "FOUR"}, {"id": 5, "value": "FIVE"}]"#,
         })
         .expect(
             r#"[
