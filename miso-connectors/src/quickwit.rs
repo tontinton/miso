@@ -621,7 +621,7 @@ async fn send_request(req: RequestBuilder) -> Result<BytesMut> {
     }
 }
 
-#[instrument(skip(query), name = "uickwit begin search")]
+#[instrument(skip(query), name = "quickwit begin_search")]
 async fn begin_search(
     client: &Client,
     base_url: &str,
@@ -1127,7 +1127,7 @@ impl Connector for QuickwitConnector {
         Ok(Box::new(QuickwitHandle::new(timestamp_field)))
     }
 
-    #[instrument(skip(self), name = "Quickwit query")]
+    #[instrument(skip(self), name = "quickwit query")]
     async fn query(
         &self,
         collection: &str,
@@ -1195,12 +1195,12 @@ impl Connector for QuickwitConnector {
         };
 
         info!(
-            ?handle.count,
-            ?scroll_size,
+            count = handle.count,
+            scroll_size,
             ?limit,
             ?source_includes,
-            "Quickwit search '{}': {}",
             collections,
+            "Quickwit search: {}",
             serde_json::to_string(&query)?
         );
 
