@@ -18,7 +18,7 @@ use miso_workflow_types::{
 };
 use parking_lot::Mutex;
 use tokio_util::sync::CancellationToken;
-use tracing::{Instrument, Span, debug, info};
+use tracing::{Instrument, debug, info, info_span};
 
 use super::{AsyncTask, CHANNEL_CAPACITY, count::count_to_log};
 
@@ -161,6 +161,7 @@ where
 
 pub fn scan_rx(scan: Scan, cancel: CancellationToken) -> (Receiver<LogItem>, AsyncTask) {
     let (tx, rx) = flume::bounded(CHANNEL_CAPACITY);
+    let span = info_span!("scan", connector = %scan.connector_name, collection = %scan.collection);
     let task = tokio::spawn(
         async move {
             let mut rows_processed = 0u64;
@@ -181,7 +182,7 @@ pub fn scan_rx(scan: Scan, cancel: CancellationToken) -> (Receiver<LogItem>, Asy
 
             Ok(())
         }
-        .instrument(Span::current()),
+        .instrument(span),
     );
     (rx, task)
 }

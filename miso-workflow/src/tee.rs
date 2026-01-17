@@ -4,7 +4,7 @@ use flume::Sender;
 use miso_common::metrics::{METRICS, STEP_TEE};
 use miso_connectors::Sink;
 use miso_workflow_types::log::{Log, LogItem, LogIter};
-use tracing::Instrument;
+use tracing::{Instrument, info_span};
 
 use crate::log_iter_creator::{IterCreator, fn_creator};
 use crate::log_utils::PartialStreamItem;
@@ -91,7 +91,7 @@ pub fn tee_creator(input: IterCreator, tee: Tee) -> (IterCreator, AsyncTask) {
             tee.sink.flush().await;
             Ok(())
         }
-        .in_current_span(),
+        .instrument(info_span!("tee")),
     );
 
     (
