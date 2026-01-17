@@ -40,7 +40,19 @@ macro_rules! binary_ops {
             .clone()
             .then(
                 choice((
-                    $( just($token).then($prev.clone()), )*
+                    $( just($token).then(
+                        $prev.clone().recover_with(via_parser(
+                            one_of(EXPR_TERMINATORS)
+                                .rewind()
+                                .validate(|_, e, emitter| {
+                                    emitter.emit(Rich::custom(
+                                        e.span(),
+                                        "expected expression after operator",
+                                    ));
+                                    Expr::Literal(Value::Null)
+                                })
+                        ))
+                    ), )*
                 ))
                 .repeated()
                 .collect::<Vec<_>>(),
@@ -595,6 +607,11 @@ where
 
         let expr_list = between_expr
             .clone()
+            .recover_with(skip_until(
+                any().ignored(),
+                one_of([Token::Comma, Token::RParen]).ignored(),
+                || Expr::Literal(Value::Null),
+            ))
             .separated_by(just(Token::Comma))
             .collect::<Vec<_>>()
             .delimited_by(just(Token::LParen), just(Token::RParen))
@@ -703,7 +720,15 @@ where
 
     let filter_step = just(Token::Where)
         .or(just(Token::Filter))
-        .ignore_then(expr.clone())
+        .ignore_then(
+            just(Token::Pipe)
+                .rewind()
+                .validate(|_, e, emitter| {
+                    emitter.emit(Rich::custom(e.span(), "expected expression after where"));
+                    Expr::Literal(Value::Null)
+                })
+                .or(expr.clone()),
+        )
         .map(QueryStep::Filter)
         .labelled("filter")
         .boxed();
@@ -720,7 +745,18 @@ where
         .collect::<Vec<_>>();
 
     let project_step = just(Token::Project)
-        .ignore_then(project_exprs.clone())
+        .ignore_then(
+            just(Token::Pipe)
+                .rewind()
+                .validate(|_, e, emitter| {
+                    emitter.emit(Rich::custom(e.span(), "expected expression after project"));
+                    vec![UnnamedProjectField {
+                        from: Expr::Literal(Value::Null),
+                        to: None,
+                    }]
+                })
+                .or(project_exprs.clone()),
+        )
         .map(|fields: Vec<UnnamedProjectField>| QueryStep::Project(name_project_fields(fields)))
         .labelled("project")
         .boxed();
@@ -788,7 +824,7 @@ where
                     e.span(),
                     "limit must be a positive number. Use 'limit 100' or 'take 50'",
                 ));
-                100 // default fallback
+                100
             } else {
                 x as u64
             }
@@ -1100,6 +1136,11 @@ where
         .or(join_step)
         .or(count_step)
         .or(tee_step)
+        .recover_with(skip_until(
+            none_of([Token::Pipe]).ignored(),
+            just(Token::Pipe).ignored(),
+            || QueryStep::Count,
+        ))
         .boxed()
 }
 
