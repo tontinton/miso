@@ -8,6 +8,7 @@ use tracing::Instrument;
 
 use crate::log_iter_creator::{IterCreator, fn_creator};
 use crate::log_utils::PartialStreamItem;
+use crate::partial_stream::add_partial_stream_id;
 use crate::{AsyncTask, CHANNEL_CAPACITY};
 
 use super::try_next_with_partial_stream;
@@ -32,12 +33,12 @@ impl Tee {
 
 pub struct TeeIter {
     input: LogIter,
-    tx: Sender<Log>,
+    tx: Sender<(Log, Option<usize>)>,
     rows_processed: u64,
 }
 
 impl TeeIter {
-    pub fn new(input: LogIter, tx: Sender<Log>) -> Self {
+    pub fn new(input: LogIter, tx: Sender<(Log, Option<usize>)>) -> Self {
         Self {
             input,
             tx,
@@ -63,11 +64,12 @@ impl Iterator for TeeIter {
         match item {
             PartialStreamItem::Log(log) => {
                 self.rows_processed += 1;
-                let _ = self.tx.send(log.clone());
+                let _ = self.tx.send((log.clone(), None));
                 Some(LogItem::Log(log))
             }
             PartialStreamItem::PartialStreamLog(log, id) => {
                 self.rows_processed += 1;
+                let _ = self.tx.send((log.clone(), Some(id)));
                 Some(LogItem::PartialStreamLog(log, id))
             }
             PartialStreamItem::PartialStreamDone(id) => Some(LogItem::PartialStreamDone(id)),
@@ -76,11 +78,14 @@ impl Iterator for TeeIter {
 }
 
 pub fn tee_creator(input: IterCreator, tee: Tee) -> (IterCreator, AsyncTask) {
-    let (tx, rx) = flume::bounded::<Log>(CHANNEL_CAPACITY);
+    let (tx, rx) = flume::bounded::<(Log, Option<usize>)>(CHANNEL_CAPACITY);
 
     let task = tokio::spawn(
         async move {
-            while let Ok(log) = rx.recv_async().await {
+            while let Ok((mut log, partial_stream_id)) = rx.recv_async().await {
+                if let Some(id) = partial_stream_id {
+                    log = add_partial_stream_id(log, id);
+                }
                 tee.sink.write(log).await;
             }
             tee.sink.flush().await;
