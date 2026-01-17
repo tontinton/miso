@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{fmt, sync::Arc};
 
 use miso_connectors::UpdatableSink;
 use miso_workflow_types::{log::Log, value::Value};
@@ -45,6 +45,17 @@ impl QueryStatus {
     }
 }
 
+impl fmt::Display for QueryStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            QueryStatus::InternalError(msg) | QueryStatus::ConnectorError(msg) => {
+                write!(f, "{}: {}", self.as_str(), msg)
+            }
+            _ => write!(f, "{}", self.as_str()),
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct QueryStatusWriter {
     sink: Arc<dyn UpdatableSink>,
@@ -80,8 +91,11 @@ impl QueryStatusHandle {
         self.write(status, None).await;
     }
 
-    pub async fn finish(self, status: QueryStatus) {
-        let end_time = OffsetDateTime::now_utc();
+    pub async fn finish_with_now(self, status: QueryStatus) {
+        self.finish(status, OffsetDateTime::now_utc()).await;
+    }
+
+    pub async fn finish(self, status: QueryStatus, end_time: OffsetDateTime) {
         self.write(status, Some(end_time)).await;
     }
 

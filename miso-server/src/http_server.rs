@@ -1,7 +1,7 @@
 use std::{
     collections::BTreeMap,
     sync::{Arc, Mutex},
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 use async_stream::stream;
@@ -29,6 +29,7 @@ use miso_workflow::{Workflow, partial_stream::PartialStream};
 use prometheus::TextEncoder;
 use serde::Deserialize;
 use serde_json::json;
+use time::OffsetDateTime;
 use tokio::{sync::RwLock, task::spawn_blocking};
 use tokio_util::sync::CancellationToken;
 use tower_http::trace::TraceLayer;
@@ -207,12 +208,15 @@ async fn query_stream(
     State(state): State<Arc<App>>,
     Json(req): Json<QueryRequest>,
 ) -> Result<Sse<impl Stream<Item = Result<Event, axum::Error>>>, HttpError> {
-    let start = Instant::now();
+    let start = OffsetDateTime::now_utc();
     METRICS.running_queries.inc();
     let record_metrics = scopeguard::guard(start, |start| {
         debug!("Recording query metrics");
         METRICS.running_queries.dec();
-        METRICS.query_latency.observe(start.elapsed().as_secs_f64());
+        let end = OffsetDateTime::now_utc();
+        METRICS
+            .query_latency
+            .observe((end - start).as_seconds_f64());
     });
 
     // Must be called the same as the const QUERY_ID_FIELD so it will be in all logs.
@@ -224,7 +228,7 @@ async fn query_stream(
     let _enter = span.enter();
 
     let status_handle = match state.query_status_writer.as_ref() {
-        Some(writer) => Some(writer.start(query_id, query_text).await),
+        Some(writer) => Some(writer.start(query_id, query_text.clone()).await),
         None => None,
     };
 
@@ -232,7 +236,16 @@ async fn query_stream(
     let mut non_optimized = Some(String::new());
     let workflow = build_query_workflow(state.clone(), req, query_id, &mut non_optimized).await?;
 
-    info!(non_optimized=non_optimized.unwrap(), optimized=%workflow, "Starting to run a new query");
+    let non_optimized_workflow_str = non_optimized.unwrap();
+    let workflow_str = format!("{workflow}");
+
+    info!(
+        %start,
+        query = query_text,
+        non_optimized = non_optimized_workflow_str,
+        optimized = workflow_str,
+        "Query started"
+    );
 
     if let Some(ref handle) = status_handle {
         handle.update(QueryStatus::Running).await;
@@ -253,19 +266,34 @@ async fn query_stream(
         let stream_span = stream_span;
         let _enter = stream_span.enter();
 
-        let _cancel_on_drop = scopeguard::guard(cancel, |cancel| {
-            info!("Query dropped");
-            cancel.cancel();
-        });
-
         let final_status = Arc::new(Mutex::new(QueryStatus::Cancelled));
-        let _status_guard = scopeguard::guard(
-            (final_status.clone(), status_handle.clone()),
-            |(final_status, status_handle)| {
+
+        // Because this guard is created after the span above, it will be dropped before,
+        // so no need to move the span inside.
+        let _query_done_guard = scopeguard::guard(
+            (cancel, start, final_status.clone(), status_handle.clone()),
+            |(cancel, start, final_status, status_handle)| {
+                info!("Query dropped");
+                cancel.cancel();
+
+                let end = OffsetDateTime::now_utc();
+                let status = final_status.lock().unwrap().clone();
+
+                info!(
+                    %status,
+                    %start,
+                    %end,
+                    duration = %(end - start),
+                    query = query_text,
+                    non_optimized = non_optimized_workflow_str,
+                    workflow = workflow_str,
+                    "Query completed"
+                );
+
                 if let Some(handle) = status_handle {
                     let status = final_status.lock().unwrap().clone();
                     tokio::spawn(async move {
-                        handle.finish(status).await;
+                        handle.finish(status, end).await;
                     });
                 }
             });
@@ -302,8 +330,6 @@ async fn query_stream(
                 *guard = QueryStatus::Success;
             }
         }
-
-        info!("Query done");
     }))
 }
 

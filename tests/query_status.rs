@@ -49,7 +49,7 @@ async fn query_status_with_memory_connector() -> Result<()> {
         Some("running")
     );
 
-    handle.finish(QueryStatus::Success).await;
+    handle.finish_with_now(QueryStatus::Success).await;
     let records = connector.get_logs("query_status");
     let record = &records[0];
     assert_eq!(
