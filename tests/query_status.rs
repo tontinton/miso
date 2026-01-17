@@ -7,7 +7,7 @@ use ctor::ctor;
 use miso_connectors::{memory::MemoryConnector, Connector};
 use miso_server::query_status::{
     QueryStatus, QueryStatusWriter, END_TIME_FIELD, ERROR_FIELD, QUERY_FIELD, QUERY_ID_FIELD,
-    RUN_TIME_FIELD, START_TIME_FIELD, STATUS_FIELD,
+    RUN_TIME_FIELD, RUN_TIME_SECONDS_FIELD, START_TIME_FIELD, STATUS_FIELD,
 };
 
 use common::init_test_tracing;
@@ -58,6 +58,7 @@ async fn query_status_with_memory_connector() -> Result<()> {
     );
     assert!(!record.get(END_TIME_FIELD).unwrap().is_null());
     assert!(!record.get(RUN_TIME_FIELD).unwrap().is_null());
+    assert!(!record.get(RUN_TIME_SECONDS_FIELD).unwrap().is_null());
     assert!(record.get(ERROR_FIELD).unwrap().is_null());
     assert_eq!(
         records.len(),

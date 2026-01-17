@@ -12,6 +12,7 @@ pub const ERROR_FIELD: &str = "error";
 pub const START_TIME_FIELD: &str = "start_time";
 pub const END_TIME_FIELD: &str = "end_time";
 pub const RUN_TIME_FIELD: &str = "run_time";
+pub const RUN_TIME_SECONDS_FIELD: &str = "run_time_secs";
 pub const UPDATE_TIME_FIELD: &str = "update_time";
 pub const QUERY_FIELD: &str = "query";
 
@@ -118,6 +119,10 @@ impl QueryStatusHandle {
             (
                 RUN_TIME_FIELD.to_string(),
                 run_time.map_or(Value::Null, |d: Duration| d.into()),
+            ),
+            (
+                RUN_TIME_SECONDS_FIELD.to_string(),
+                run_time.map_or(Value::Null, |d: Duration| d.as_seconds_f64().into()),
             ),
             (UPDATE_TIME_FIELD.to_string(), update_time.into()),
             (QUERY_FIELD.to_string(), self.query.as_str().into()),
