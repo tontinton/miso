@@ -58,10 +58,11 @@ impl Iterator for FilterIter {
         while let Some(item) = try_next_with_partial_stream!(self.input) {
             let log_item_to_stream = match item {
                 PartialStreamItem::Log(log) => self.keep(&log).then_some(LogItem::Log(log)),
-                PartialStreamItem::PartialStreamLog(log, id) => self
+                PartialStreamItem::PartialStreamLog(log, key) => self
                     .keep(&log)
-                    .then_some(LogItem::PartialStreamLog(log, id)),
-                PartialStreamItem::PartialStreamDone(id) => Some(LogItem::PartialStreamDone(id)),
+                    .then_some(LogItem::PartialStreamLog(log, key)),
+                PartialStreamItem::PartialStreamDone(key) => Some(LogItem::PartialStreamDone(key)),
+                PartialStreamItem::SourceDone(id) => Some(LogItem::SourceDone(id)),
             };
 
             if let Some(log_item) = log_item_to_stream {

@@ -1,6 +1,6 @@
 use hashbrown::HashMap;
 use miso_common::metrics::{METRICS, STEP_LIMIT};
-use miso_workflow_types::log::{LogItem, LogIter};
+use miso_workflow_types::log::{LogItem, LogIter, PartialStreamKey};
 
 use crate::{log_utils::PartialStreamItem, try_next_with_partial_stream};
 
@@ -8,7 +8,7 @@ pub struct LimitIter {
     input: LogIter,
     limit: u64,
     streamed: u64,
-    partial_limits: HashMap<usize, u64>,
+    partial_limits: HashMap<PartialStreamKey, u64>,
     rows_processed: u64,
 }
 
@@ -48,20 +48,21 @@ impl Iterator for LimitIter {
                     self.streamed += 1;
                     Some(LogItem::Log(log))
                 }
-                PartialStreamItem::PartialStreamLog(log, id) => {
+                PartialStreamItem::PartialStreamLog(log, key) => {
                     self.rows_processed += 1;
-                    let streamed = self.partial_limits.entry(id).or_insert(0);
+                    let streamed = self.partial_limits.entry(key).or_insert(0);
                     if *streamed == self.limit {
                         None
                     } else {
                         *streamed += 1;
-                        Some(LogItem::PartialStreamLog(log, id))
+                        Some(LogItem::PartialStreamLog(log, key))
                     }
                 }
-                PartialStreamItem::PartialStreamDone(id) => {
-                    self.partial_limits.remove(&id);
-                    Some(LogItem::PartialStreamDone(id))
+                PartialStreamItem::PartialStreamDone(key) => {
+                    self.partial_limits.remove(&key);
+                    Some(LogItem::PartialStreamDone(key))
                 }
+                PartialStreamItem::SourceDone(id) => Some(LogItem::SourceDone(id)),
             };
 
             if let Some(log_item) = log_item_to_stream {

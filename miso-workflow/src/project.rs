@@ -85,10 +85,11 @@ impl Iterator for ProjectIter {
     fn next(&mut self) -> Option<Self::Item> {
         Some(match try_next_with_partial_stream!(self.input)? {
             PartialStreamItem::Log(log) => LogItem::Log(self.eval(log)),
-            PartialStreamItem::PartialStreamLog(log, id) => {
-                LogItem::PartialStreamLog(self.eval(log), id)
+            PartialStreamItem::PartialStreamLog(log, key) => {
+                LogItem::PartialStreamLog(self.eval(log), key)
             }
-            PartialStreamItem::PartialStreamDone(id) => LogItem::PartialStreamDone(id),
+            PartialStreamItem::PartialStreamDone(key) => LogItem::PartialStreamDone(key),
+            PartialStreamItem::SourceDone(id) => LogItem::SourceDone(id),
         })
     }
 }

@@ -3,7 +3,7 @@ use std::sync::Arc;
 use flume::Sender;
 use miso_common::metrics::{METRICS, STEP_TEE};
 use miso_connectors::Sink;
-use miso_workflow_types::log::{Log, LogItem, LogIter};
+use miso_workflow_types::log::{Log, LogItem, LogIter, PartialStreamKey};
 use tracing::{Instrument, info_span};
 
 use crate::log_iter_creator::{IterCreator, fn_creator};
@@ -33,12 +33,12 @@ impl Tee {
 
 pub struct TeeIter {
     input: LogIter,
-    tx: Sender<(Log, Option<usize>)>,
+    tx: Sender<(Log, Option<PartialStreamKey>)>,
     rows_processed: u64,
 }
 
 impl TeeIter {
-    pub fn new(input: LogIter, tx: Sender<(Log, Option<usize>)>) -> Self {
+    pub fn new(input: LogIter, tx: Sender<(Log, Option<PartialStreamKey>)>) -> Self {
         Self {
             input,
             tx,
@@ -67,24 +67,25 @@ impl Iterator for TeeIter {
                 let _ = self.tx.send((log.clone(), None));
                 Some(LogItem::Log(log))
             }
-            PartialStreamItem::PartialStreamLog(log, id) => {
+            PartialStreamItem::PartialStreamLog(log, key) => {
                 self.rows_processed += 1;
-                let _ = self.tx.send((log.clone(), Some(id)));
-                Some(LogItem::PartialStreamLog(log, id))
+                let _ = self.tx.send((log.clone(), Some(key)));
+                Some(LogItem::PartialStreamLog(log, key))
             }
-            PartialStreamItem::PartialStreamDone(id) => Some(LogItem::PartialStreamDone(id)),
+            PartialStreamItem::PartialStreamDone(key) => Some(LogItem::PartialStreamDone(key)),
+            PartialStreamItem::SourceDone(id) => Some(LogItem::SourceDone(id)),
         }
     }
 }
 
 pub fn tee_creator(input: IterCreator, tee: Tee) -> (IterCreator, AsyncTask) {
-    let (tx, rx) = flume::bounded::<(Log, Option<usize>)>(CHANNEL_CAPACITY);
+    let (tx, rx) = flume::bounded::<(Log, Option<PartialStreamKey>)>(CHANNEL_CAPACITY);
 
     let task = tokio::spawn(
         async move {
-            while let Ok((mut log, partial_stream_id)) = rx.recv_async().await {
-                if let Some(id) = partial_stream_id {
-                    log = add_partial_stream_id(log, id);
+            while let Ok((mut log, partial_stream_key)) = rx.recv_async().await {
+                if let Some(key) = partial_stream_key {
+                    log = add_partial_stream_id(log, key);
                 }
                 tee.sink.write(log).await;
             }

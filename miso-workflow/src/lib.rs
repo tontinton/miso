@@ -13,12 +13,12 @@ use miso_workflow_types::{
     expr::Expr,
     field::Field,
     join::{Join, JoinType},
-    log::{Log, LogItem, LogIter, LogStream, LogTryStream},
+    log::{Log, LogItem, LogIter, LogStream, LogTryStream, SourceId, next_source_id},
     project::ProjectField,
     sort::Sort,
     summarize::Summarize,
 };
-use partial_stream::{add_partial_stream_id, build_partial_stream_id_done_log};
+use partial_stream::{add_partial_stream_id, build_partial_stream_done_log};
 use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, Span, debug, info, instrument};
 
@@ -53,6 +53,7 @@ pub mod limit;
 mod log_iter_creator;
 mod log_utils;
 pub mod partial_stream;
+mod partial_stream_tracker;
 pub mod project;
 mod rename;
 pub mod scan;
@@ -72,7 +73,12 @@ pub const MISO_METADATA_FIELD_NAME: &str = "_miso";
 
 pub type AsyncTask = tokio::task::JoinHandle<Result<()>>;
 type PipelineRunResult = Result<(IterCreator, Vec<ThreadRx>, Vec<AsyncTask>)>;
-type WorkflowRunResult = Result<(Vec<Receiver<Log>>, Vec<ThreadRx>, Vec<AsyncTask>)>;
+type WorkflowRunResult = Result<(
+    Vec<Receiver<Log>>,
+    Vec<SourceId>,
+    Vec<ThreadRx>,
+    Vec<AsyncTask>,
+)>;
 
 #[derive(Kinded, Clone, Debug, PartialEq)]
 pub enum WorkflowStep {
@@ -146,8 +152,8 @@ pub enum WorkflowRx {
     /// Continue doing something with the input logs in the same pipeline.
     Pipeline(IterCreator),
 
-    /// Aggregate multiple pipelines.
-    MuxPipelines(Vec<Receiver<Log>>),
+    /// Aggregate multiple pipelines with their source IDs.
+    MuxPipelines(Vec<Receiver<Log>>, Vec<SourceId>),
 }
 
 pub struct LogItemReceiverIter {
@@ -174,13 +180,13 @@ impl Iterator for LogReceiverIter {
     }
 }
 
-fn rxs_to_iter(mut rxs: Vec<Receiver<Log>>) -> LogIter {
+fn rxs_to_iter(mut rxs: Vec<Receiver<Log>>, source_ids: Vec<SourceId>) -> LogIter {
     if rxs.len() == 1 {
         Box::new(LogReceiverIter {
             rx: rxs.pop().unwrap(),
         })
     } else {
-        Box::new(UnionIter::new(rxs))
+        Box::new(UnionIter::new(rxs, source_ids))
     }
 }
 
@@ -189,7 +195,9 @@ impl WorkflowRx {
         match self {
             WorkflowRx::None => panic!("first step doesn't have any input logs"),
             WorkflowRx::Pipeline(creator) => creator,
-            WorkflowRx::MuxPipelines(rxs) => fn_creator(move || rxs_to_iter(rxs)),
+            WorkflowRx::MuxPipelines(rxs, source_ids) => {
+                fn_creator(move || rxs_to_iter(rxs, source_ids))
+            }
         }
     }
 }
@@ -217,10 +225,11 @@ impl WorkflowStep {
             }
             WorkflowStep::Union(workflow) => {
                 assert!(matches!(rx, WorkflowRx::None));
-                let (rxs, inner_threads, inner_async_tasks) = workflow.create_pipelines(cancel)?;
+                let (rxs, source_ids, inner_threads, inner_async_tasks) =
+                    workflow.create_pipelines(cancel)?;
                 threads.extend(inner_threads);
                 async_tasks.extend(inner_async_tasks);
-                fn_creator(move || rxs_to_iter(rxs))
+                fn_creator(move || rxs_to_iter(rxs, source_ids))
             }
             WorkflowStep::Filter(expr) => {
                 let prev = rx.into_creator();
@@ -254,10 +263,12 @@ impl WorkflowStep {
             WorkflowStep::MuxTopN(sorts, limit) if partial_stream.is_some() => {
                 let prev = rx.into_creator();
                 let partial_stream = partial_stream.unwrap();
+                let source_id = next_source_id();
                 fn_creator(move || {
                     Box::new(PartialStreamIter::new(
                         Box::new(PartialTopNIter::new(prev.create(), sorts, limit)),
                         partial_stream,
+                        source_id,
                     ))
                 })
             }
@@ -268,10 +279,12 @@ impl WorkflowStep {
             WorkflowStep::MuxSummarize(config) if partial_stream.is_some() => {
                 let prev = rx.into_creator();
                 let partial_stream = partial_stream.unwrap();
+                let source_id = next_source_id();
                 fn_creator(move || {
                     Box::new(PartialStreamIter::new(
                         create_summarize_iter(prev.create(), config, true),
                         partial_stream,
+                        source_id,
                     ))
                 })
             }
@@ -304,7 +317,7 @@ impl WorkflowStep {
                     DynamicFilterTx::new(tx, is_left_sending_dynamic_filter, field)
                 });
 
-                let (right_rxs, inner_threads, inner_async_tasks) =
+                let (right_rxs, _right_source_ids, inner_threads, inner_async_tasks) =
                     workflow.create_pipelines(cancel.clone())?;
 
                 threads.extend(inner_threads);
@@ -319,10 +332,12 @@ impl WorkflowStep {
             WorkflowStep::MuxCount if partial_stream.is_some() => {
                 let prev = rx.into_creator();
                 let partial_stream = partial_stream.unwrap();
+                let source_id = next_source_id();
                 fn_creator(move || {
                     Box::new(PartialStreamIter::new(
                         Box::new(CountIter::new_mux(prev.create())),
                         partial_stream,
+                        source_id,
                     ))
                 })
             }
@@ -383,11 +398,11 @@ impl WorkflowStep {
 #[instrument(skip_all)]
 fn prepare_execute_pipeline(
     pipeline: Vec<(WorkflowStep, Option<PartialStream>)>,
-    rxs_opt: Option<Vec<Receiver<Log>>>,
+    rxs_opt: Option<(Vec<Receiver<Log>>, Vec<SourceId>)>,
     cancel: CancellationToken,
 ) -> PipelineRunResult {
-    let mut workflow_rx = if let Some(rxs) = rxs_opt {
-        WorkflowRx::MuxPipelines(rxs)
+    let mut workflow_rx = if let Some((rxs, source_ids)) = rxs_opt {
+        WorkflowRx::MuxPipelines(rxs, source_ids)
     } else {
         WorkflowRx::None
     };
@@ -418,9 +433,9 @@ fn execute_pipeline(iter: impl Iterator<Item = LogItem>, tx: Sender<Log>) -> Res
         let log = match item {
             LogItem::Err(e) => return Err(e),
             LogItem::Log(log) => log,
-            LogItem::PartialStreamLog(log, id) => add_partial_stream_id(log, id),
-            LogItem::PartialStreamDone(id) => build_partial_stream_id_done_log(id),
-            LogItem::UnionSomePipelineDone => continue,
+            LogItem::PartialStreamLog(log, key) => add_partial_stream_id(log, key),
+            LogItem::PartialStreamDone(key) => build_partial_stream_done_log(key),
+            LogItem::SourceDone(_) => continue,
         };
 
         if let Err(e) = tx.send(log) {
@@ -544,7 +559,8 @@ impl Workflow {
             pipelines.push(pipeline);
         }
 
-        let mut rxs = Vec::new();
+        let mut rxs: Vec<Receiver<Log>> = Vec::new();
+        let mut source_ids: Vec<SourceId> = Vec::new();
         let mut threads = Vec::new();
         let mut async_tasks = Vec::new();
 
@@ -552,6 +568,7 @@ impl Workflow {
             assert!(!pipeline.is_empty());
 
             let (tx, rx) = flume::bounded(CHANNEL_CAPACITY);
+            let pipeline_source_id = next_source_id();
 
             let skip_rx = matches!(
                 pipeline[0].0,
@@ -560,9 +577,12 @@ impl Workflow {
 
             let rxs_opt = if skip_rx {
                 rxs.push(rx);
+                source_ids.push(pipeline_source_id);
                 None
             } else {
-                Some(std::mem::replace(&mut rxs, vec![rx]))
+                let old_rxs = std::mem::replace(&mut rxs, vec![rx]);
+                let old_source_ids = std::mem::replace(&mut source_ids, vec![pipeline_source_id]);
+                Some((old_rxs, old_source_ids))
             };
 
             let (creator, inner_threads, inner_async_tasks) =
@@ -578,7 +598,7 @@ impl Workflow {
             ));
         }
 
-        Ok((rxs, threads, async_tasks))
+        Ok((rxs, source_ids, threads, async_tasks))
     }
 
     pub fn execute(self, cancel: CancellationToken) -> Result<LogTryStream> {
@@ -587,7 +607,7 @@ impl Workflow {
         }
 
         let cancel_clone = cancel.clone();
-        let (rxs, threads, async_tasks) = self
+        let (rxs, _source_ids, threads, async_tasks) = self
             .create_pipelines(cancel_clone)
             .context("create pipelines")?;
 

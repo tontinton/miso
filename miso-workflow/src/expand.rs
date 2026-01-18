@@ -4,7 +4,7 @@ use miso_common::metrics::{METRICS, STEP_EXPAND};
 use miso_workflow_types::{
     expand::{Expand, ExpandKind},
     field::Field,
-    log::{Log, LogItem, LogIter},
+    log::{Log, LogItem, LogIter, PartialStreamKey},
     value::Value,
 };
 
@@ -69,7 +69,7 @@ impl Iterator for OutputIter {
 enum OutputState {
     None,
     Regular(OutputIter),
-    Partial(OutputIter, usize),
+    Partial(OutputIter, PartialStreamKey),
 }
 
 pub struct ExpandIter {
@@ -156,12 +156,15 @@ impl Iterator for ExpandIter {
                         self.rows_processed += 1;
                         OutputState::Regular(self.log_to_output_iter(log))
                     }
-                    PartialStreamItem::PartialStreamLog(log, id) => {
+                    PartialStreamItem::PartialStreamLog(log, key) => {
                         self.rows_processed += 1;
-                        OutputState::Partial(self.log_to_output_iter(log), id)
+                        OutputState::Partial(self.log_to_output_iter(log), key)
                     }
-                    PartialStreamItem::PartialStreamDone(id) => {
-                        return Some(LogItem::PartialStreamDone(id));
+                    PartialStreamItem::PartialStreamDone(key) => {
+                        return Some(LogItem::PartialStreamDone(key));
+                    }
+                    PartialStreamItem::SourceDone(id) => {
+                        return Some(LogItem::SourceDone(id));
                     }
                 },
                 OutputState::Regular(iter) => {
@@ -170,9 +173,9 @@ impl Iterator for ExpandIter {
                     }
                     OutputState::None
                 }
-                OutputState::Partial(iter, id) => {
+                OutputState::Partial(iter, key) => {
                     if let Some(log) = iter.next() {
-                        return Some(LogItem::PartialStreamLog(log, *id));
+                        return Some(LogItem::PartialStreamLog(log, *key));
                     }
                     OutputState::None
                 }

@@ -219,7 +219,7 @@ fn pipe_logiter_to_tx(iter: LogIter, tx: Sender<Log>) -> Result<()> {
         match item {
             LogItem::Log(log) => tx.send(log).context("pipe log to tx")?,
             LogItem::Err(e) => return Err(e),
-            LogItem::UnionSomePipelineDone
+            LogItem::SourceDone(..)
             | LogItem::PartialStreamLog(..)
             | LogItem::PartialStreamDone(..) => {}
         }
@@ -449,7 +449,7 @@ fn workflow_rx_to_rxs(rx: WorkflowRx) -> (Vec<Receiver<Log>>, Option<ThreadRx>) 
             );
             (vec![rx], Some(thread))
         }
-        WorkflowRx::MuxPipelines(rxs) => (rxs, None),
+        WorkflowRx::MuxPipelines(rxs, _source_ids) => (rxs, None),
     }
 }
 

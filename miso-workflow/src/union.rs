@@ -2,10 +2,11 @@ use crossbeam_utils::Backoff;
 use flume::{Receiver, RecvError, TryRecvError};
 use futures_lite::future::block_on;
 use futures_util::future::select_all;
-use miso_workflow_types::log::{Log, LogItem};
+use miso_workflow_types::log::{Log, LogItem, SourceId};
 
 pub struct UnionIter {
     rxs: Vec<Receiver<Log>>,
+    source_ids: Vec<SourceId>,
 }
 
 enum TryRecv {
@@ -15,8 +16,9 @@ enum TryRecv {
 }
 
 impl UnionIter {
-    pub fn new(rxs: Vec<Receiver<Log>>) -> Self {
-        Self { rxs }
+    pub fn new(rxs: Vec<Receiver<Log>>, source_ids: Vec<SourceId>) -> Self {
+        assert_eq!(rxs.len(), source_ids.len());
+        Self { rxs, source_ids }
     }
 
     fn try_recv(&mut self) -> TryRecv {
@@ -24,11 +26,12 @@ impl UnionIter {
             match self.rxs[i].try_recv() {
                 Ok(log) => return TryRecv::Item(LogItem::Log(log)),
                 Err(TryRecvError::Disconnected) => {
+                    let source_id = self.source_ids.swap_remove(i);
                     self.rxs.swap_remove(i);
                     if self.rxs.is_empty() {
                         return TryRecv::Exhausted;
                     }
-                    return TryRecv::Item(LogItem::UnionSomePipelineDone);
+                    return TryRecv::Item(LogItem::SourceDone(source_id));
                 }
                 Err(TryRecvError::Empty) => {}
             }
@@ -60,8 +63,9 @@ impl Iterator for UnionIter {
         match result {
             Ok(log) => Some(LogItem::Log(log)),
             Err(RecvError::Disconnected) => {
+                let source_id = self.source_ids.swap_remove(i);
                 self.rxs.swap_remove(i);
-                (!self.rxs.is_empty()).then_some(LogItem::UnionSomePipelineDone)
+                (!self.rxs.is_empty()).then_some(LogItem::SourceDone(source_id))
             }
         }
     }

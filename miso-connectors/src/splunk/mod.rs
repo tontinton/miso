@@ -1,4 +1,4 @@
-mod preview_poller;
+mod query_runner;
 
 use std::{
     any::Any,
@@ -7,7 +7,6 @@ use std::{
     time::Duration,
 };
 
-use async_stream::try_stream;
 use axum::async_trait;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use bytes::BytesMut;
@@ -15,16 +14,14 @@ use color_eyre::eyre::{Context, Result, bail, eyre};
 use hashbrown::{HashMap, HashSet};
 use miso_common::{
     humantime_utils::{deserialize_duration, serialize_duration},
-    metrics::{
-        CONNECTOR_SPLUNK, METRICS, OP_CREATE_JOB, OP_FETCH_RESULTS, OP_GET_INDEXES, OP_POLL_JOB,
-    },
+    metrics::{CONNECTOR_SPLUNK, METRICS, OP_GET_INDEXES},
     run_at_interval::run_at_interval,
     shutdown_future::ShutdownFuture,
 };
 use miso_workflow_types::{
     expr::Expr,
     field::Field,
-    log::{Log, LogTryStream},
+    log::Log,
     project::ProjectField,
     sort::{Sort, SortOrder},
     summarize::{Aggregation, Summarize},
@@ -36,7 +33,9 @@ use serde::{Deserialize, Serialize, Serializer, ser::SerializeMap};
 use time::OffsetDateTime;
 use tracing::{debug, error, info, instrument};
 
-use crate::{Collection, instrumentation::record_operation_result};
+use crate::{
+    Collection, instrumentation::record_operation_result, splunk::query_runner::QueryRunner,
+};
 
 use super::{Connector, ConnectorError, QueryHandle, QueryResponse, Split, downcast_unwrap};
 
@@ -137,36 +136,6 @@ pub struct SplunkConfig {
         deserialize_with = "deserialize_duration"
     )]
     pub preview_interval: Duration,
-}
-
-impl SplunkConfig {
-    pub fn new(url: String) -> Self {
-        Self {
-            url,
-            auth: SplunkAuth::None,
-            refresh_interval: default_refresh_interval(),
-            job_poll_interval: default_job_poll_interval(),
-            job_timeout: default_job_timeout(),
-            result_batch_size: default_result_batch_size(),
-            accept_invalid_certs: false,
-            enable_partial_stream: false,
-            preview_interval: default_preview_interval(),
-        }
-    }
-
-    pub fn new_with_interval(url: String, refresh_interval: Duration) -> Self {
-        Self {
-            url,
-            auth: SplunkAuth::None,
-            refresh_interval,
-            job_poll_interval: default_job_poll_interval(),
-            job_timeout: default_job_timeout(),
-            result_batch_size: default_result_batch_size(),
-            accept_invalid_certs: false,
-            enable_partial_stream: false,
-            preview_interval: default_preview_interval(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -436,11 +405,6 @@ impl<'de> Deserialize<'de> for SplunkConnector {
 }
 
 // Splunk API response types
-#[derive(Debug, Deserialize)]
-pub(super) struct CreateJobResponse {
-    pub sid: String,
-}
-
 #[derive(Debug, Deserialize)]
 pub(super) struct JobStatusEntry {
     #[serde(rename = "dispatchState")]
@@ -809,136 +773,6 @@ async fn refresh_indexes_at_interval(
     .await;
 }
 
-#[instrument(skip(client, auth), name = "splunk create_job")]
-pub(super) async fn create_search_job(
-    client: &Client,
-    base_url: &str,
-    spl: &str,
-    auth: &SplunkAuth,
-) -> Result<String> {
-    let start = std::time::Instant::now();
-    METRICS
-        .connector_requests_total
-        .with_label_values(&[CONNECTOR_SPLUNK, OP_CREATE_JOB])
-        .inc();
-
-    let url = format!("{base_url}/services/search/jobs");
-
-    let form = [
-        ("search", spl),
-        ("output_mode", "json"),
-        ("exec_mode", "normal"),
-    ];
-
-    let req = auth.apply_to_request(client.post(&url)).form(&form);
-
-    info!("running SPL: `{spl}`");
-
-    let result: Result<String> = async {
-        let mut bytes = send_request(req).await?;
-        let response: CreateJobResponse =
-            simd_json::serde::from_slice(bytes.as_mut()).context("parse job creation response")?;
-        Ok(response.sid)
-    }
-    .await;
-
-    let duration = start.elapsed().as_secs_f64();
-    record_operation_result(CONNECTOR_SPLUNK, OP_CREATE_JOB, &result, duration);
-    result
-}
-
-#[instrument(skip(client, auth), name = "splunk poll_job")]
-async fn poll_job_completion(
-    client: &Client,
-    base_url: &str,
-    sid: &str,
-    auth: &SplunkAuth,
-    poll_interval: Duration,
-    timeout: Duration,
-) -> Result<u64> {
-    let start = std::time::Instant::now();
-
-    loop {
-        if start.elapsed() > timeout {
-            bail!("Search job {} timed out after {:?}", sid, timeout);
-        }
-
-        METRICS
-            .connector_requests_total
-            .with_label_values(&[CONNECTOR_SPLUNK, OP_POLL_JOB])
-            .inc();
-
-        let url = format!("{base_url}/services/search/jobs/{sid}?output_mode=json");
-        let req = auth.apply_to_request(client.get(&url));
-
-        let mut bytes = send_request(req).await?;
-        let response: JobStatusResponse =
-            simd_json::serde::from_slice(bytes.as_mut()).context("parse job status response")?;
-
-        if let Some(entry) = response.entry.first() {
-            if entry.content.is_done {
-                return Ok(entry.content.result_count);
-            }
-
-            match entry.content.dispatch_state.as_str() {
-                "FAILED" => bail!("Search job {} failed", sid),
-                "PAUSED" => bail!("Search job {} paused unexpectedly", sid),
-                _ => {}
-            }
-        }
-
-        tokio::time::sleep(poll_interval).await;
-    }
-}
-
-#[instrument(skip(client, auth), name = "splunk fetch_results")]
-async fn fetch_results(
-    client: &Client,
-    base_url: &str,
-    sid: &str,
-    auth: &SplunkAuth,
-    batch_size: u32,
-) -> Result<LogTryStream> {
-    let url = format!("{base_url}/services/search/jobs/{sid}/results");
-    let client = client.clone();
-    let auth = auth.clone();
-
-    Ok(Box::pin(try_stream! {
-        let mut offset = 0u64;
-
-        loop {
-            METRICS
-                .connector_requests_total
-                .with_label_values(&[CONNECTOR_SPLUNK, OP_FETCH_RESULTS])
-                .inc();
-
-            let req = auth.apply_to_request(
-                client.get(&url)
-                    .query(&[
-                        ("output_mode", "json"),
-                        ("offset", &offset.to_string()),
-                        ("count", &batch_size.to_string()),
-                    ])
-            );
-
-            let mut bytes = send_request(req).await?;
-            let response: ResultsResponse =
-                simd_json::serde::from_slice(bytes.as_mut())
-                    .context("parse results response")?;
-
-            if response.results.is_empty() {
-                return;
-            }
-
-            for log in response.results {
-                let transformed = SplunkConnector::transform_log(log)?;
-                yield transformed;
-                offset += 1;
-            }
-        }
-    }))
-}
-
 impl SplunkConnector {
     pub(crate) fn transform_log(mut log: Log) -> Result<Log> {
         // Parse _raw field if it's valid JSON to get properly-typed values.
@@ -965,7 +799,7 @@ impl SplunkConnector {
         Ok(log)
     }
 
-    fn value_to_datetime(value: &mut Value) -> Result<()> {
+    pub(super) fn value_to_datetime(value: &mut Value) -> Result<()> {
         match value {
             Value::String(s) => {
                 if let Ok(dt) =
@@ -997,104 +831,6 @@ impl SplunkConnector {
         }
         Ok(())
     }
-
-    fn transform_agg_timestamp_value(
-        key: &str,
-        mut value: Value,
-        agg_timestamp_fields: &HashSet<String>,
-    ) -> Result<Value> {
-        if agg_timestamp_fields.contains(key) {
-            Self::value_to_datetime(&mut value)?;
-        }
-        Ok(value)
-    }
-
-    /// Splunk stats returns all values as strings
-    fn try_parse_numeric_string(value: Value) -> Value {
-        if let Value::String(s) = &value {
-            if let Ok(i) = s.parse::<i64>() {
-                return Value::Int(i);
-            }
-            if let Ok(f) = s.parse::<f64>() {
-                return Value::Float(f);
-            }
-        }
-        value
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    async fn query_with_stats(
-        client: Client,
-        url: String,
-        collection: String,
-        handle: SplunkHandle,
-        auth: SplunkAuth,
-        poll_interval: Duration,
-        timeout: Duration,
-        batch_size: u32,
-    ) -> Result<LogTryStream> {
-        let spl = handle.build_spl(&collection);
-        info!("Splunk stats search: {}", spl);
-
-        let sid = create_search_job(&client, &url, &spl, &auth).await?;
-        let _result_count =
-            poll_job_completion(&client, &url, &sid, &auth, poll_interval, timeout).await?;
-
-        let timestamp_agg_fields = handle.get_stats_timestamp_fields().cloned();
-        let numeric_agg_fields = handle.get_stats_numeric_fields().cloned();
-
-        let results_url = format!("{url}/services/search/jobs/{sid}/results");
-
-        Ok(Box::pin(try_stream! {
-            let mut offset = 0u64;
-
-            loop {
-                METRICS
-                    .connector_requests_total
-                    .with_label_values(&[CONNECTOR_SPLUNK, OP_FETCH_RESULTS])
-                    .inc();
-
-                let req = auth.apply_to_request(
-                    client.get(&results_url)
-                        .query(&[
-                            ("output_mode", "json"),
-                            ("offset", &offset.to_string()),
-                            ("count", &batch_size.to_string()),
-                        ])
-                );
-
-                let mut bytes = send_request(req).await?;
-                let response: ResultsResponse =
-                    simd_json::serde::from_slice(bytes.as_mut())
-                        .context("parse stats results response")?;
-
-                if response.results.is_empty() {
-                    return;
-                }
-
-                for mut log in response.results {
-                    if let Some(ref ts_fields) = timestamp_agg_fields {
-                        for (key, value) in log.clone().iter() {
-                            if ts_fields.contains(key)
-                                && let Some(v) = log.get_mut(key) {
-                                    *v = Self::transform_agg_timestamp_value(key, value.clone(), ts_fields)?;
-                                }
-                        }
-                    }
-                    if let Some(ref num_fields) = numeric_agg_fields {
-                        for key in num_fields {
-                            if let Some(v) = log.get_mut(key) {
-                                let old = std::mem::replace(v, Value::Null);
-                                *v = Self::try_parse_numeric_string(old);
-                            }
-                        }
-                    }
-                    yield log;
-                    offset += 1;
-                }
-            }
-        }))
-    }
 }
 
 #[async_trait]
@@ -1124,9 +860,6 @@ impl Connector for SplunkConnector {
         handle: &dyn QueryHandle,
         _split: Option<&dyn Split>,
     ) -> Result<QueryResponse> {
-        let url = self.config.url.clone();
-        let auth = self.config.auth.clone();
-
         let handle = downcast_unwrap!(handle, SplunkHandle);
         let has_count = handle.has_count();
         let has_stats = handle.has_stats();
@@ -1135,91 +868,59 @@ impl Connector for SplunkConnector {
 
         info!(?has_count, "Splunk search '{}': {}", collection, spl);
 
+        let runner = QueryRunner::new(
+            self.client.clone(),
+            self.config.url.clone(),
+            self.config.auth.clone(),
+            self.config.job_poll_interval,
+            self.config.job_timeout,
+            self.config.result_batch_size,
+        );
+
         if has_count && !has_stats {
-            let sid = create_search_job(&self.client, &url, &spl, &auth).await?;
-            let result_count = poll_job_completion(
-                &self.client,
-                &url,
-                &sid,
-                &auth,
-                self.config.job_poll_interval,
-                self.config.job_timeout,
-            )
-            .await?;
-
-            let results_url =
-                format!("{url}/services/search/jobs/{sid}/results?output_mode=json&count=1");
-            let req = auth.apply_to_request(self.client.get(&results_url));
-            let mut bytes = send_request(req).await?;
-            let response: ResultsResponse =
-                simd_json::serde::from_slice(bytes.as_mut()).context("parse count response")?;
-
-            let count = if let Some(first) = response.results.first() {
-                first
-                    .get("count")
-                    .and_then(|v| match v {
-                        Value::UInt(n) => Some(*n),
-                        Value::Int(n) => Some(*n as u64),
-                        Value::String(s) => s.parse().ok(),
-                        _ => None,
-                    })
-                    .unwrap_or(result_count)
-            } else {
-                result_count
-            };
+            let (result_count, log) = runner.run_count(&spl).await?;
+            let count = log
+                .get("count")
+                .and_then(|v| match v {
+                    Value::UInt(n) => Some(*n),
+                    Value::Int(n) => Some(*n as u64),
+                    Value::String(s) => s.parse().ok(),
+                    _ => None,
+                })
+                .unwrap_or(result_count);
 
             return Ok(QueryResponse::Count(count));
         }
 
         if has_stats {
+            let timestamp_fields = handle
+                .get_stats_timestamp_fields()
+                .cloned()
+                .unwrap_or_default();
+            let numeric_fields = handle
+                .get_stats_numeric_fields()
+                .cloned()
+                .unwrap_or_default();
             return Ok(QueryResponse::Logs(
-                Self::query_with_stats(
-                    self.client.clone(),
-                    url,
-                    collection.to_string(),
-                    handle.clone(),
-                    auth,
-                    self.config.job_poll_interval,
-                    self.config.job_timeout,
-                    self.config.result_batch_size,
-                )
-                .await?,
+                runner
+                    .run_stats(&spl, timestamp_fields, numeric_fields)
+                    .await?,
             ));
         }
 
         if self.config.enable_partial_stream {
-            let poller = preview_poller::PreviewPoller::new(
+            let runner = QueryRunner::new(
                 self.client.clone(),
-                url,
-                auth,
+                self.config.url.clone(),
+                self.config.auth.clone(),
                 self.config.preview_interval,
                 self.config.job_timeout,
                 self.config.result_batch_size,
             );
-            return Ok(QueryResponse::PartialLogs(poller.poll_with_previews(spl)));
+            return Ok(QueryResponse::PartialLogs(runner.run_with_previews(spl)));
         }
 
-        let sid = create_search_job(&self.client, &url, &spl, &auth).await?;
-        let _result_count = poll_job_completion(
-            &self.client,
-            &url,
-            &sid,
-            &auth,
-            self.config.job_poll_interval,
-            self.config.job_timeout,
-        )
-        .await?;
-
-        Ok(QueryResponse::Logs(
-            fetch_results(
-                &self.client,
-                &url,
-                &sid,
-                &auth,
-                self.config.result_batch_size,
-            )
-            .await?,
-        ))
+        Ok(QueryResponse::Logs(runner.run(&spl).await?))
     }
 
     fn apply_filter(&self, ast: &Expr, handle: &dyn QueryHandle) -> Option<Box<dyn QueryHandle>> {
