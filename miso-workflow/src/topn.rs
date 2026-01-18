@@ -1,9 +1,8 @@
 use std::{cmp::Ordering, collections::BinaryHeap, iter, rc::Rc};
 
-use hashbrown::HashMap;
 use miso_common::metrics::{METRICS, STEP_TOPN};
 use miso_workflow_types::{
-    log::{Log, LogItem, LogIter},
+    log::{Log, LogItem, LogIter, PartialStreamKey},
     sort::Sort,
 };
 use scoped_thread_local::scoped_thread_local;
@@ -11,6 +10,7 @@ use scoped_thread_local::scoped_thread_local;
 use super::{
     log_utils::PartialStreamItem,
     partial_stream::PartialLogIter,
+    partial_stream_tracker::PartialStreamTracker,
     sort::{SortConfig, cmp_logs},
     try_next, try_next_with_partial_stream,
 };
@@ -88,8 +88,9 @@ pub struct TopNIter {
     config: Rc<SortConfig>,
     limit: usize,
     state: Option<TopNState>,
-    partial_states: HashMap<usize, TopNState>,
+    tracker: PartialStreamTracker<TopNState>,
     logs: LogIter,
+    pending_batches: Vec<(Vec<SortableLog>, PartialStreamKey)>,
     rows_processed: u64,
 }
 
@@ -102,8 +103,9 @@ impl TopNIter {
             config: config.clone(),
             limit,
             state: Some(TopNState::new(limit, config)),
-            partial_states: HashMap::new(),
+            tracker: PartialStreamTracker::new(),
             logs: Box::new(iter::empty()),
+            pending_batches: Vec::new(),
             rows_processed: 0,
         }
     }
@@ -116,14 +118,21 @@ impl TopNIter {
     fn set_next_partial_stream_batch(
         &mut self,
         logs: Vec<SortableLog>,
-        id: usize,
+        key: PartialStreamKey,
     ) -> Option<LogItem> {
         self.logs = Box::new(
             logs.into_iter()
-                .map(move |x| LogItem::PartialStreamLog(x.0, id))
-                .chain(iter::once(LogItem::PartialStreamDone(id))),
+                .map(move |x| LogItem::PartialStreamLog(x.0, key))
+                .chain(iter::once(LogItem::PartialStreamDone(key))),
         );
         self.logs.next()
+    }
+
+    fn drain_pending_batch(&mut self) -> Option<LogItem> {
+        if let Some((logs, key)) = self.pending_batches.pop() {
+            return self.set_next_partial_stream_batch(logs, key);
+        }
+        None
     }
 }
 
@@ -143,24 +152,38 @@ impl Iterator for TopNIter {
         if let Some(log) = self.logs.next() {
             return Some(log);
         }
-        let state = self.state.as_mut()?;
+        if let Some(item) = self.drain_pending_batch() {
+            return Some(item);
+        }
+        self.state.as_ref()?;
 
         while let Some(item) = try_next_with_partial_stream!(self.input) {
             match item {
                 PartialStreamItem::Log(log) => {
                     self.rows_processed += 1;
-                    state.push(log);
+                    self.state.as_mut().unwrap().push(log);
                 }
-                PartialStreamItem::PartialStreamLog(log, id) => {
+                PartialStreamItem::PartialStreamLog(log, key) => {
                     self.rows_processed += 1;
-                    self.partial_states
-                        .entry(id)
-                        .or_insert_with(|| TopNState::new(self.limit, self.config.clone()))
+                    let limit = self.limit;
+                    let config = self.config.clone();
+                    self.tracker
+                        .get_or_create_state(key, || TopNState::new(limit, config))
                         .push(log);
                 }
-                PartialStreamItem::PartialStreamDone(id) => {
-                    if let Some(state) = self.partial_states.remove(&id) {
-                        return self.set_next_partial_stream_batch(state.into_sorted_vec(), id);
+                PartialStreamItem::PartialStreamDone(key) => {
+                    if let Some((pstate, out_key)) = self.tracker.mark_done(key) {
+                        return self
+                            .set_next_partial_stream_batch(pstate.into_sorted_vec(), out_key);
+                    }
+                }
+                PartialStreamItem::SourceDone(source_id) => {
+                    for (pstate, out_key) in self.tracker.finish_source(source_id) {
+                        self.pending_batches
+                            .push((pstate.into_sorted_vec(), out_key));
+                    }
+                    if let Some(item) = self.drain_pending_batch() {
+                        return Some(item);
                     }
                 }
             };
@@ -237,5 +260,105 @@ impl Iterator for PartialTopNIter {
 
         let logs = self.state.take().unwrap().into_sorted_vec();
         self.set_next_batch(logs)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use miso_workflow_types::{
+        field::Field,
+        sort::{NullsOrder, SortOrder},
+        value::Value,
+    };
+    use std::str::FromStr;
+
+    fn plog(val: i64, partial_stream_id: usize, source_id: usize) -> LogItem {
+        let mut l = Log::new();
+        l.insert("x".into(), Value::from(val));
+        LogItem::PartialStreamLog(
+            l,
+            PartialStreamKey {
+                partial_stream_id,
+                source_id,
+            },
+        )
+    }
+
+    fn pdone(partial_stream_id: usize, source_id: usize) -> LogItem {
+        LogItem::PartialStreamDone(PartialStreamKey {
+            partial_stream_id,
+            source_id,
+        })
+    }
+
+    fn top2_desc() -> (Vec<Sort>, usize) {
+        (
+            vec![Sort {
+                by: Field::from_str("x").unwrap(),
+                order: SortOrder::Desc,
+                nulls: NullsOrder::default(),
+            }],
+            2,
+        )
+    }
+
+    fn collect_topn(input: Vec<LogItem>) -> Vec<LogItem> {
+        let (sorts, limit) = top2_desc();
+        TopNIter::new(Box::new(input.into_iter()), sorts, limit).collect()
+    }
+
+    fn extract_partial_vals(items: &[LogItem]) -> Vec<i64> {
+        items
+            .iter()
+            .filter_map(|i| match i {
+                LogItem::PartialStreamLog(l, _) => l.get("x")?.as_i64(),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn partial_stream_two_sources_aggregation() {
+        let items = collect_topn(vec![
+            plog(5, 0, 1),
+            plog(3, 0, 1),
+            plog(10, 0, 2),
+            pdone(0, 1),
+            pdone(0, 2),
+        ]);
+
+        let vals = extract_partial_vals(&items);
+        assert!(vals.contains(&10));
+        assert!(vals.contains(&5));
+        assert!(!vals.contains(&3));
+    }
+
+    #[test]
+    fn partial_stream_respects_limit() {
+        let items = collect_topn(vec![
+            plog(1, 0, 1),
+            plog(2, 0, 1),
+            plog(3, 0, 1),
+            pdone(0, 1),
+        ]);
+
+        let vals = extract_partial_vals(&items);
+        assert_eq!(vals.len(), 2);
+        assert!(vals.contains(&3));
+        assert!(vals.contains(&2));
+    }
+
+    #[test]
+    fn partial_stream_source_done_drains_pending() {
+        let items = collect_topn(vec![
+            plog(5, 0, 1),
+            plog(3, 0, 2),
+            pdone(0, 1),
+            LogItem::SourceDone(2),
+        ]);
+
+        let vals = extract_partial_vals(&items);
+        assert_eq!(vals.len(), 2);
     }
 }

@@ -1496,7 +1496,7 @@ impl Connector for QuickwitConnector {
         union_handle: &dyn QueryHandle,
     ) -> Option<Box<dyn QueryHandle>> {
         let handle = downcast_unwrap!(handle, QuickwitHandle);
-        let union_handle = downcast_unwrap!(union_handle, QuickwitHandle);
+        let union_handle = union_handle.as_any().downcast_ref::<QuickwitHandle>()?;
 
         if handle != union_handle {
             // Quickwit only supports querying multiple indexes with the exact same query.

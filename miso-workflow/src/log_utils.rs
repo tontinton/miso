@@ -1,11 +1,11 @@
-use miso_workflow_types::log::Log;
+use miso_workflow_types::log::{Log, PartialStreamKey, SourceId};
 
 #[macro_export]
 macro_rules! try_next {
     ($iter:expr) => {
         match $iter.next() {
-            Some(miso_workflow_types::log::LogItem::UnionSomePipelineDone) => {
-                return Some(miso_workflow_types::log::LogItem::UnionSomePipelineDone);
+            Some(miso_workflow_types::log::LogItem::SourceDone(id)) => {
+                return Some(miso_workflow_types::log::LogItem::SourceDone(id));
             }
             Some(miso_workflow_types::log::LogItem::Err(e)) => {
                 return Some(miso_workflow_types::log::LogItem::Err(e))
@@ -20,16 +20,17 @@ macro_rules! try_next {
 
 pub enum PartialStreamItem {
     Log(Log),
-    PartialStreamLog(Log, usize),
-    PartialStreamDone(usize),
+    PartialStreamLog(Log, PartialStreamKey),
+    PartialStreamDone(PartialStreamKey),
+    SourceDone(SourceId),
 }
 
 #[macro_export]
 macro_rules! try_next_with_partial_stream {
     ($iter:expr) => {
         match $iter.next() {
-            Some(miso_workflow_types::log::LogItem::UnionSomePipelineDone) => {
-                return Some(miso_workflow_types::log::LogItem::UnionSomePipelineDone);
+            Some(miso_workflow_types::log::LogItem::SourceDone(id)) => {
+                Some($crate::log_utils::PartialStreamItem::SourceDone(id))
             }
             Some(miso_workflow_types::log::LogItem::Err(e)) => {
                 return Some(miso_workflow_types::log::LogItem::Err(e))
@@ -37,11 +38,11 @@ macro_rules! try_next_with_partial_stream {
             Some(miso_workflow_types::log::LogItem::Log(log)) => {
                 Some($crate::log_utils::PartialStreamItem::Log(log))
             }
-            Some(miso_workflow_types::log::LogItem::PartialStreamLog(log, id)) => Some(
-                $crate::log_utils::PartialStreamItem::PartialStreamLog(log, id),
+            Some(miso_workflow_types::log::LogItem::PartialStreamLog(log, key)) => Some(
+                $crate::log_utils::PartialStreamItem::PartialStreamLog(log, key),
             ),
-            Some(miso_workflow_types::log::LogItem::PartialStreamDone(id)) => {
-                Some($crate::log_utils::PartialStreamItem::PartialStreamDone(id))
+            Some(miso_workflow_types::log::LogItem::PartialStreamDone(key)) => {
+                Some($crate::log_utils::PartialStreamItem::PartialStreamDone(key))
             }
             None => None,
         }

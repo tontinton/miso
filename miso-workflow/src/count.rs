@@ -1,6 +1,5 @@
 use std::iter;
 
-use hashbrown::HashMap;
 use miso_common::metrics::{METRICS, STEP_COUNT};
 use miso_workflow_types::{
     log::{Log, LogItem, LogIter},
@@ -8,7 +7,8 @@ use miso_workflow_types::{
 };
 
 use super::{
-    log_utils::PartialStreamItem, partial_stream::PartialLogIter, try_next_with_partial_stream,
+    log_utils::PartialStreamItem, partial_stream::PartialLogIter,
+    partial_stream_tracker::PartialStreamTracker, try_next_with_partial_stream,
 };
 
 const COUNT_LOG_FIELD_NAME: &str = "Count";
@@ -53,9 +53,9 @@ impl CountMode {
 pub struct CountIter {
     input: LogIter,
     count: u64,
-    partial_counts: HashMap<usize, u64>,
+    tracker: PartialStreamTracker<u64>,
     mode: CountMode,
-    next: Option<LogItem>,
+    pending: Vec<LogItem>,
     done: bool,
     rows_processed: u64,
 }
@@ -65,9 +65,9 @@ impl CountIter {
         Self {
             input,
             count: 0,
-            partial_counts: HashMap::new(),
+            tracker: PartialStreamTracker::new(),
             mode,
-            next: None,
+            pending: Vec::new(),
             done: false,
             rows_processed: 0,
         }
@@ -99,8 +99,8 @@ impl Iterator for CountIter {
             return None;
         }
 
-        if let Some(log) = self.next.take() {
-            return Some(log);
+        if let Some(item) = self.pending.pop() {
+            return Some(item);
         }
 
         while let Some(item) = try_next_with_partial_stream!(self.input) {
@@ -109,15 +109,26 @@ impl Iterator for CountIter {
                     self.rows_processed += 1;
                     self.mode.update_count(&mut self.count, log);
                 }
-                PartialStreamItem::PartialStreamLog(log, id) => {
+                PartialStreamItem::PartialStreamLog(log, key) => {
                     self.rows_processed += 1;
-                    let count = self.partial_counts.entry(id).or_insert(0);
+                    let count = self.tracker.get_or_create_state(key, || 0);
                     self.mode.update_count(count, log);
                 }
-                PartialStreamItem::PartialStreamDone(id) => {
-                    if let Some(count) = self.partial_counts.remove(&id) {
-                        self.next = Some(LogItem::PartialStreamDone(id));
-                        return Some(LogItem::PartialStreamLog(count_to_log(count), id));
+                PartialStreamItem::PartialStreamDone(key) => {
+                    if let Some((count, out_key)) = self.tracker.mark_done(key) {
+                        self.pending.push(LogItem::PartialStreamDone(out_key));
+                        return Some(LogItem::PartialStreamLog(count_to_log(count), out_key));
+                    }
+                }
+                PartialStreamItem::SourceDone(source_id) => {
+                    for (count, out_key) in self.tracker.finish_source(source_id) {
+                        self.pending.push(LogItem::PartialStreamDone(out_key));
+                        self.pending
+                            .push(LogItem::PartialStreamLog(count_to_log(count), out_key));
+                    }
+                    self.pending.push(LogItem::SourceDone(source_id));
+                    if let Some(item) = self.pending.pop() {
+                        return Some(item);
                     }
                 }
             };
@@ -131,5 +142,109 @@ impl Iterator for CountIter {
 impl PartialLogIter for CountIter {
     fn get_partial(&self) -> LogIter {
         Box::new(iter::once(count_to_log_item(self.count)))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use miso_workflow_types::log::PartialStreamKey;
+
+    fn log() -> LogItem {
+        LogItem::Log(Log::new())
+    }
+
+    fn plog(partial_stream_id: usize, source_id: usize) -> LogItem {
+        LogItem::PartialStreamLog(
+            Log::new(),
+            PartialStreamKey {
+                partial_stream_id,
+                source_id,
+            },
+        )
+    }
+
+    fn pdone(partial_stream_id: usize, source_id: usize) -> LogItem {
+        LogItem::PartialStreamDone(PartialStreamKey {
+            partial_stream_id,
+            source_id,
+        })
+    }
+
+    fn collect_items(input: Vec<LogItem>) -> Vec<LogItem> {
+        CountIter::new_simple(Box::new(input.into_iter())).collect()
+    }
+
+    fn extract_counts(items: &[LogItem]) -> Vec<u64> {
+        items
+            .iter()
+            .filter_map(|i| match i {
+                LogItem::Log(l) | LogItem::PartialStreamLog(l, _) => l.get("Count")?.as_u64(),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn count_source_done(items: &[LogItem]) -> usize {
+        items
+            .iter()
+            .filter(|i| matches!(i, LogItem::SourceDone(_)))
+            .count()
+    }
+
+    #[test]
+    fn source_done_passthrough() {
+        let items = collect_items(vec![log(), LogItem::SourceDone(1), log()]);
+        assert_eq!(count_source_done(&items), 1);
+        assert_eq!(extract_counts(&items), vec![2]);
+    }
+
+    #[test]
+    fn multiple_source_done_all_passthrough() {
+        let items = collect_items(vec![
+            log(),
+            LogItem::SourceDone(1),
+            log(),
+            LogItem::SourceDone(2),
+            log(),
+        ]);
+        assert_eq!(count_source_done(&items), 2);
+        assert_eq!(extract_counts(&items), vec![3]);
+    }
+
+    #[test]
+    fn partial_stream_aggregation_two_sources() {
+        let items = collect_items(vec![
+            plog(0, 1),
+            plog(0, 1),
+            plog(0, 2),
+            pdone(0, 1),
+            pdone(0, 2),
+        ]);
+
+        let partial_counts = extract_counts(&items);
+        assert_eq!(partial_counts, vec![3, 0]);
+    }
+
+    #[test]
+    fn partial_stream_source_done_drains() {
+        let items = collect_items(vec![
+            plog(0, 1),
+            plog(0, 2),
+            pdone(0, 1),
+            LogItem::SourceDone(2),
+        ]);
+
+        assert_eq!(count_source_done(&items), 1);
+        assert_eq!(extract_counts(&items), vec![2, 0]);
+    }
+
+    #[test]
+    fn mixed_logs_and_partial_streams() {
+        let items = collect_items(vec![log(), plog(0, 1), log(), pdone(0, 1), log()]);
+
+        let counts = extract_counts(&items);
+        assert_eq!(counts.last(), Some(&3));
+        assert!(counts.contains(&1));
     }
 }

@@ -102,7 +102,7 @@ fn collect_logs(by: &[Field], input: impl Iterator<Item = LogItem>) -> Result<Ve
         let log = match log {
             LogItem::Log(log) => log,
             LogItem::Err(e) => return Err(e),
-            LogItem::UnionSomePipelineDone
+            LogItem::SourceDone(..)
             | LogItem::PartialStreamLog(..)
             | LogItem::PartialStreamDone(..) => {
                 continue;

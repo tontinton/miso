@@ -6,7 +6,7 @@ use std::{
 use miso_common::humantime_utils::deserialize_duration;
 use miso_workflow_types::{
     json,
-    log::{Log, LogItem, LogIter},
+    log::{Log, LogItem, LogIter, PartialStreamKey, SourceId},
     value::{Map, Value},
 };
 use serde::Deserialize;
@@ -35,21 +35,25 @@ pub trait PartialLogIter: Iterator<Item = LogItem> {
     fn get_partial(&self) -> LogIter;
 }
 
-pub fn add_partial_stream_id(mut log: Log, id: usize) -> Log {
-    log.entry(MISO_METADATA_FIELD_NAME.to_string())
+pub fn add_partial_stream_id(mut log: Log, key: PartialStreamKey) -> Log {
+    let meta = log
+        .entry(MISO_METADATA_FIELD_NAME.to_string())
         .or_insert_with(|| Value::Object(Map::new()))
         .as_object_mut()
-        .unwrap()
-        .insert(PARTIAL_STREAM_ID_FIELD_NAME.to_string(), Value::from(id));
+        .unwrap();
+    meta.insert(
+        PARTIAL_STREAM_ID_FIELD_NAME.to_string(),
+        Value::from(key.partial_stream_id),
+    );
     log
 }
 
-pub fn build_partial_stream_id_done_log(id: usize) -> Log {
+pub fn build_partial_stream_done_log(key: PartialStreamKey) -> Log {
     let mut log = Map::new();
     log.insert(
         MISO_METADATA_FIELD_NAME.to_string(),
         json!({
-            PARTIAL_STREAM_ID_FIELD_NAME: id,
+            PARTIAL_STREAM_ID_FIELD_NAME: key.partial_stream_id,
             PARTIAL_STREAM_DONE_FIELD_NAME: true,
         }),
     );
@@ -59,18 +63,20 @@ pub fn build_partial_stream_id_done_log(id: usize) -> Log {
 pub struct PartialStreamIter {
     input: Box<dyn PartialLogIter>,
     config: PartialStream,
-    id: usize,
+    source_id: SourceId,
+    partial_stream_id: usize,
     partial_iter: LogIter,
     partial_iter_start: Option<Instant>,
     debounced_partial_iter: Option<(Instant, LogIter)>,
 }
 
 impl PartialStreamIter {
-    pub fn new(input: Box<dyn PartialLogIter>, config: PartialStream) -> Self {
+    pub fn new(input: Box<dyn PartialLogIter>, config: PartialStream, source_id: SourceId) -> Self {
         Self {
             input,
             config,
-            id: 0,
+            source_id,
+            partial_stream_id: 0,
             partial_iter: Box::new(iter::empty()),
             partial_iter_start: None,
             debounced_partial_iter: None,
@@ -78,13 +84,16 @@ impl PartialStreamIter {
     }
 
     fn set_partial_iter(&mut self, partial_iter: LogIter, now: Instant) {
-        let id = self.id;
-        self.id += 1;
+        let key = PartialStreamKey {
+            partial_stream_id: self.partial_stream_id,
+            source_id: self.source_id,
+        };
+        self.partial_stream_id += 1;
 
         self.partial_iter = Box::new(
             partial_iter
-                .map(move |item| item.attach_partial_stream_id(id))
-                .chain(iter::once(LogItem::PartialStreamDone(id))),
+                .map(move |item| item.attach_partial_stream_id(key))
+                .chain(iter::once(LogItem::PartialStreamDone(key))),
         );
         self.partial_iter_start = Some(now);
     }
@@ -134,7 +143,7 @@ impl Iterator for PartialStreamIter {
             match self.input.next()? {
                 LogItem::Log(log) => return Some(LogItem::Log(log)),
                 LogItem::Err(e) => return Some(LogItem::Err(e)),
-                LogItem::UnionSomePipelineDone => self.update_partial_iter(),
+                LogItem::SourceDone(_) => self.update_partial_iter(),
                 LogItem::PartialStreamLog(..) | LogItem::PartialStreamDone(..) => {
                     panic!("partial stream items should not reach the partial stream log generator")
                 }
@@ -194,68 +203,75 @@ mod tests {
     }
 
     #[test]
-    fn union_done() {
+    fn source_done_triggers_partial() {
         let mock = MockPartialIter::new(vec![
             log("x", 1),
             log("x", 2),
-            LogItem::UnionSomePipelineDone,
+            LogItem::SourceDone(1),
             log("x", 3),
         ]);
-        let mut iter = PartialStreamIter::new(Box::new(mock), no_debounce());
+        let mut iter = PartialStreamIter::new(Box::new(mock), no_debounce(), 99);
 
         let items: Vec<_> = iter.by_ref().collect();
 
         assert_eq!(items.len(), 5);
         assert!(matches!(&items[0], LogItem::Log(_)));
         assert!(matches!(&items[1], LogItem::Log(_)));
-        assert!(matches!(&items[2], LogItem::PartialStreamLog(_, 0)));
-        assert!(matches!(&items[3], LogItem::PartialStreamDone(0)));
+        assert!(matches!(
+            &items[2],
+            LogItem::PartialStreamLog(_, key) if key.partial_stream_id == 0 && key.source_id == 99
+        ));
+        assert!(matches!(
+            &items[3],
+            LogItem::PartialStreamDone(key) if key.partial_stream_id == 0 && key.source_id == 99
+        ));
         assert!(matches!(&items[4], LogItem::Log(_)));
     }
 
     #[test]
-    fn multiple_unions_increment_ids() {
+    fn multiple_source_done_increment_ids() {
         let mock = MockPartialIter::new(vec![
             log("x", 1),
-            LogItem::UnionSomePipelineDone,
+            LogItem::SourceDone(1),
             log("x", 2),
-            LogItem::UnionSomePipelineDone,
+            LogItem::SourceDone(2),
         ]);
-        let mut iter = PartialStreamIter::new(Box::new(mock), no_debounce());
+        let mut iter = PartialStreamIter::new(Box::new(mock), no_debounce(), 99);
 
         let items: Vec<_> = iter.by_ref().collect();
 
-        let partial_logs: Vec<_> = items
+        let partial_ids: Vec<_> = items
             .iter()
             .filter_map(|i| match i {
-                LogItem::PartialStreamLog(_, id) => Some(*id),
+                LogItem::PartialStreamLog(_, key) => Some(key.partial_stream_id),
                 _ => None,
             })
             .collect();
-        let done_markers: Vec<_> = items
+        let done_ids: Vec<_> = items
             .iter()
             .filter_map(|i| match i {
-                LogItem::PartialStreamDone(id) => Some(*id),
+                LogItem::PartialStreamDone(key) => Some(key.partial_stream_id),
                 _ => None,
             })
             .collect();
 
-        assert_eq!(partial_logs, vec![0, 1]);
-        assert_eq!(done_markers, vec![0, 1]);
+        assert_eq!(partial_ids, vec![0, 1]);
+        assert_eq!(done_ids, vec![0, 1]);
     }
 
     #[test]
     fn debounce_skips_second_done() {
         let mock = MockPartialIter::new(vec![
             log("x", 1),
-            LogItem::UnionSomePipelineDone,
-            LogItem::UnionSomePipelineDone,
+            LogItem::SourceDone(1),
+            LogItem::SourceDone(2),
         ]);
         let iter = PartialStreamIter::new(
             Box::new(mock),
             PartialStream {
                 debounce: Duration::from_secs(30),
             },
+            99,
         );
 
         let items: Vec<_> = iter.collect();
