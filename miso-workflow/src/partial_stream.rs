@@ -1,3 +1,20 @@
+//! Generates partial stream results so users see progress while queries run.
+//!
+//! Nobody likes staring at a spinner. When a query takes a while, we want to show
+//! intermediate results - like a `top 10` that updates as more data arrives.
+//!
+//! When a union branch finishes (e.g., an Elasticsearch query completes a batch),
+//! the union emits a `SourceDone` signal. When we see one, we ask the underlying
+//! operator "what's your current state?" via `get_partial()`, wrap those results
+//! with a partial stream ID, and send them downstream. The user sees results updating
+//! in real-time instead of waiting for the full query to complete.
+//!
+//! Debouncing prevents flooding: if multiple `SourceDone` signals arrive in quick
+//! succession, we only emit one partial result per debounce window.
+//!
+//! Some connectors (like Splunk) generate their own partial streams via previews.
+//! These go through the `PartialStreamTracker` to coordinate results across sources.
+
 use std::{
     iter,
     time::{Duration, Instant},
