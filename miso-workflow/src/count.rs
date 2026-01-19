@@ -52,7 +52,6 @@ impl CountMode {
 
 pub struct CountIter {
     input: LogIter,
-    count: u64,
     tracker: PartialStreamTracker<u64>,
     mode: CountMode,
     pending: Vec<LogItem>,
@@ -64,8 +63,7 @@ impl CountIter {
     fn new(input: LogIter, mode: CountMode) -> Self {
         Self {
             input,
-            count: 0,
-            tracker: PartialStreamTracker::new(),
+            tracker: PartialStreamTracker::new(0),
             mode,
             pending: Vec::new(),
             done: false,
@@ -107,7 +105,8 @@ impl Iterator for CountIter {
             match item {
                 PartialStreamItem::Log(log) => {
                     self.rows_processed += 1;
-                    self.mode.update_count(&mut self.count, log);
+                    self.tracker
+                        .update_final(|count| self.mode.update_count(count, log));
                 }
                 PartialStreamItem::PartialStreamLog(log, key) => {
                     self.rows_processed += 1;
@@ -135,13 +134,13 @@ impl Iterator for CountIter {
         }
 
         self.done = true;
-        Some(count_to_log_item(self.count))
+        Some(count_to_log_item(*self.tracker.final_state()))
     }
 }
 
 impl PartialLogIter for CountIter {
     fn get_partial(&self) -> LogIter {
-        Box::new(iter::once(count_to_log_item(self.count)))
+        Box::new(iter::once(count_to_log_item(*self.tracker.final_state())))
     }
 }
 
@@ -242,9 +241,24 @@ mod tests {
     #[test]
     fn mixed_logs_and_partial_streams() {
         let items = collect_items(vec![log(), plog(0, 1), log(), pdone(0, 1), log()]);
+        let counts = extract_counts(&items);
+        assert_eq!(counts, vec![3, 3]); // partial merges with final
+    }
+
+    #[test]
+    fn partial_stream_merges_with_regular_logs() {
+        let items = collect_items(vec![
+            plog(0, 1),
+            log(),
+            log(),
+            log(),
+            plog(0, 1),
+            LogItem::SourceDone(2),
+            pdone(0, 1),
+        ]);
 
         let counts = extract_counts(&items);
+        assert!(counts.contains(&5)); // 2 partial + 3 regular
         assert_eq!(counts.last(), Some(&3));
-        assert!(counts.contains(&1));
     }
 }
