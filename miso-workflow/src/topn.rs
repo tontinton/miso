@@ -10,7 +10,7 @@ use scoped_thread_local::scoped_thread_local;
 use super::{
     log_utils::PartialStreamItem,
     partial_stream::PartialLogIter,
-    partial_stream_tracker::PartialStreamTracker,
+    partial_stream_tracker::{Mergeable, PartialStreamTracker},
     sort::{SortConfig, cmp_logs},
     try_next, try_next_with_partial_stream,
 };
@@ -60,20 +60,21 @@ impl TopNState {
         }
     }
 
-    fn push(&mut self, log: Log) {
-        let sortable = SortableLog(log);
-
+    fn push_sortable(&mut self, sortable: SortableLog) {
         SORT_CONFIG.set(&mut SortConfigTLS(&self.config), || {
             if self.heap.len() < self.limit {
                 self.heap.push(sortable);
-            } else {
-                let bottom_of_top = self.heap.peek().unwrap();
-                if sortable.cmp(bottom_of_top) == Ordering::Less {
-                    self.heap.pop();
-                    self.heap.push(sortable);
-                }
+            } else if let Some(bottom) = self.heap.peek()
+                && sortable.cmp(bottom) == Ordering::Less
+            {
+                self.heap.pop();
+                self.heap.push(sortable);
             }
         });
+    }
+
+    fn push(&mut self, log: Log) {
+        self.push_sortable(SortableLog(log));
     }
 
     fn into_sorted_vec(self) -> Vec<SortableLog> {
@@ -83,15 +84,23 @@ impl TopNState {
     }
 }
 
+impl Mergeable for TopNState {
+    fn merge(&mut self, other: &Self) {
+        for item in &other.heap {
+            self.push_sortable(item.clone());
+        }
+    }
+}
+
 pub struct TopNIter {
     input: LogIter,
     config: Rc<SortConfig>,
     limit: usize,
-    state: Option<TopNState>,
     tracker: PartialStreamTracker<TopNState>,
     logs: LogIter,
     pending_batches: Vec<(Vec<SortableLog>, PartialStreamKey)>,
     rows_processed: u64,
+    done: bool,
 }
 
 impl TopNIter {
@@ -102,11 +111,11 @@ impl TopNIter {
             input,
             config: config.clone(),
             limit,
-            state: Some(TopNState::new(limit, config)),
-            tracker: PartialStreamTracker::new(),
+            tracker: PartialStreamTracker::new(TopNState::new(limit, config)),
             logs: Box::new(iter::empty()),
             pending_batches: Vec::new(),
             rows_processed: 0,
+            done: false,
         }
     }
 
@@ -155,13 +164,15 @@ impl Iterator for TopNIter {
         if let Some(item) = self.drain_pending_batch() {
             return Some(item);
         }
-        self.state.as_ref()?;
+        if self.done {
+            return None;
+        }
 
         while let Some(item) = try_next_with_partial_stream!(self.input) {
             match item {
                 PartialStreamItem::Log(log) => {
                     self.rows_processed += 1;
-                    self.state.as_mut().unwrap().push(log);
+                    self.tracker.update_final(|state| state.push(log));
                 }
                 PartialStreamItem::PartialStreamLog(log, key) => {
                     self.rows_processed += 1;
@@ -189,7 +200,13 @@ impl Iterator for TopNIter {
             };
         }
 
-        let logs = self.state.take().unwrap().into_sorted_vec();
+        self.done = true;
+        let logs = std::mem::replace(
+            &mut self.tracker,
+            PartialStreamTracker::new(TopNState::new(self.limit, self.config.clone())),
+        )
+        .into_final_state()
+        .into_sorted_vec();
         self.set_next_batch(logs)
     }
 }
