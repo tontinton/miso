@@ -367,7 +367,7 @@ mod tests {
     }
 
     #[test]
-    fn partial_stream_source_done_drains_pending() {
+    fn partial_stream_source_done_drops_contributed() {
         let items = collect_topn(vec![
             plog(5, 0, 1),
             plog(3, 0, 2),
@@ -376,6 +376,6 @@ mod tests {
         ]);
 
         let vals = extract_partial_vals(&items);
-        assert_eq!(vals.len(), 2);
+        assert_eq!(vals.len(), 0);
     }
 }
