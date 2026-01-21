@@ -226,7 +226,7 @@ mod tests {
     }
 
     #[test]
-    fn partial_stream_source_done_drains() {
+    fn partial_stream_source_done_drops_contributed() {
         let items = collect_items(vec![
             plog(0, 1),
             plog(0, 2),
@@ -235,7 +235,7 @@ mod tests {
         ]);
 
         assert_eq!(count_source_done(&items), 1);
-        assert_eq!(extract_counts(&items), vec![2, 0]);
+        assert_eq!(extract_counts(&items), vec![0]);
     }
 
     #[test]
