@@ -6,7 +6,19 @@
     "tony": {
       "type": "quickwit",
       "url": "http://127.0.0.1:7280",
-      "refresh_interval": "5s"
+      "refresh_interval": "2m"
+    },
+    "sp": {
+      "type": "splunk",
+      "url": "https://127.0.0.1:8089",
+      "refresh_interval": "2m",
+      "auth": {
+        "type": "basic",
+        "username": "admin",
+        "password": "testpassword123"
+      },
+      "accept_invalid_certs": true,
+      "enable_partial_stream": true
     }
   },
   "query_status_collection": "mem.queries"
