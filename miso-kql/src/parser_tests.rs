@@ -1197,7 +1197,6 @@ fn test_join_condition_validation() {
 )]
 fn test_error_recovery_collects_multiple_errors(query: &str, expected_num_errors: usize) {
     let result = parse(query);
-    dbg!(&result);
 
     assert!(result.is_err());
     let errors = result.unwrap_err();
