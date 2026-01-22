@@ -19,11 +19,12 @@ members = [
 [workspace.dependencies]
 arboard = "3.6.1"
 async-stream = "0.3.6"
+async-trait = "0.1"
 axum = { version = "0.7.7", features = ["macros"] }
 base64 = "0.22.1"
 bon = "3.6.3"
 bytes = "1.10.1"
-chumsky = "0.10.1"
+chumsky = { version = "0.10.1", default-features = false, features = ["std"] }
 clap = { version = "4.5.20", features = ["derive"] }
 collection_macros = "0.2.0"
 color-eyre = { version = "0.6.3", default-features = false }
@@ -52,7 +53,7 @@ opentelemetry = "0.27"
 opentelemetry_sdk = { version = "0.27", features = ["rt-tokio"] }
 opentelemetry-otlp = { version = "0.27", features = ["grpc-tonic"] }
 parking_lot = "0.12.3"
-prometheus = "0.14.0"
+prometheus = { version = "0.14.0", default-features = false }
 ratatui = "0.29.0"
 rayon = "1.10.0"
 reqwest = { version = "0.12.9", features = ["json", "blocking"] }
@@ -125,6 +126,12 @@ panic = "abort"
 [profile.release-thin-lto]
 inherits = "release"
 lto = "thin"
+
+[profile.dev.package."*"]
+opt-level = 1
+
+[profile.dev]
+debug = "line-tables-only"
 
 [[bench]]
 name = "join"

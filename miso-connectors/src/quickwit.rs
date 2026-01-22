@@ -6,7 +6,7 @@ use std::{
 };
 
 use async_stream::try_stream;
-use axum::async_trait;
+use async_trait::async_trait;
 use bytes::BytesMut;
 use color_eyre::eyre::{Context, OptionExt, Result, bail, eyre};
 use futures_util::stream;

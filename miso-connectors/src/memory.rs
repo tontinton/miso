@@ -4,7 +4,7 @@ use std::fmt;
 use std::sync::Arc;
 
 use async_stream::try_stream;
-use axum::async_trait;
+use async_trait::async_trait;
 use color_eyre::eyre::Result;
 use hashbrown::HashMap;
 use miso_workflow_types::log::Log;

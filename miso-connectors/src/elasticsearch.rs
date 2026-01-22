@@ -6,7 +6,7 @@ use std::{
 };
 
 use async_stream::try_stream;
-use axum::async_trait;
+use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use bytes::BytesMut;
 use color_eyre::eyre::{Context, OptionExt, Result, bail, eyre};

@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::{any::Any, collections::BTreeMap};
 
-use axum::async_trait;
+use async_trait::async_trait;
 use color_eyre::eyre::Result;
 use hashbrown::HashMap;
 use miso_workflow_types::field::Field;
