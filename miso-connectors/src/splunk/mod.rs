@@ -913,11 +913,13 @@ impl Connector for SplunkConnector {
                 self.client.clone(),
                 self.config.url.clone(),
                 self.config.auth.clone(),
-                self.config.preview_interval,
+                self.config.job_poll_interval,
                 self.config.job_timeout,
                 self.config.result_batch_size,
             );
-            return Ok(QueryResponse::PartialLogs(runner.run_with_previews(spl)));
+            return Ok(QueryResponse::PartialLogs(
+                runner.run_with_previews(spl, self.config.preview_interval),
+            ));
         }
 
         Ok(QueryResponse::Logs(runner.run(&spl).await?))

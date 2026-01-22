@@ -141,8 +141,8 @@ impl QueryRunner {
 
     /// Run query with preview results streamed during execution.
     #[instrument(skip(self), name = "splunk run_with_previews")]
-    pub fn run_with_previews(self, spl: String) -> LogItemTryStream {
-        self.poll_with_previews_until_done(spl)
+    pub fn run_with_previews(self, spl: String, preview_interval: Duration) -> LogItemTryStream {
+        self.poll_with_previews_until_done(spl, preview_interval)
     }
 
     #[instrument(skip(self), name = "splunk poll_until_done")]
@@ -210,7 +210,11 @@ impl QueryRunner {
         )
     }
 
-    fn poll_with_previews_until_done(self, spl: String) -> LogItemTryStream {
+    fn poll_with_previews_until_done(
+        self,
+        spl: String,
+        preview_interval: Duration,
+    ) -> LogItemTryStream {
         Box::pin(try_stream! {
             let sid = self.create_job(&spl, true).await?;
             let start = Instant::now();
@@ -241,6 +245,8 @@ impl QueryRunner {
                     continue;
                 };
 
+                dbg!(entry.content.is_done);
+                dbg!(entry.content.dispatch_state.as_str());
                 match entry.content.dispatch_state.as_str() {
                     "FAILED" => Err(eyre!("Search job {} failed", sid))?,
                     "PAUSE" | "PAUSED" => Err(eyre!("Search job {} paused unexpectedly", sid))?,
@@ -267,7 +273,7 @@ impl QueryRunner {
                             partial_stream_id += 1;
                         }
 
-                        sleep(self.poll_interval).await;
+                        sleep(preview_interval).await;
                         continue;
                     }
                     "DONE" => {}
