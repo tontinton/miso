@@ -2212,6 +2212,43 @@ async fn partial_stream_summarize_group_by() -> Result<()> {
 }
 
 #[tokio::test]
+async fn partial_stream_summarize_full() -> Result<()> {
+    let r = check_partial_stream()
+        .query(
+            r#"
+            test.a
+            | union (test.b)
+            | summarize max_x=max(x),
+                        min_x=min(x),
+                        sum_x=sum(x),
+                        avg_x=avg(x),
+                        dcount_z=dcount(z),
+                        cnt=count(),
+                        cif=countif(z == 2)
+              by y
+            "#,
+        )
+        .input(btreemap! {
+            "a" => r#"[{"x": 3, "y": 3, "z": 2}, {"x": 5, "y": 6, "z": 1}]"#,
+            "b" => r#"[{"x": 1, "y": 3, "z": 2}, {"x": 9, "y": 6, "z": 3}]"#
+        })
+        .expect_final(
+            r#"[
+                {"max_x": 3, "min_x": 1, "sum_x": 4.0, "avg_x": 2.0, "dcount_z": 1, "cnt": 2, "cif": 2, "y": 3},
+                {"max_x": 9, "min_x": 5, "sum_x": 14.0, "avg_x": 7.0, "dcount_z": 2, "cnt": 2, "cif": 0, "y": 6}
+            ]"#,
+        )
+        .call()
+        .await?;
+    for p in &r.partials {
+        let y = p.get("y").unwrap().as_i64().unwrap();
+        assert!(y == 3 || y == 6);
+        assert!(p.get("cnt").unwrap().as_i64().unwrap() <= 2);
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn partial_stream_topn() -> Result<()> {
     let r = check_partial_stream()
         .query("test.a | union (test.b) | top 2 by x desc")
