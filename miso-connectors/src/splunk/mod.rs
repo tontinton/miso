@@ -901,6 +901,16 @@ impl Connector for SplunkConnector {
                 .get_stats_numeric_fields()
                 .cloned()
                 .unwrap_or_default();
+
+            if self.config.enable_partial_stream {
+                return Ok(QueryResponse::PartialLogs(runner.run_stats_with_previews(
+                    spl,
+                    self.config.preview_interval,
+                    timestamp_fields,
+                    numeric_fields,
+                )));
+            }
+
             return Ok(QueryResponse::Logs(
                 runner
                     .run_stats(&spl, timestamp_fields, numeric_fields)
