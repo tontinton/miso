@@ -374,8 +374,6 @@ impl WorkflowStep {
         match self {
             Self::Scan(..)
             | Self::Join(..)
-            | Self::Summarize(..)
-            | Self::MuxSummarize(..)
             | Self::Union(..)
             | Self::MuxTopN(..)
             | Self::Sort(..) => false,
@@ -390,6 +388,8 @@ impl WorkflowStep {
             | Self::TopN(..)
             | Self::Count
             | Self::MuxCount
+            | Self::Summarize(..)
+            | Self::MuxSummarize(..)
             | Self::Tee(..) => true,
         }
     }
