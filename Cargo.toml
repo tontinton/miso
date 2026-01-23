@@ -127,11 +127,11 @@ panic = "abort"
 inherits = "release"
 lto = "thin"
 
-[profile.dev.package."*"]
-opt-level = 1
-
 [profile.dev]
+# faster compile and link times, smaller binaries, but no local variable inspection in debuggers.
 debug = "line-tables-only"
+# faster rebuilds after small changes, at the cost of extra disk usage.
+incremental = true
 
 [[bench]]
 name = "join"
