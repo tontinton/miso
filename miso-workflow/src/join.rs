@@ -1,6 +1,7 @@
 use std::hash::BuildHasher;
 use std::iter;
 
+use bytesize::ByteSize;
 use color_eyre::{Result, eyre::Context};
 use crossbeam_utils::Backoff;
 use flume::{Receiver, RecvError, Sender, TryRecvError};
@@ -18,6 +19,7 @@ use miso_workflow_types::{
     log::{Log, LogItem, LogIter},
     value::{Entry, Value},
 };
+use thiserror::Error;
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
 
@@ -25,11 +27,23 @@ use crate::{
     CHANNEL_CAPACITY, WorkflowRx,
     cancel_iter::CancelIter,
     interpreter::get_field_value,
+    memory_size::MemorySize,
     spawn_thread::{ThreadRx, spawn},
 };
 
 const MERGED_LEFT_SUFFIX: &str = "_left";
 const MERGED_RIGHT_SUFFIX: &str = "_right";
+
+#[derive(Debug, Error)]
+pub enum JoinError {
+    #[error(
+        "Join operation exceeded memory limit: estimated {estimated} memory usage but limit is {limit}. Consider adding filters to reduce the dataset size or reducing the number of partitions."
+    )]
+    MemoryLimitExceeded {
+        estimated: ByteSize,
+        limit: ByteSize,
+    },
+}
 
 macro_rules! send_ret_on_err {
     ($tx:expr, $log:expr) => {
@@ -147,22 +161,45 @@ fn hash_left_join(
 }
 
 type VecLogMap = Vec<(Value, Log)>;
+type HashLogMap = HashMap<Value, Vec<Log>>;
 
 fn collect_to_build_and_probe(
     config: Join,
     iter: impl Iterator<Item = (bool, Log)>,
-) -> (VecLogMap, VecLogMap, bool) {
-    let mut left = Vec::new();
-    let mut right = Vec::new();
+    memory_limit: Option<u64>,
+) -> Result<(VecLogMap, VecLogMap, bool)> {
+    let mut left: Vec<(Value, Log)> = Vec::new();
+    let mut right: Vec<(Value, Log)> = Vec::new();
     let (left_key, right_key) = &config.on;
 
+    let mut current_memory = 0u64;
+
     for (is_left, log) in iter {
-        if is_left {
-            if let Some(value) = get_field_value(&log, left_key) {
-                left.push((value.clone(), log));
-            }
-        } else if let Some(value) = get_field_value(&log, right_key) {
-            right.push((value.clone(), log));
+        let (vec, key) = if is_left {
+            (&mut left, left_key)
+        } else {
+            (&mut right, right_key)
+        };
+
+        let Some(value) = get_field_value(&log, key) else {
+            continue;
+        };
+
+        let old_cap = vec.capacity();
+        vec.push((value.clone(), log.clone()));
+
+        let mut delta = value.estimate_memory_size()
+            + log.estimate_memory_size()
+            + std::mem::size_of::<(Value, Log)>();
+
+        let new_cap = vec.capacity();
+        if new_cap > old_cap {
+            delta += (new_cap - old_cap) * std::mem::size_of::<(Value, Log)>();
+        }
+
+        current_memory += delta as u64;
+        if let Some(limit) = memory_limit {
+            check_memory_limit(current_memory, limit)?;
         }
     }
 
@@ -172,46 +209,66 @@ fn collect_to_build_and_probe(
         (right, left, false)
     };
 
-    (build, probe, flip)
+    Ok((build, probe, flip))
 }
 
 fn collect_to_hash_maps(
     config: Join,
     iter: impl Iterator<Item = (bool, Log)>,
-) -> (HashMap<Value, Vec<Log>>, HashMap<Value, Vec<Log>>) {
-    let mut left: HashMap<Value, Vec<Log>> = HashMap::new();
-    let mut right: HashMap<Value, Vec<Log>> = HashMap::new();
+    memory_limit: Option<u64>,
+) -> Result<(HashLogMap, HashLogMap)> {
+    let mut left = HashMap::<Value, Vec<Log>>::new();
+    let mut right = HashMap::<Value, Vec<Log>>::new();
     let (left_key, right_key) = &config.on;
 
+    let mut current_memory: u64 = 0;
+
     for (is_left, log) in iter {
-        if is_left {
-            let Some(value) = get_field_value(&log, left_key) else {
-                continue;
-            };
-            match left.raw_entry_mut().from_key(value) {
-                RawEntryMut::Occupied(mut occ) => {
-                    occ.get_mut().push(log);
-                }
-                RawEntryMut::Vacant(vac) => {
-                    vac.insert(value.clone(), vec![log]);
-                }
-            }
+        let (map, key) = if is_left {
+            (&mut left, left_key)
         } else {
-            let Some(value) = get_field_value(&log, right_key) else {
-                continue;
-            };
-            match right.raw_entry_mut().from_key(value) {
-                RawEntryMut::Occupied(mut occ) => {
-                    occ.get_mut().push(log);
+            (&mut right, right_key)
+        };
+
+        let Some(value) = get_field_value(&log, key) else {
+            continue;
+        };
+
+        let log_mem = log.estimate_memory_size();
+
+        let delta = match map.raw_entry_mut().from_key(value) {
+            RawEntryMut::Occupied(mut occ) => {
+                let vec = occ.get_mut();
+                let old_cap = vec.capacity();
+                vec.push(log);
+
+                let mut d = log_mem;
+                let new_cap = vec.capacity();
+                if new_cap > old_cap {
+                    d += (new_cap - old_cap) * std::mem::size_of::<Log>();
                 }
-                RawEntryMut::Vacant(vac) => {
-                    vac.insert(value.clone(), vec![log]);
-                }
+                d
             }
+
+            RawEntryMut::Vacant(vac) => {
+                vac.insert(value.clone(), vec![log.clone()]);
+
+                value.estimate_memory_size()
+                    + log_mem
+                    + std::mem::size_of::<Vec<Log>>()
+                    + std::mem::size_of::<(Value, Vec<Log>)>()
+                    + std::mem::size_of::<Log>() // initial capacity = 1
+                    + 24 // hashmap overhead
+            }
+        };
+
+        current_memory += delta as u64;
+        if let Some(limit) = memory_limit {
+            check_memory_limit(current_memory, limit)?;
         }
     }
 
-    (left, right)
+    Ok((left, right))
 }
 
 fn pipe_logiter_to_tx(iter: LogIter, tx: Sender<Log>) -> Result<()> {
@@ -370,43 +427,126 @@ impl Iterator for JoinCollectorIter {
     }
 }
 
-pub fn join_iter(config: Join, iter: impl Iterator<Item = (bool, Log)>, tx: Sender<Log>) -> usize {
+fn check_memory_limit(current_memory: u64, limit: u64) -> Result<()> {
+    if current_memory > limit {
+        return Err(JoinError::MemoryLimitExceeded {
+            estimated: ByteSize::b(current_memory),
+            limit: ByteSize(limit),
+        }
+        .into());
+    }
+    Ok(())
+}
+
+fn build_hash_map<V, FVec>(
+    build: impl IntoIterator<Item = (Value, Log)>,
+    mut make_value: impl FnMut(Log) -> V,
+    mut get_vec: FVec,
+    memory_limit: Option<u64>,
+    extra_entry_overhead: usize,
+) -> Result<HashMap<Value, V>>
+where
+    FVec: FnMut(&mut V) -> &mut Vec<Log>,
+{
+    let mut map = HashMap::new();
+    let mut current_memory = 0u64;
+
+    for (key, log) in build {
+        let log_mem = log.estimate_memory_size();
+
+        let delta = match map.raw_entry_mut().from_key(&key) {
+            RawEntryMut::Occupied(mut occ) => {
+                let vec = get_vec(occ.get_mut());
+                let old_cap = vec.capacity();
+                vec.push(log);
+
+                let mut d = log_mem;
+                let new_cap = vec.capacity();
+                if new_cap > old_cap {
+                    d += (new_cap - old_cap) * std::mem::size_of::<Log>();
+                }
+                d
+            }
+
+            RawEntryMut::Vacant(vac) => {
+                let mut value = make_value(log);
+                let vec = get_vec(&mut value);
+
+                let d = key.estimate_memory_size()
+                    + log_mem
+                    + vec.capacity() * std::mem::size_of::<Log>()
+                    + std::mem::size_of::<Vec<Log>>()
+                    + extra_entry_overhead
+                    + 24;
+
+                vac.insert(key, value);
+                d
+            }
+        };
+
+        current_memory += delta as u64;
+        if let Some(limit) = memory_limit {
+            check_memory_limit(current_memory, limit)?;
+        }
+    }
+
+    Ok(map)
+}
+
+pub fn join_iter(
+    config: Join,
+    iter: impl Iterator<Item = (bool, Log)>,
+    tx: Sender<Log>,
+    memory_limit: Option<u64>,
+) -> Result<usize> {
     let type_ = config.type_;
+
     match type_ {
         JoinType::Inner => {
-            let (build, probe, flip) = collect_to_build_and_probe(config, iter);
+            let (build, probe, flip) = collect_to_build_and_probe(config, iter, memory_limit)
+                .context("inner join collect build and probe")?;
             let rows_processed = build.len() + probe.len();
 
-            let mut build_map: HashMap<Value, Vec<Log>> = HashMap::new();
-            for (key, log) in build {
-                build_map.entry(key).or_default().push(log);
-            }
+            let build_map = build_hash_map(
+                build,
+                |log| vec![log],
+                |v| v,
+                memory_limit,
+                std::mem::size_of::<(Value, Vec<Log>)>(),
+            )?;
+
             hash_inner_join(tx, build_map, probe, flip);
-
-            rows_processed
+            Ok(rows_processed)
         }
+
         JoinType::Outer => {
-            let (build, probe, flip) = collect_to_build_and_probe(config, iter);
+            let (build, probe, flip) = collect_to_build_and_probe(config, iter, memory_limit)
+                .context("outer join collect build and probe")?;
             let rows_processed = build.len() + probe.len();
 
-            let mut build_map: HashMap<Value, (Vec<Log>, bool)> = HashMap::new();
-            for (key, log) in build {
-                build_map.entry(key).or_default().0.push(log);
-            }
-            hash_outer_join(tx, build_map, probe, flip);
+            let build_map = build_hash_map(
+                build,
+                |log| (vec![log], false),
+                |v| &mut v.0,
+                memory_limit,
+                std::mem::size_of::<(Value, (Vec<Log>, bool))>() + std::mem::size_of::<bool>(),
+            )?;
 
-            rows_processed
+            hash_outer_join(tx, build_map, probe, flip);
+            Ok(rows_processed)
         }
+
         JoinType::Left | JoinType::Right => {
-            let (mut left, mut right) = collect_to_hash_maps(config, iter);
+            let (mut left, mut right) = collect_to_hash_maps(config, iter, memory_limit)
+                .context("left / right join collect hash maps")?;
             let rows_processed = left.len() + right.len();
 
             if matches!(type_, JoinType::Right) {
                 std::mem::swap(&mut left, &mut right);
             }
-            hash_left_join(tx, left, right);
 
-            rows_processed
+            hash_left_join(tx, left, right);
+            Ok(rows_processed)
         }
     }
 }
@@ -418,6 +558,7 @@ fn spawn_join_thread(
     tx: Sender<Log>,
     dynamic_filter_tx: Option<DynamicFilterTx>,
     cancel: CancellationToken,
+    memory_limit: Option<u64>,
 ) -> ThreadRx {
     spawn(
         move || {
@@ -425,7 +566,7 @@ fn spawn_join_thread(
                 JoinCollectorIter::new(left_rxs, right_rxs, dynamic_filter_tx),
                 cancel,
             );
-            let rows_processed = join_iter(config, iter, tx);
+            let rows_processed = join_iter(config, iter, tx, memory_limit)?;
 
             METRICS
                 .workflow_step_rows
@@ -460,6 +601,7 @@ fn join_rx_partitioned(
     dynamic_filter_tx: Option<DynamicFilterTx>,
     partitions: usize,
     cancel: CancellationToken,
+    memory_limit: Option<u64>,
 ) -> (Receiver<Log>, Vec<ThreadRx>) {
     let mut threads = Vec::with_capacity(partitions + 2);
 
@@ -486,6 +628,7 @@ fn join_rx_partitioned(
             output_tx,
             None,
             cancel.clone(),
+            memory_limit,
         );
 
         threads.push(thread);
@@ -535,6 +678,7 @@ fn join_rx_non_partitioned(
     right_rxs: Vec<Receiver<Log>>,
     dynamic_filter_tx: Option<DynamicFilterTx>,
     cancel: CancellationToken,
+    memory_limit: Option<u64>,
 ) -> (Receiver<Log>, Vec<ThreadRx>) {
     let mut threads = Vec::new();
     let (left_rxs, pipe_thread) = workflow_rx_to_rxs(left);
@@ -550,6 +694,7 @@ fn join_rx_non_partitioned(
         tx,
         dynamic_filter_tx,
         cancel,
+        memory_limit,
     ));
     (rx, threads)
 }
@@ -560,6 +705,7 @@ pub fn join_rx(
     right_rxs: Vec<Receiver<Log>>,
     dynamic_filter_tx: Option<DynamicFilterTx>,
     cancel: CancellationToken,
+    memory_limit: Option<u64>,
 ) -> (Receiver<Log>, Vec<ThreadRx>) {
     let partitions = config.partitions;
     if partitions > 1 {
@@ -570,8 +716,16 @@ pub fn join_rx(
             dynamic_filter_tx,
             partitions,
             cancel,
+            memory_limit,
         )
     } else {
-        join_rx_non_partitioned(config, left, right_rxs, dynamic_filter_tx, cancel)
+        join_rx_non_partitioned(
+            config,
+            left,
+            right_rxs,
+            dynamic_filter_tx,
+            cancel,
+            memory_limit,
+        )
     }
 }

@@ -42,7 +42,7 @@ fn create_test_stream(
 
 fn run_join(config: Join, iter: impl Iterator<Item = (bool, Log)>) -> usize {
     let (tx, rx) = flume::bounded(CHANNEL_CAPACITY);
-    join_iter(config, iter, tx);
+    join_iter(config, iter, tx, None);
     let mut count = 0;
     while rx.recv().is_ok() {
         count += 1;

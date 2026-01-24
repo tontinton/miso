@@ -25,6 +25,7 @@ use miso_optimizations::Optimizer;
 use miso_server::query_to_workflow::to_workflow_steps;
 use miso_workflow::{
     MISO_METADATA_FIELD_NAME, Workflow,
+    join::JoinError,
     limits::WorkflowLimits,
     partial_stream::{PARTIAL_STREAM_DONE_FIELD_NAME, PartialStream},
     sort::SortError,
@@ -2473,4 +2474,55 @@ async fn summarize_memory_limit_under_limit_succeeds() -> Result<()> {
         limits,
     )
     .await
+}
+
+fn find_join_error(err: &color_eyre::Report) -> Option<&JoinError> {
+    err.chain()
+        .find_map(|cause| cause.downcast_ref::<JoinError>())
+}
+
+#[tokio::test]
+async fn join_memory_limit_exceeded() {
+    let limits = WorkflowLimits {
+        join_memory_limit: bytesize::ByteSize::b(100),
+        ..Default::default()
+    };
+    let err = check_multi_collection()
+        .query(r#"test.left | join (test.right) on id"#)
+        .input(btreemap!{
+            "left" => r#"[{"id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "value": "one"}]"#,
+            "right" => r#"[{"id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "value": "ONE"}]"#,
+        })
+        .expect(r#"[]"#)
+        .workflow_limits(limits)
+        .call()
+        .await
+        .unwrap_err();
+
+    let join_err = find_join_error(&err).expect("expected JoinError in error chain");
+    assert!(matches!(join_err, JoinError::MemoryLimitExceeded { .. }));
+}
+
+#[tokio::test]
+async fn join_memory_limit_under_limit_succeeds() -> Result<()> {
+    let limits = WorkflowLimits {
+        join_memory_limit: bytesize::ByteSize::mb(1),
+        ..Default::default()
+    };
+    check_multi_collection()
+        .query(r#"test.left | join (test.right) on id"#)
+        .input(btreemap! {
+            "left" => r#"[{"id": 1, "value": "one"}, {"id": 2, "value": "two"}]"#,
+            "right" => r#"[{"id": 1, "value": "ONE"}, {"id": 2, "value": "TWO"}]"#,
+        })
+        .expect(
+            r#"[
+                {"id": 1, "value_left": "one", "value_right": "ONE"},
+                {"id": 2, "value_left": "two", "value_right": "TWO"}
+            ]"#,
+        )
+        .workflow_limits(limits)
+        .call()
+        .await
+        .context("join memory limit under limit should succeed")
 }

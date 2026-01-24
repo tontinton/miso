@@ -337,8 +337,15 @@ impl WorkflowStep {
                 threads.extend(inner_threads);
                 async_tasks.extend(inner_async_tasks);
 
-                let (join_out_rx, join_threads) =
-                    join_rx(join, rx, right_rxs, dynamic_filter_tx, cancel);
+                let memory_limit = workflow_limits.join_memory_limit.0;
+                let (join_out_rx, join_threads) = join_rx(
+                    join,
+                    rx,
+                    right_rxs,
+                    dynamic_filter_tx,
+                    cancel,
+                    Some(memory_limit),
+                );
                 threads.extend(join_threads);
 
                 fn_creator(move || Box::new(join_out_rx.into_iter().map(LogItem::Log)))
