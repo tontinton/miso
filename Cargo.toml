@@ -38,6 +38,7 @@ futures-lite = "2.6.1"
 futures-util = "0.3.31"
 hashbrown = { version = "0.15.3", features = ["serde"]}
 humantime = "2.1.0"
+itertools = "0.14.0"
 kinded = "0.3.0"
 logos = "0.15.0"
 memchr = "2.7.5"
@@ -102,6 +103,7 @@ tracing-subscriber.workspace = true
 [dev-dependencies]
 collection_macros.workspace = true
 criterion.workspace = true
+rayon.workspace = true
 ctor.workspace = true
 flume.workspace = true
 futures-util.workspace = true
@@ -139,5 +141,9 @@ incremental = true
 
 [[bench]]
 name = "join"
+harness = false
+
+[[bench]]
+name = "sort"
 harness = false
 

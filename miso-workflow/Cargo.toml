@@ -12,6 +12,7 @@ flume.workspace = true
 futures-lite.workspace = true
 futures-util.workspace = true
 hashbrown.workspace = true
+itertools.workspace = true
 kinded.workspace = true
 memchr.workspace = true
 miso-common.workspace = true

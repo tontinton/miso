@@ -1,4 +1,5 @@
 pub mod bytesize_utils;
+pub mod rand;
 pub mod humantime_utils;
 pub mod metrics;
 pub mod query_id_layer;

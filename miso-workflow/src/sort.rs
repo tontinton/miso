@@ -3,6 +3,7 @@ use std::{cmp::Ordering, num::NonZero, thread::available_parallelism};
 use bytesize::ByteSize;
 use color_eyre::eyre::{Context, Result};
 use flume::Receiver;
+use itertools::Itertools;
 use miso_common::metrics::{METRICS, STEP_SORT};
 use miso_workflow_types::{
     field::Field,
@@ -10,7 +11,7 @@ use miso_workflow_types::{
     sort::{NullsOrder, Sort, SortOrder},
     value::Value,
 };
-use rayon::{ThreadPool, ThreadPoolBuilder, slice::ParallelSliceMut};
+use rayon::{ThreadPool, ThreadPoolBuilder, iter::ParallelIterator, slice::ParallelSliceMut};
 use thiserror::Error;
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
@@ -25,10 +26,8 @@ use crate::{
     type_tracker::TypeTracker,
 };
 
-/// If the sorting set is smaller than this, just sort immediately without building a thread pool
-/// to sort in parallel.
-const PARALLEL_SORT_THRESHOLD: usize = 5000;
 const SORT_THREAD_TAG: &str = "sort";
+const PARALLEL_CHUNK_SIZE: usize = 25_000;
 
 #[derive(Debug, Error)]
 pub enum SortError {
@@ -49,7 +48,7 @@ pub struct SortComparator {
 }
 
 impl SortComparator {
-    pub(super) fn new(sorts: Vec<Sort>) -> Self {
+    pub fn new(sorts: Vec<Sort>) -> Self {
         let mut by = Vec::with_capacity(sorts.len());
         let mut sort_orders = Vec::with_capacity(sorts.len());
         let mut nulls_orders = Vec::with_capacity(sorts.len());
@@ -152,9 +151,13 @@ fn collect_logs(
     Ok(logs)
 }
 
-fn sort_thread_pool() -> Result<ThreadPool> {
+pub fn sort_num_threads() -> usize {
     let num_cores = available_parallelism().map(NonZero::get).unwrap_or(1);
-    let num_threads = (num_cores / 4).max(1);
+    (num_cores / 4).max(1)
+}
+
+fn sort_thread_pool() -> Result<ThreadPool> {
+    let num_threads = sort_num_threads();
 
     ThreadPoolBuilder::new()
         .thread_name(|i| format!("parallel-sort-{i}"))
@@ -175,6 +178,35 @@ fn sort_thread_pool() -> Result<ThreadPool> {
         .context("create sort thread pool")
 }
 
+pub fn parallel_sort(
+    mut logs: Vec<Log>,
+    config: &SortComparator,
+    cancel: Option<&CancellationToken>,
+) -> Result<Vec<Log>> {
+    let pool = sort_thread_pool()?;
+    let chunk_size = (logs.len() / pool.current_num_threads()).max(PARALLEL_CHUNK_SIZE);
+
+    Ok(pool.install(|| {
+        let cancelled = logs.par_chunks_mut(chunk_size).any(|chunk| {
+            if cancel.is_some_and(|c| c.is_cancelled()) {
+                return true;
+            }
+            chunk.sort_unstable_by(|a, b| cmp_logs(a, b, config));
+            false
+        });
+
+        if cancelled || cancel.is_some_and(|c| c.is_cancelled()) {
+            return Vec::new();
+        }
+
+        logs.chunks(chunk_size)
+            .map(|chunk| chunk.iter())
+            .kmerge_by(|a, b| cmp_logs(a, b, config).is_lt())
+            .cloned()
+            .collect()
+    }))
+}
+
 pub fn sort_rx(
     creator: IterCreator,
     sorts: Vec<Sort>,
@@ -185,28 +217,19 @@ pub fn sort_rx(
 
     let thread = spawn(
         move || {
-            let config = SortComparator::new(sorts);
+            let comparator = SortComparator::new(sorts);
             let mut logs = collect_logs(
-                &config.by,
+                &comparator.by,
                 CancelIter::new(creator.create(), cancel.clone()),
                 memory_limit,
             )?;
             let rows_processed = logs.len() as u64;
 
-            let sorted = if logs.len() < PARALLEL_SORT_THRESHOLD {
-                logs.sort_unstable_by(|a, b| cmp_logs(a, b, &config));
+            let sorted = if logs.len() < PARALLEL_CHUNK_SIZE {
+                logs.sort_unstable_by(|a, b| cmp_logs(a, b, &comparator));
                 logs
             } else {
-                sort_thread_pool()?.install(move || {
-                    // How to cancel this operation?
-                    // One idea is to use par_chunks_mut() and sort_unstable_by() on each chunk,
-                    // then use itertools::kmerge(). This will split the operations a little and we
-                    // can check for cancel between operations. What I don't like about this
-                    // solution is: it seems like par_sort_unstable_by() is optimized and will be
-                    // faster than a manual naive implementation.
-                    logs.par_sort_unstable_by(|a, b| cmp_logs(a, b, &config));
-                    logs
-                })
+                parallel_sort(logs, &comparator, Some(&cancel))?
             };
 
             let iter = CancelIter::new(sorted.into_iter(), cancel);
@@ -228,4 +251,36 @@ pub fn sort_rx(
     );
 
     (rx, thread)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::str::FromStr;
+
+    use super::*;
+    use collection_macros::btreemap;
+    use miso_common::rand::pseudo_random;
+    use miso_workflow_types::field_unwrap;
+
+    #[test]
+    fn chunked_kmerge_matches_par_sort() {
+        let comparator = SortComparator {
+            by: vec![field_unwrap!("x")],
+            sort_orders: vec![SortOrder::Asc],
+            nulls_orders: vec![NullsOrder::Last],
+        };
+        let logs: Vec<_> = (0..PARALLEL_CHUNK_SIZE * 2)
+            .map(|x| {
+                let random = pseudo_random(x);
+                btreemap! { "x".to_string() => Value::Int(random as i64) }
+            })
+            .collect();
+
+        let mut expected = logs.clone();
+        expected.par_sort_unstable_by(|a, b| cmp_logs(a, b, &comparator));
+
+        let actual = parallel_sort(logs, &comparator, None).unwrap();
+
+        assert_eq!(actual, expected);
+    }
 }
