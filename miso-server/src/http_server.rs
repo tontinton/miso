@@ -24,7 +24,7 @@ use miso_common::{
 use miso_connectors::{Connector, ConnectorError, ConnectorState};
 use miso_kql::{ParseError, parse};
 use miso_optimizations::Optimizer;
-use miso_workflow::{Workflow, partial_stream::PartialStream};
+use miso_workflow::{Workflow, limits::WorkflowLimits, partial_stream::PartialStream};
 use prometheus::TextEncoder;
 use serde::Deserialize;
 use serde_json::json;
@@ -54,6 +54,7 @@ struct App {
     optimizer: Arc<Optimizer>,
     views: RwLock<ViewsMap>,
     query_status_writer: Option<QueryStatusWriter>,
+    workflow_limits: WorkflowLimits,
     _tokio_metrics_task: ShutdownFuture,
 }
 
@@ -62,6 +63,7 @@ impl App {
         connectors: ConnectorsMap,
         optimizer: Optimizer,
         query_status_writer: Option<QueryStatusWriter>,
+        workflow_limits: WorkflowLimits,
     ) -> Result<Self> {
         let tokio_metrics_task =
             ShutdownFuture::new(collect_tokio_metrics(), "Tokio metrics collector");
@@ -71,6 +73,7 @@ impl App {
             optimizer: Arc::new(optimizer),
             views: RwLock::new(BTreeMap::new()),
             query_status_writer,
+            workflow_limits,
             _tokio_metrics_task: tokio_metrics_task,
         })
     }
@@ -230,6 +233,8 @@ async fn query_stream_setup(
         None => None,
     };
 
+    let workflow_limits = state.workflow_limits.clone();
+
     info!("Building query workflow");
     let mut non_optimized = Some(String::new());
     let workflow = build_query_workflow(state, req, query_id, &mut non_optimized).await?;
@@ -250,13 +255,15 @@ async fn query_stream_setup(
     }
 
     let cancel = CancellationToken::new();
-    let logs_stream = workflow.execute(cancel.clone()).map_err(|e| {
-        HttpError::from_string(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("failed to execute workflow: {e}"),
-        )
-        .with_query_id(query_id.to_string())
-    })?;
+    let logs_stream = workflow
+        .execute(workflow_limits, cancel.clone())
+        .map_err(|e| {
+            HttpError::from_string(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("failed to execute workflow: {e}"),
+            )
+            .with_query_id(query_id.to_string())
+        })?;
 
     Ok(QueryStreamSetup {
         workflow_str,
@@ -558,9 +565,9 @@ pub enum OptimizationConfig {
 }
 
 pub fn create_app(config: OptimizationConfig, config_path: Option<&str>) -> Result<Router> {
-    let (connectors, query_status_config) = match config_path {
+    let (connectors, query_status_config, workflow_limits) = match config_path {
         Some(path) => load_config(path)?,
-        None => (BTreeMap::new(), None),
+        None => (BTreeMap::new(), None, WorkflowLimits::default()),
     };
 
     let query_status_writer = if let Some(cfg) = query_status_config {
@@ -593,8 +600,8 @@ pub fn create_app(config: OptimizationConfig, config_path: Option<&str>) -> Resu
         } => Optimizer::with_dynamic_filtering(dynamic_filter_max_distinct_values),
     };
 
-    let app =
-        App::new(connectors, optimizer, query_status_writer).context("create axum app state")?;
+    let app = App::new(connectors, optimizer, query_status_writer, workflow_limits)
+        .context("create axum app state")?;
 
     let (router, api) = OpenApiRouter::with_openapi(ApiDoc::openapi())
         .routes(routes!(health_check))

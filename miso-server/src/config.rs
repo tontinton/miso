@@ -6,6 +6,7 @@ use std::time::Duration;
 use color_eyre::eyre::{Context, Result, bail};
 use miso_common::humantime_utils::deserialize_duration;
 use miso_connectors::{Connector, ConnectorState};
+use miso_workflow::limits::WorkflowLimits;
 use serde::Deserialize;
 
 use crate::VIEWS_CONNECTOR_NAME;
@@ -36,6 +37,8 @@ pub struct ConnectorConfig {
 struct Config {
     connectors: BTreeMap<String, ConnectorConfig>,
     query_status_collection: Option<String>,
+    #[serde(default)]
+    workflow_limits: WorkflowLimits,
 }
 
 /// Configuration for writing query status records.
@@ -67,7 +70,9 @@ impl QueryStatusConfig {
     }
 }
 
-pub fn load_config<P: AsRef<Path>>(path: P) -> Result<(ConnectorsMap, Option<QueryStatusConfig>)> {
+pub fn load_config<P: AsRef<Path>>(
+    path: P,
+) -> Result<(ConnectorsMap, Option<QueryStatusConfig>, WorkflowLimits)> {
     let path = path.as_ref();
 
     let content = std::fs::read_to_string(path)
@@ -97,5 +102,5 @@ pub fn load_config<P: AsRef<Path>>(path: P) -> Result<(ConnectorsMap, Option<Que
         None => None,
     };
 
-    Ok((connectors, query_status_config))
+    Ok((connectors, query_status_config, config.workflow_limits))
 }

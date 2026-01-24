@@ -28,6 +28,7 @@ use crate::{
     filter::FilterIter,
     join::{DynamicFilterTx, join_rx},
     limit::LimitIter,
+    limits::WorkflowLimits,
     partial_stream::{PartialStream, PartialStreamIter},
     project::ProjectIter,
     rename::RenameIter,
@@ -50,8 +51,10 @@ pub mod filter;
 pub mod interpreter;
 pub mod join;
 pub mod limit;
+pub mod limits;
 mod log_iter_creator;
 mod log_utils;
+mod memory_size;
 pub mod partial_stream;
 mod partial_stream_tracker;
 pub mod project;
@@ -208,6 +211,7 @@ impl WorkflowStep {
         self: WorkflowStep,
         rx: WorkflowRx,
         partial_stream: Option<PartialStream>,
+        workflow_limits: WorkflowLimits,
         cancel: CancellationToken,
     ) -> PipelineRunResult {
         let mut threads = Vec::new();
@@ -226,7 +230,7 @@ impl WorkflowStep {
             WorkflowStep::Union(workflow) => {
                 assert!(matches!(rx, WorkflowRx::None));
                 let (rxs, source_ids, inner_threads, inner_async_tasks) =
-                    workflow.create_pipelines(cancel)?;
+                    workflow.create_pipelines(workflow_limits.clone(), cancel)?;
                 threads.extend(inner_threads);
                 async_tasks.extend(inner_async_tasks);
                 fn_creator(move || rxs_to_iter(rxs, source_ids))
@@ -255,8 +259,13 @@ impl WorkflowStep {
                 let prev = rx.into_creator();
                 fn_creator(move || Box::new(LimitIter::new(prev.create(), limit)))
             }
-            WorkflowStep::Sort(sorts) => {
-                let (item_rx, thread) = sort_rx(rx.into_creator(), sorts, cancel);
+            WorkflowStep::Sort(sort) => {
+                let (item_rx, thread) = sort_rx(
+                    rx.into_creator(),
+                    sort,
+                    workflow_limits.sort_memory_limit.0,
+                    cancel,
+                );
                 threads.push(thread);
                 fn_creator(move || Box::new(LogItemReceiverIter { rx: item_rx }))
             }
@@ -318,7 +327,7 @@ impl WorkflowStep {
                 });
 
                 let (right_rxs, _right_source_ids, inner_threads, inner_async_tasks) =
-                    workflow.create_pipelines(cancel.clone())?;
+                    workflow.create_pipelines(workflow_limits.clone(), cancel.clone())?;
 
                 threads.extend(inner_threads);
                 async_tasks.extend(inner_async_tasks);
@@ -399,6 +408,7 @@ impl WorkflowStep {
 fn prepare_execute_pipeline(
     pipeline: Vec<(WorkflowStep, Option<PartialStream>)>,
     rxs_opt: Option<(Vec<Receiver<Log>>, Vec<SourceId>)>,
+    workflow_limits: WorkflowLimits,
     cancel: CancellationToken,
 ) -> PipelineRunResult {
     let mut workflow_rx = if let Some((rxs, source_ids)) = rxs_opt {
@@ -411,7 +421,12 @@ fn prepare_execute_pipeline(
     let mut async_tasks = Vec::new();
     for (step, partial_stream) in pipeline {
         let (creator, inner_threads, inner_async_tasks) = step
-            .execute(workflow_rx, partial_stream, cancel.clone())
+            .execute(
+                workflow_rx,
+                partial_stream,
+                workflow_limits.clone(),
+                cancel.clone(),
+            )
             .context("execute pipeline step")?;
 
         threads.extend(inner_threads);
@@ -531,7 +546,11 @@ impl Workflow {
         partial_stream_step_idx
     }
 
-    fn create_pipelines(mut self, cancel: CancellationToken) -> WorkflowRunResult {
+    fn create_pipelines(
+        mut self,
+        workflow_limits: WorkflowLimits,
+        cancel: CancellationToken,
+    ) -> WorkflowRunResult {
         assert!(!self.steps.is_empty());
 
         let partial_stream_step_idx = self.get_partial_stream_step_idx();
@@ -585,9 +604,13 @@ impl Workflow {
                 Some((old_rxs, old_source_ids))
             };
 
-            let (creator, inner_threads, inner_async_tasks) =
-                prepare_execute_pipeline(pipeline, rxs_opt, cancel.clone())
-                    .context("prepare execute pipeline")?;
+            let (creator, inner_threads, inner_async_tasks) = prepare_execute_pipeline(
+                pipeline,
+                rxs_opt,
+                workflow_limits.clone(),
+                cancel.clone(),
+            )
+            .context("prepare execute pipeline")?;
             threads.extend(inner_threads);
             async_tasks.extend(inner_async_tasks);
 
@@ -601,14 +624,18 @@ impl Workflow {
         Ok((rxs, source_ids, threads, async_tasks))
     }
 
-    pub fn execute(self, cancel: CancellationToken) -> Result<LogTryStream> {
+    pub fn execute(
+        self,
+        workflow_limits: WorkflowLimits,
+        cancel: CancellationToken,
+    ) -> Result<LogTryStream> {
         if self.steps.is_empty() {
             return Ok(Box::pin(stream::empty()));
         }
 
         let cancel_clone = cancel.clone();
         let (rxs, _source_ids, threads, async_tasks) = self
-            .create_pipelines(cancel_clone)
+            .create_pipelines(workflow_limits, cancel_clone)
             .context("create pipelines")?;
 
         let mut streams: Vec<_> = rxs.into_iter().map(|rx| rx.into_stream()).collect();

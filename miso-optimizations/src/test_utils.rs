@@ -22,6 +22,10 @@ pub fn field_expr(name: &str) -> Expr {
     Expr::Field(field(name))
 }
 
+pub fn sort(sorts: Vec<Sort>) -> S {
+    S::Sort(sorts)
+}
+
 pub fn sort_asc(by: Field) -> Sort {
     Sort {
         by,

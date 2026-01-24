@@ -11,7 +11,7 @@ use miso_kql::parse;
 use miso_optimizations::Optimizer;
 use miso_server::config::ConnectorsMap;
 use miso_server::query_to_workflow::to_workflow_steps;
-use miso_workflow::Workflow;
+use miso_workflow::{limits::WorkflowLimits, Workflow};
 use miso_workflow_types::value::Value;
 use tokio::task::spawn_blocking;
 use tokio::time::sleep;
@@ -85,10 +85,10 @@ async fn same_results(
     let cancel2 = CancellationToken::new();
 
     let mut pushdown_stream = pushdown_workflow
-        .execute(cancel1)
+        .execute(WorkflowLimits::default(), cancel1)
         .context("execute predicate pushdown workflow")?;
     let mut no_pushdown_stream = no_pushdown_workflow
-        .execute(cancel2)
+        .execute(WorkflowLimits::default(), cancel2)
         .context("execute no predicate pushdown workflow")?;
 
     let mut pushdown_results = Vec::with_capacity(count);
