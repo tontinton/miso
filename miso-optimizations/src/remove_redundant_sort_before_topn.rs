@@ -12,7 +12,7 @@ impl Optimization for RemoveRedundantSortBeforeTopN {
     }
 
     fn apply(&self, steps: &[WorkflowStep], _groups: &[Group]) -> OptimizationResult {
-        let WorkflowStep::Sort(sort_fields) = &steps[0] else {
+        let WorkflowStep::Sort(sort) = &steps[0] else {
             return OptimizationResult::Unchanged;
         };
         let (topn_sorts, limit, is_mux) = match &steps[1] {
@@ -21,8 +21,9 @@ impl Optimization for RemoveRedundantSortBeforeTopN {
             _ => return OptimizationResult::Unchanged,
         };
 
-        let is_prefix = sort_fields.len() <= topn_sorts.len()
-            && sort_fields
+        let is_prefix = sort.sorts.len() <= topn_sorts.len()
+            && sort
+                .sorts
                 .iter()
                 .zip(topn_sorts.iter())
                 .all(|(a, b)| a == b);

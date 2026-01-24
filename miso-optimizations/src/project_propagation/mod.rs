@@ -1,7 +1,7 @@
 mod expr_substitude;
 
 use hashbrown::{HashMap, HashSet};
-use miso_workflow::WorkflowStep;
+use miso_workflow::{WorkflowStep, sort::SortStep};
 use miso_workflow_types::{
     expr::Expr,
     expr_visitor::ExprTransformer,
@@ -134,12 +134,12 @@ fn apply(
             let new = match step {
                 WorkflowStep::Filter(e) => WorkflowStep::Filter(expr_subst.substitute(e)),
 
-                WorkflowStep::Sort(sorts) => {
-                    let new_sorts = rewrite_sorts(sorts, &renames, &literals);
+                WorkflowStep::Sort(sort) => {
+                    let new_sorts = rewrite_sorts(sort.sorts, &renames, &literals);
                     if new_sorts.is_empty() {
                         continue;
                     }
-                    WorkflowStep::Sort(new_sorts)
+                    WorkflowStep::Sort(SortStep::new(new_sorts, sort.limits))
                 }
 
                 WorkflowStep::TopN(sorts, n) => {

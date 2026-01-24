@@ -11,13 +11,13 @@ use super::{
     log_utils::PartialStreamItem,
     partial_stream::PartialLogIter,
     partial_stream_tracker::{Mergeable, PartialStreamTracker},
-    sort::{SortConfig, cmp_logs},
+    sort::{SortComparator, SortStep, cmp_logs},
     try_next, try_next_with_partial_stream,
 };
 
-struct SortConfigTLS<'a>(&'a SortConfig);
+struct SortComparatorTLS<'a>(&'a SortComparator);
 
-scoped_thread_local!(static SORT_CONFIG: for<'a> SortConfigTLS<'a>);
+scoped_thread_local!(static SORT_COMPARATOR: for<'a> SortComparatorTLS<'a>);
 
 /// A wrapper to be able to use Log in a BinaryHeap by reading the comparison configuration from a
 /// task local variable.
@@ -26,7 +26,7 @@ struct SortableLog(Log);
 
 impl Ord for SortableLog {
     fn cmp(&self, other: &Self) -> Ordering {
-        SORT_CONFIG.with(|tls| cmp_logs(&self.0, &other.0, tls.0))
+        SORT_COMPARATOR.with(|tls| cmp_logs(&self.0, &other.0, tls.0))
     }
 }
 
@@ -48,20 +48,20 @@ impl PartialEq for SortableLog {
 struct TopNState {
     limit: usize,
     heap: BinaryHeap<SortableLog>,
-    config: Rc<SortConfig>,
+    comparator: Rc<SortComparator>,
 }
 
 impl TopNState {
-    fn new(limit: usize, config: Rc<SortConfig>) -> Self {
+    fn new(limit: usize, config: Rc<SortStep>) -> Self {
         Self {
             limit,
             heap: BinaryHeap::new(),
-            config,
+            comparator: Rc::new(SortComparator::new(&config.sorts)),
         }
     }
 
     fn push_sortable(&mut self, sortable: SortableLog) {
-        SORT_CONFIG.set(&mut SortConfigTLS(&self.config), || {
+        SORT_COMPARATOR.set(&mut SortComparatorTLS(&self.comparator), || {
             if self.heap.len() < self.limit {
                 self.heap.push(sortable);
             } else if let Some(bottom) = self.heap.peek()
@@ -78,7 +78,7 @@ impl TopNState {
     }
 
     fn into_sorted_vec(self) -> Vec<SortableLog> {
-        SORT_CONFIG.set(&mut SortConfigTLS(&self.config), || {
+        SORT_COMPARATOR.set(&mut SortComparatorTLS(&self.comparator), || {
             self.heap.into_sorted_vec()
         })
     }
@@ -94,7 +94,7 @@ impl Mergeable for TopNState {
 
 pub struct TopNIter {
     input: LogIter,
-    config: Rc<SortConfig>,
+    config: Rc<SortStep>,
     limit: usize,
     tracker: PartialStreamTracker<TopNState>,
     logs: LogIter,
@@ -105,7 +105,7 @@ pub struct TopNIter {
 
 impl TopNIter {
     pub fn new(input: LogIter, sorts: Vec<Sort>, limit: usize) -> Self {
-        let config = Rc::new(SortConfig::new(sorts));
+        let config = Rc::new(SortStep::unlimited_memory(sorts));
 
         Self {
             input,
@@ -226,7 +226,7 @@ impl PartialTopNIter {
             input,
             state: Some(TopNState::new(
                 limit as usize,
-                Rc::new(SortConfig::new(sorts)),
+                Rc::new(SortStep::unlimited_memory(sorts)),
             )),
             logs: Box::new(iter::empty()),
             rows_processed: 0,

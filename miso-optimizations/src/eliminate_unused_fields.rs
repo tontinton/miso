@@ -1,5 +1,5 @@
 use hashbrown::HashSet;
-use miso_workflow::WorkflowStep;
+use miso_workflow::{WorkflowStep, sort::SortStep};
 use miso_workflow_types::{expr::Expr, field::Field, project::ProjectField};
 
 use crate::{Group, Optimization, OptimizationResult, Pattern, pattern};
@@ -113,7 +113,7 @@ fn compute_required_before_step(step: &WorkflowStep, mut after: HashSet<Field>) 
             after
         }
 
-        WorkflowStep::Sort(sorts)
+        WorkflowStep::Sort(SortStep { sorts, .. })
         | WorkflowStep::TopN(sorts, _)
         | WorkflowStep::MuxTopN(sorts, _) => {
             for s in sorts {
@@ -152,7 +152,7 @@ mod tests {
     use test_case::test_case;
 
     use super::compute_required_before_step;
-    use crate::test_utils::{field, project_field, sort_asc, summarize};
+    use crate::test_utils::{field, project_field, sort, sort_asc, summarize};
 
     fn required(step: &S, after: &[&str]) -> HashSet<String> {
         let after = after.iter().map(|s| field(s)).collect();
@@ -226,7 +226,7 @@ mod tests {
 
     #[test]
     fn sort_adds_sort_field() {
-        let step = S::Sort(vec![sort_asc(field("ts"))]);
+        let step = sort(vec![sort_asc(field("ts"))]);
         assert_eq!(
             required(&step, &["x"]),
             HashSet::from(["ts".into(), "x".into()])

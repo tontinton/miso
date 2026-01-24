@@ -32,7 +32,7 @@ use crate::{
     project::ProjectIter,
     rename::RenameIter,
     scan::{Scan, scan_rx},
-    sort::sort_rx,
+    sort::{SortStep, sort_rx},
     spawn_thread::{ThreadRx, spawn},
     summarize::create_summarize_iter,
     tee::{Tee, tee_creator},
@@ -52,6 +52,7 @@ pub mod join;
 pub mod limit;
 mod log_iter_creator;
 mod log_utils;
+mod memory_size;
 pub mod partial_stream;
 mod partial_stream_tracker;
 pub mod project;
@@ -106,7 +107,7 @@ pub enum WorkflowStep {
     MuxLimit(u64),
 
     /// Sort records.
-    Sort(Vec<Sort>),
+    Sort(SortStep),
 
     /// Basically like Sort -> Limit, but more memory efficient (holding only N records).
     TopN(Vec<Sort>, u64),
@@ -255,8 +256,8 @@ impl WorkflowStep {
                 let prev = rx.into_creator();
                 fn_creator(move || Box::new(LimitIter::new(prev.create(), limit)))
             }
-            WorkflowStep::Sort(sorts) => {
-                let (item_rx, thread) = sort_rx(rx.into_creator(), sorts, cancel);
+            WorkflowStep::Sort(sort) => {
+                let (item_rx, thread) = sort_rx(rx.into_creator(), sort, cancel);
                 threads.push(thread);
                 fn_creator(move || Box::new(LogItemReceiverIter { rx: item_rx }))
             }

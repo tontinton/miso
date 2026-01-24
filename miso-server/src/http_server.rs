@@ -40,7 +40,7 @@ use uuid::Uuid;
 
 use crate::{
     VIEWS_CONNECTOR_NAME, ViewsMap,
-    config::{ConnectorConfig, ConnectorsMap, load_config},
+    config::{ConnectorConfig, ConnectorsMap, WorkflowLimits, load_config},
     query_status::{QUERY_ID_FIELD, QueryStatus, QueryStatusHandle, QueryStatusWriter},
     query_to_workflow::to_workflow_steps,
 };
@@ -54,6 +54,7 @@ struct App {
     optimizer: Arc<Optimizer>,
     views: RwLock<ViewsMap>,
     query_status_writer: Option<QueryStatusWriter>,
+    workflow_limits: WorkflowLimits,
     _tokio_metrics_task: ShutdownFuture,
 }
 
@@ -62,6 +63,7 @@ impl App {
         connectors: ConnectorsMap,
         optimizer: Optimizer,
         query_status_writer: Option<QueryStatusWriter>,
+        workflow_limits: WorkflowLimits,
     ) -> Result<Self> {
         let tokio_metrics_task =
             ShutdownFuture::new(collect_tokio_metrics(), "Tokio metrics collector");
@@ -71,6 +73,7 @@ impl App {
             optimizer: Arc::new(optimizer),
             views: RwLock::new(BTreeMap::new()),
             query_status_writer,
+            workflow_limits,
             _tokio_metrics_task: tokio_metrics_task,
         })
     }
@@ -188,6 +191,7 @@ async fn build_query_workflow(
         &state.connectors.read().await.clone(),
         &state.views.read().await.clone(),
         ast,
+        &state.workflow_limits,
     )
     .map_err(|e| e.with_query_id(query_id))?;
 
@@ -558,9 +562,9 @@ pub enum OptimizationConfig {
 }
 
 pub fn create_app(config: OptimizationConfig, config_path: Option<&str>) -> Result<Router> {
-    let (connectors, query_status_config) = match config_path {
+    let (connectors, query_status_config, workflow_limits) = match config_path {
         Some(path) => load_config(path)?,
-        None => (BTreeMap::new(), None),
+        None => (BTreeMap::new(), None, WorkflowLimits::default()),
     };
 
     let query_status_writer = if let Some(cfg) = query_status_config {
@@ -593,8 +597,8 @@ pub fn create_app(config: OptimizationConfig, config_path: Option<&str>) -> Resu
         } => Optimizer::with_dynamic_filtering(dynamic_filter_max_distinct_values),
     };
 
-    let app =
-        App::new(connectors, optimizer, query_status_writer).context("create axum app state")?;
+    let app = App::new(connectors, optimizer, query_status_writer, workflow_limits)
+        .context("create axum app state")?;
 
     let (router, api) = OpenApiRouter::with_openapi(ApiDoc::openapi())
         .routes(routes!(health_check))

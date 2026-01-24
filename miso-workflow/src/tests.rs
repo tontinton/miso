@@ -22,10 +22,12 @@ use miso_connectors::{
 };
 use miso_kql::parse;
 use miso_optimizations::Optimizer;
+use miso_server::config::WorkflowLimits;
 use miso_server::query_to_workflow::to_workflow_steps;
 use miso_workflow::{
     MISO_METADATA_FIELD_NAME, Workflow,
     partial_stream::{PARTIAL_STREAM_DONE_FIELD_NAME, PartialStream},
+    sort::SortError,
 };
 use miso_workflow_types::{expr::Expr, field::Field, field_unwrap, json, log::Log, value::Value};
 use serde::{Deserialize, Serialize};
@@ -220,6 +222,7 @@ async fn assert_workflows(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn check_multi_connectors(
     query: &str,
     input: BTreeMap<&str, BTreeMap<&str, &str>>,
@@ -228,6 +231,7 @@ async fn check_multi_connectors(
     should_cancel: bool,
     apply_filter_tx: Option<std::sync::mpsc::Sender<Expr>>,
     run_only_once: bool,
+    workflow_limits: WorkflowLimits,
 ) -> Result<()> {
     let expected_logs = {
         let mut v: Vec<_> = serde_json::from_str::<Vec<Value>>(expected)
@@ -271,8 +275,13 @@ async fn check_multi_connectors(
         views
     };
 
-    let steps = to_workflow_steps(&connectors, &views, parse(query).expect("parse query"))
-        .expect("workflow steps to compile");
+    let steps = to_workflow_steps(
+        &connectors,
+        &views,
+        parse(query).expect("parse query"),
+        &workflow_limits,
+    )
+    .expect("workflow steps to compile");
 
     let optimizer = Optimizer::default();
 
@@ -321,6 +330,7 @@ async fn check_multi_collection(
     cancel: Option<bool>,
     apply_filter_tx: Option<std::sync::mpsc::Sender<Expr>>,
     run_only_once: Option<bool>,
+    workflow_limits: Option<WorkflowLimits>,
 ) -> Result<()> {
     check_multi_connectors(
         query,
@@ -330,6 +340,7 @@ async fn check_multi_collection(
         cancel.unwrap_or(false),
         apply_filter_tx,
         run_only_once.unwrap_or(false),
+        workflow_limits.unwrap_or_default(),
     )
     .await
 }
@@ -341,6 +352,21 @@ async fn check(query: &str, input: &str, expected: &str) -> Result<()> {
         .query(query)
         .input(btreemap! {"c" => input})
         .expect(expected)
+        .call()
+        .await
+}
+
+async fn check_with_limits(
+    query: &str,
+    input: &str,
+    expected: &str,
+    limits: WorkflowLimits,
+) -> Result<()> {
+    check_multi_collection()
+        .query(query)
+        .input(btreemap! {"c" => input})
+        .expect(expected)
+        .workflow_limits(limits)
         .call()
         .await
 }
@@ -377,7 +403,13 @@ async fn check_partial_stream(
     let connector_state = Arc::new(ConnectorState::new_with_static_stats(connector, stats));
     let connectors = btreemap! { "test".to_string() => connector_state };
 
-    let steps = to_workflow_steps(&connectors, &BTreeMap::new(), parse(query).unwrap()).unwrap();
+    let steps = to_workflow_steps(
+        &connectors,
+        &BTreeMap::new(),
+        parse(query).unwrap(),
+        &WorkflowLimits::default(),
+    )
+    .unwrap();
     let optimizer = Optimizer::default();
     let optimized_steps = spawn_blocking(move || optimizer.optimize(steps)).await?;
 
@@ -2343,4 +2375,66 @@ async fn partial_stream_multi_union() -> Result<()> {
         assert!(p.get("Count").unwrap().as_i64().unwrap() <= final_count);
     }
     Ok(())
+}
+
+fn find_sort_error(err: &color_eyre::Report) -> Option<&SortError> {
+    err.chain()
+        .find_map(|cause| cause.downcast_ref::<SortError>())
+}
+
+#[tokio::test]
+async fn sort_memory_limit_exceeded() {
+    let limits = WorkflowLimits {
+        sort_memory_limit: bytesize::ByteSize::b(100),
+    };
+    let input = r#"[{"x": 1, "data": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}, {"x": 2, "data": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}]"#;
+    let err = check_with_limits(r#"test.c | sort by x"#, input, "[]", limits)
+        .await
+        .unwrap_err();
+
+    let sort_err = find_sort_error(&err).expect("expected SortError in error chain");
+    assert!(matches!(sort_err, SortError::MemoryLimitExceeded { .. }));
+}
+
+#[tokio::test]
+async fn sort_memory_limit_under_limit_succeeds() -> Result<()> {
+    let limits = WorkflowLimits {
+        sort_memory_limit: bytesize::ByteSize::mb(1),
+    };
+    check_with_limits(
+        r#"test.c | sort by x"#,
+        r#"[{"x": 2}, {"x": 1}]"#,
+        r#"[{"x": 1}, {"x": 2}]"#,
+        limits,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn sort_memory_limit_empty_input() -> Result<()> {
+    let limits = WorkflowLimits {
+        sort_memory_limit: bytesize::ByteSize::b(1),
+    };
+    check_with_limits(r#"test.c | sort by x"#, r#"[]"#, "[]", limits).await
+}
+
+#[tokio::test]
+async fn sort_memory_limit_filter_reduces_usage() -> Result<()> {
+    let limits = WorkflowLimits {
+        sort_memory_limit: bytesize::ByteSize::b(300),
+    };
+    let input = r#"[{"x": 1, "data": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}, {"x": 2, "data": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}, {"x": 3, "data": "cccccccccccccccccccccccccccccccccccc"}]"#;
+
+    let err = check_with_limits(r#"test.c | sort by x"#, input, "[]", limits.clone())
+        .await
+        .unwrap_err();
+    assert!(find_sort_error(&err).is_some());
+
+    check_with_limits(
+        r#"test.c | where x == 1 | sort by x"#,
+        input,
+        r#"[{"x": 1, "data": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]"#,
+        limits,
+    )
+    .await
 }

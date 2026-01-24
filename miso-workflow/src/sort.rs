@@ -1,15 +1,17 @@
 use std::{cmp::Ordering, num::NonZero, thread::available_parallelism};
 
+use bytesize::ByteSize;
 use color_eyre::eyre::{Context, Result};
 use flume::Receiver;
 use miso_common::metrics::{METRICS, STEP_SORT};
 use miso_workflow_types::{
     field::Field,
     log::{Log, LogItem},
-    sort::{NullsOrder, Sort, SortOrder},
+    sort::{NullsOrder, Sort as SortField, SortOrder},
     value::Value,
 };
 use rayon::{ThreadPool, ThreadPoolBuilder, slice::ParallelSliceMut};
+use thiserror::Error;
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
 
@@ -18,30 +20,76 @@ use crate::{
     cancel_iter::CancelIter,
     interpreter::get_field_value,
     log_iter_creator::IterCreator,
+    memory_size::MemorySize,
     spawn_thread::{ThreadRx, spawn},
     type_tracker::TypeTracker,
 };
+
+pub const DEFAULT_SORT_MEMORY_LIMIT: u64 = 500 * 1024 * 1024;
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SortLimits {
+    pub max_memory_bytes: u64,
+}
+
+impl Default for SortLimits {
+    fn default() -> Self {
+        Self {
+            max_memory_bytes: DEFAULT_SORT_MEMORY_LIMIT,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct SortStep {
+    pub sorts: Vec<SortField>,
+    pub limits: SortLimits,
+}
+
+impl SortStep {
+    pub fn new(sorts: Vec<SortField>, limits: SortLimits) -> Self {
+        Self { sorts, limits }
+    }
+
+    pub fn unlimited_memory(sorts: Vec<SortField>) -> Self {
+        Self {
+            sorts,
+            limits: SortLimits::default(),
+        }
+    }
+}
 
 /// If the sorting set is smaller than this, just sort immediately without building a thread pool
 /// to sort in parallel.
 const PARALLEL_SORT_THRESHOLD: usize = 5000;
 const SORT_THREAD_TAG: &str = "sort";
 
+#[derive(Debug, Error)]
+pub enum SortError {
+    #[error(
+        "Sort operation exceeded memory limit: collected {collected} of logs but limit is {limit}. Consider adding filters to reduce the dataset size before sorting."
+    )]
+    MemoryLimitExceeded {
+        collected: ByteSize,
+        limit: ByteSize,
+    },
+}
+
 #[derive(Debug)]
-pub struct SortConfig {
+pub struct SortComparator {
     by: Vec<Field>,
     sort_orders: Vec<SortOrder>,
     nulls_orders: Vec<NullsOrder>,
 }
 
-impl SortConfig {
-    pub fn new(sorts: Vec<Sort>) -> Self {
+impl SortComparator {
+    pub(super) fn new(sorts: &[SortField]) -> Self {
         let mut by = Vec::with_capacity(sorts.len());
         let mut sort_orders = Vec::with_capacity(sorts.len());
         let mut nulls_orders = Vec::with_capacity(sorts.len());
 
         for sort in sorts {
-            by.push(sort.by);
+            by.push(sort.by.clone());
             sort_orders.push(sort.order);
             nulls_orders.push(sort.nulls);
         }
@@ -54,7 +102,7 @@ impl SortConfig {
     }
 }
 
-pub fn cmp_logs(a: &Log, b: &Log, config: &SortConfig) -> Ordering {
+pub fn cmp_logs(a: &Log, b: &Log, config: &SortComparator) -> Ordering {
     for ((key, sort_order), nulls_order) in config
         .by
         .iter()
@@ -94,10 +142,16 @@ pub fn cmp_logs(a: &Log, b: &Log, config: &SortConfig) -> Ordering {
     Ordering::Equal
 }
 
-fn collect_logs(by: &[Field], input: impl Iterator<Item = LogItem>) -> Result<Vec<Log>> {
+fn collect_logs(
+    by: &[Field],
+    input: impl Iterator<Item = LogItem>,
+    limits: &SortLimits,
+) -> Result<Vec<Log>> {
     let mut type_tracker = TypeTracker::new(by.len());
 
     let mut logs = Vec::new();
+    let mut total_memory: u64 = 0;
+
     for log in input {
         let log = match log {
             LogItem::Log(log) => log,
@@ -113,6 +167,17 @@ fn collect_logs(by: &[Field], input: impl Iterator<Item = LogItem>) -> Result<Ve
             if let Some(value) = get_field_value(&log, key) {
                 type_tracker.check(i, value, key)?;
             }
+        }
+
+        let log_size = log.estimate_memory_size() as u64;
+        total_memory += log_size;
+
+        if total_memory > limits.max_memory_bytes {
+            return Err(SortError::MemoryLimitExceeded {
+                collected: ByteSize::b(total_memory),
+                limit: ByteSize::b(limits.max_memory_bytes),
+            }
+            .into());
         }
 
         logs.push(log);
@@ -146,17 +211,18 @@ fn sort_thread_pool() -> Result<ThreadPool> {
 
 pub fn sort_rx(
     creator: IterCreator,
-    sorts: Vec<Sort>,
+    sort: SortStep,
     cancel: CancellationToken,
 ) -> (Receiver<LogItem>, ThreadRx) {
     let (tx, rx) = flume::bounded(CHANNEL_CAPACITY);
 
     let thread = spawn(
         move || {
-            let config = SortConfig::new(sorts);
+            let config = SortComparator::new(&sort.sorts);
             let mut logs = collect_logs(
                 &config.by,
                 CancelIter::new(creator.create(), cancel.clone()),
+                &sort.limits,
             )?;
             let rows_processed = logs.len() as u64;
 

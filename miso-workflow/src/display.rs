@@ -100,9 +100,9 @@ impl fmt::Display for DisplayableWorkflowStep<'_> {
             WorkflowStep::Expand(expand) => write!(f, "{pre}Expand({expand})"),
             WorkflowStep::Limit(limit) => write!(f, "{pre}Limit({limit})"),
             WorkflowStep::MuxLimit(limit) => write!(f, "{pre}MuxLimit({limit})"),
-            WorkflowStep::Sort(sorts) => {
+            WorkflowStep::Sort(sort) => {
                 write!(f, "{pre}Sort")?;
-                fmt_sorts(f, sorts)
+                fmt_sorts(f, &sort.sorts)
             }
             WorkflowStep::TopN(sorts, limit) => {
                 write!(f, "{pre}TopN({limit})")?;

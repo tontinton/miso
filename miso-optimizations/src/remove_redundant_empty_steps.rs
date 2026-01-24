@@ -15,7 +15,7 @@ impl Optimization for RemoveRedundantEmptySteps {
         match &steps[0] {
             WorkflowStep::Rename(v) if v.is_empty() => {}
             WorkflowStep::Extend(v) if v.is_empty() => {}
-            WorkflowStep::Sort(v) if v.is_empty() => {}
+            WorkflowStep::Sort(v) if v.sorts.is_empty() => {}
             WorkflowStep::Expand(v) if v.fields.is_empty() => {}
             _ => return OptimizationResult::Unchanged,
         }

@@ -9,7 +9,7 @@ use color_eyre::{
 use futures_util::{FutureExt, TryStreamExt};
 use miso_kql::parse;
 use miso_optimizations::Optimizer;
-use miso_server::config::ConnectorsMap;
+use miso_server::config::{ConnectorsMap, WorkflowLimits};
 use miso_server::query_to_workflow::to_workflow_steps;
 use miso_workflow::Workflow;
 use miso_workflow_types::value::Value;
@@ -48,6 +48,7 @@ async fn same_results(
         connectors,
         &BTreeMap::new(),
         parse(query).expect("parse KQL"),
+        &WorkflowLimits::default(),
     )
     .expect("to workflow steps");
 
@@ -55,6 +56,7 @@ async fn same_results(
         connectors,
         &BTreeMap::new(),
         parse(query_after_optimizations).expect("parse expected KQL"),
+        &WorkflowLimits::default(),
     )
     .expect("to expected workflow steps");
 

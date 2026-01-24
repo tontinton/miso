@@ -2,7 +2,7 @@ use std::str::FromStr;
 
 use hashbrown::HashMap;
 use miso_common::hashmap;
-use miso_workflow::WorkflowStep as S;
+use miso_workflow::{WorkflowStep as S, sort::SortStep};
 use miso_workflow_types::{
     expand::Expand,
     expr::Expr,
@@ -20,6 +20,10 @@ pub fn field(name: &str) -> Field {
 
 pub fn field_expr(name: &str) -> Expr {
     Expr::Field(field(name))
+}
+
+pub fn sort(sorts: Vec<Sort>) -> S {
+    S::Sort(SortStep::unlimited_memory(sorts))
 }
 
 pub fn sort_asc(by: Field) -> Sort {

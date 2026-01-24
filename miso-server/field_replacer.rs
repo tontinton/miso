@@ -1,16 +1,28 @@
 use std::str::FromStr;
 
 use axum::http::StatusCode;
+use bytesize::ByteSize;
 use hashbrown::HashMap;
-use miso_workflow::{Workflow, WorkflowStep, scan::Scan};
+use miso_workflow::{
+    Workflow, WorkflowStep,
+    scan::Scan,
+    sort::{Sort as SortConfig, SortLimits},
+};
 use miso_workflow_types::{
-    expr::Expr, field::Field, project::ProjectField, query::QueryStep,
-    summarize::Summarize,
+    expr::Expr, field::Field, project::ProjectField, query::QueryStep, summarize::Summarize,
 };
 use tracing::info;
 
 use crate::{
     VIEWS_CONNECTOR_NAME, ViewsMap,
+    config::WorkflowLimits,
+    http_server::{ConnectorsMap, HttpError},
+};
+use tracing::info;
+
+use crate::{
+    VIEWS_CONNECTOR_NAME, ViewsMap,
+    config::WorkflowLimits,
     http_server::{ConnectorsMap, HttpError},
 };
 
@@ -40,6 +52,7 @@ impl QueryToWorkflowTranspiler {
         connectors: &ConnectorsMap,
         views: &ViewsMap,
         query_steps: Vec<QueryStep>,
+        workflow_limits: &WorkflowLimits,
     ) -> Result<Vec<WorkflowStep>, HttpError> {
         if query_steps.is_empty() {
             return Err(HttpError::from_string(
@@ -159,7 +172,12 @@ impl QueryToWorkflowTranspiler {
                     steps.push(WorkflowStep::Limit(max));
                 }
                 QueryStep::Sort(sort) => {
-                    steps.push(WorkflowStep::Sort(sort));
+                    steps.push(WorkflowStep::Sort(SortConfig {
+                        sorts: sort,
+                        limits: SortLimits {
+                            max_memory_bytes: workflow_limits.sort_memory_limit.as_u64(),
+                        },
+                    }));
                 }
                 QueryStep::Top(sort, max) => {
                     steps.push(WorkflowStep::TopN(sort, max));
@@ -178,12 +196,18 @@ impl QueryToWorkflowTranspiler {
                         connectors,
                         views,
                         inner_steps,
+                        workflow_limits,
                     )?)));
                 }
                 QueryStep::Join(config, inner_steps) => {
                     steps.push(WorkflowStep::Join(
                         config,
-                        Workflow::new(self.to_workflow_steps(connectors, views, inner_steps)?),
+                        Workflow::new(self.to_workflow_steps(
+                            connectors,
+                            views,
+                            inner_steps,
+                            workflow_limits,
+                        )?),
                     ));
                 }
                 QueryStep::Count => {

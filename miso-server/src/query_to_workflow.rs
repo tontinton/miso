@@ -2,7 +2,12 @@ use std::sync::Arc;
 
 use axum::http::StatusCode;
 use hashbrown::HashMap;
-use miso_workflow::{Workflow, WorkflowStep, scan::Scan, tee::Tee};
+use miso_workflow::{
+    Workflow, WorkflowStep,
+    scan::Scan,
+    sort::{SortLimits, SortStep as SortConfig},
+    tee::Tee,
+};
 use miso_workflow_types::{
     expr::Expr,
     query::{QueryStep, ScanKind},
@@ -10,14 +15,25 @@ use miso_workflow_types::{
 };
 use tracing::info;
 
-use crate::{VIEWS_CONNECTOR_NAME, ViewsMap, config::ConnectorsMap, http_server::HttpError};
+use crate::{
+    VIEWS_CONNECTOR_NAME, ViewsMap,
+    config::{ConnectorsMap, WorkflowLimits},
+    http_server::HttpError,
+};
 
 pub fn to_workflow_steps(
     connectors: &ConnectorsMap,
     views: &ViewsMap,
     query_steps: Vec<QueryStep>,
+    workflow_limits: &WorkflowLimits,
 ) -> Result<Vec<WorkflowStep>, HttpError> {
-    to_workflow_steps_inner(connectors, views, query_steps, HashMap::new())
+    to_workflow_steps_inner(
+        connectors,
+        views,
+        query_steps,
+        HashMap::new(),
+        workflow_limits,
+    )
 }
 
 fn to_workflow_steps_inner(
@@ -25,6 +41,7 @@ fn to_workflow_steps_inner(
     views: &ViewsMap,
     query_steps: Vec<QueryStep>,
     mut let_views: HashMap<String, Vec<WorkflowStep>>,
+    workflow_limits: &WorkflowLimits,
 ) -> Result<Vec<WorkflowStep>, HttpError> {
     if query_steps.is_empty() {
         return Err(HttpError::from_string(
@@ -48,7 +65,13 @@ fn to_workflow_steps_inner(
             QueryStep::Let(name, var_steps) => {
                 let_views.insert(
                     name,
-                    to_workflow_steps_inner(connectors, views, var_steps, let_views.clone())?,
+                    to_workflow_steps_inner(
+                        connectors,
+                        views,
+                        var_steps,
+                        let_views.clone(),
+                        workflow_limits,
+                    )?,
                 );
             }
             QueryStep::Scan(ScanKind::Var(name)) => {
@@ -77,6 +100,7 @@ fn to_workflow_steps_inner(
                     views,
                     view_steps,
                     let_views.clone(),
+                    workflow_limits,
                 )?);
             }
             QueryStep::Scan(ScanKind::Collection {
@@ -140,7 +164,12 @@ fn to_workflow_steps_inner(
                 steps.push(WorkflowStep::Limit(max));
             }
             QueryStep::Sort(sort) => {
-                steps.push(WorkflowStep::Sort(sort));
+                steps.push(WorkflowStep::Sort(SortConfig {
+                    sorts: sort,
+                    limits: SortLimits {
+                        max_memory_bytes: workflow_limits.sort_memory_limit.as_u64(),
+                    },
+                }));
             }
             QueryStep::Top(sort, max) => {
                 steps.push(WorkflowStep::TopN(sort, max));
@@ -160,6 +189,7 @@ fn to_workflow_steps_inner(
                     views,
                     inner_steps,
                     let_views.clone(),
+                    workflow_limits,
                 )?)));
             }
             QueryStep::Join(config, inner_steps) => {
@@ -170,6 +200,7 @@ fn to_workflow_steps_inner(
                         views,
                         inner_steps,
                         let_views.clone(),
+                        workflow_limits,
                     )?),
                 ));
             }

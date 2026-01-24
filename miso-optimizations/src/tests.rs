@@ -50,9 +50,9 @@ fn sort_limit_into_topn() {
     }];
     check_default(
         vec![
-            S::Sort(sort1.clone()),
+            sort(sort1.clone()),
             S::Limit(10),
-            S::Sort(sort2.clone()),
+            sort(sort2.clone()),
             S::Limit(20),
         ],
         vec![S::TopN(sort1, 10), S::TopN(sort2, 20)],
@@ -107,12 +107,12 @@ fn combined_topn_limit_optimizations() {
 
 #[test]
 fn filter_before_sort() {
-    let sort1 = S::Sort(vec![Sort {
+    let sort1 = sort(vec![Sort {
         by: field("b"),
         order: SortOrder::Desc,
         nulls: NullsOrder::First,
     }]);
-    let sort2 = S::Sort(vec![Sort {
+    let sort2 = sort(vec![Sort {
         by: field("a"),
         order: SortOrder::Asc,
         nulls: NullsOrder::Last,
@@ -148,7 +148,7 @@ fn merge_filters() {
 #[test]
 fn remove_sorts_before_count() {
     check_default(
-        vec![S::Sort(vec![]), S::Sort(vec![]), S::Sort(vec![]), S::Count],
+        vec![sort(vec![]), sort(vec![]), sort(vec![]), S::Count],
         vec![S::Count],
     );
 }
@@ -160,11 +160,7 @@ fn remove_sorts_before_summarize() {
         by: vec![Expr::Field(field("x"))],
     };
     check_default(
-        vec![
-            S::Sort(vec![]),
-            S::Sort(vec![]),
-            S::Summarize(summarize.clone()),
-        ],
+        vec![sort(vec![]), sort(vec![]), S::Summarize(summarize.clone())],
         vec![S::Summarize(summarize)],
     );
 }
@@ -201,7 +197,7 @@ fn remove_redundant_steps_before_summarize() {
 
 #[test]
 fn dont_remove_sorts_before_limit_before_count() {
-    let sort = S::Sort(vec![Sort {
+    let sort = sort(vec![Sort {
         by: field("a"),
         order: SortOrder::Asc,
         nulls: NullsOrder::First,
@@ -331,7 +327,7 @@ fn summarize_into_union() {
 
 #[test]
 fn reorder_filter_before_sort() {
-    let sort = S::Sort(vec![Sort {
+    let sort = sort(vec![Sort {
         by: field("a"),
         order: SortOrder::Asc,
         nulls: NullsOrder::First,
@@ -393,34 +389,34 @@ fn reorder_filter_before_sort() {
 )]
 #[test_case(
     S::Project(vec![rename_project("a", "b")]),
-    S::Sort(vec![sort_asc(field("a"))]),
+    sort(vec![sort_asc(field("a"))]),
     vec![
-        S::Sort(vec![sort_asc(field("b"))]),
+        sort(vec![sort_asc(field("b"))]),
         S::Project(vec![rename_project("a", "b")])
     ]
     ; "rename project through sort asc"
 )]
 #[test_case(
     S::Project(vec![rename_project("a", "b")]),
-    S::Sort(vec![sort_desc(field("a"))]),
+    sort(vec![sort_desc(field("a"))]),
     vec![
-        S::Sort(vec![sort_desc(field("b"))]),
+        sort(vec![sort_desc(field("b"))]),
         S::Project(vec![rename_project("a", "b")])
     ]
     ; "rename project through sort desc"
 )]
 #[test_case(
     S::Rename(vec![(field("b"), field("a"))]),
-    S::Sort(vec![sort_desc(field("a"))]),
+    sort(vec![sort_desc(field("a"))]),
     vec![
-        S::Sort(vec![sort_desc(field("b"))]),
+        sort(vec![sort_desc(field("b"))]),
         S::Rename(vec![(field("b"), field("a"))])
     ]
     ; "rename through sort desc"
 )]
 #[test_case(
     S::Project(vec![literal_project("c", int_val(50))]),
-    S::Sort(vec![sort_asc(field("c"))]),
+    sort(vec![sort_asc(field("c"))]),
     vec![S::Project(vec![literal_project("c", int_val(50))])]
     ; "literal sort removed"
 )]
@@ -870,11 +866,11 @@ fn test_project_propagation_summarize_variants(
     vec![
         S::Project(vec![rename_project("a", "b")]),
         S::Filter(Expr::Gt(Box::new(Expr::Field(field("a"))), Box::new(Expr::Literal(int_val(0))))),
-        S::Sort(vec![sort_desc(field("a"))])
+        sort(vec![sort_desc(field("a"))])
     ],
     vec![
         S::Filter(Expr::Gt(Box::new(Expr::Field(field("b"))), Box::new(Expr::Literal(int_val(0))))),
-        S::Sort(vec![sort_desc(field("b"))]),
+        sort(vec![sort_desc(field("b"))]),
         S::Project(vec![rename_project("a", "b")])
     ]
     ; "rename project through filter and sort"
@@ -883,11 +879,11 @@ fn test_project_propagation_summarize_variants(
     vec![
         S::Rename(vec![(field("b"), field("a"))]),
         S::Filter(Expr::Gt(Box::new(Expr::Field(field("a"))), Box::new(Expr::Literal(int_val(0))))),
-        S::Sort(vec![sort_desc(field("a"))])
+        sort(vec![sort_desc(field("a"))])
     ],
     vec![
         S::Filter(Expr::Gt(Box::new(Expr::Field(field("b"))), Box::new(Expr::Literal(int_val(0))))),
-        S::Sort(vec![sort_desc(field("b"))]),
+        sort(vec![sort_desc(field("b"))]),
         S::Rename(vec![(field("b"), field("a"))])
     ]
     ; "rename through filter and sort"
@@ -924,7 +920,7 @@ fn test_project_propagation_summarize_variants(
     vec![
         S::Project(vec![literal_project("x", int_val(50))]),
         S::Filter(Expr::Eq(Box::new(Expr::Field(field("x"))), Box::new(Expr::Literal(int_val(50))))),
-        S::Sort(vec![sort_asc(field("x"))])
+        sort(vec![sort_asc(field("x"))])
     ],
     vec![
         S::Filter(Expr::Eq(Box::new(Expr::Literal(int_val(50))), Box::new(Expr::Literal(int_val(50))))),
@@ -936,11 +932,11 @@ fn test_project_propagation_summarize_variants(
     vec![
         S::Project(vec![rename_project("a", "b")]),
         S::Expand(expand(vec![field("a")])),
-        S::Sort(vec![sort_desc(field("a"))])
+        sort(vec![sort_desc(field("a"))])
     ],
     vec![
         S::Expand(expand(vec![field("b")])),
-        S::Sort(vec![sort_desc(field("b"))]),
+        sort(vec![sort_desc(field("b"))]),
         S::Project(vec![rename_project("a", "b")])
     ]
     ; "rename project through expand and sort"
@@ -949,11 +945,11 @@ fn test_project_propagation_summarize_variants(
     vec![
         S::Rename(vec![(field("b"), field("a"))]),
         S::Expand(expand(vec![field("a")])),
-        S::Sort(vec![sort_asc(field("a"))])
+        sort(vec![sort_asc(field("a"))])
     ],
     vec![
         S::Expand(expand(vec![field("b")])),
-        S::Sort(vec![sort_asc(field("b"))]),
+        sort(vec![sort_asc(field("b"))]),
         S::Rename(vec![(field("b"), field("a"))])
     ]
     ; "rename through expand and sort"
@@ -1387,7 +1383,7 @@ fn merge_topns_chain() {
 fn remove_redundant_sort_before_topn_exact_match() {
     let sorts = vec![sort_asc(field("a")), sort_desc(field("b"))];
     check_default(
-        vec![S::Sort(sorts.clone()), S::TopN(sorts.clone(), 10)],
+        vec![sort(sorts.clone()), S::TopN(sorts.clone(), 10)],
         vec![S::TopN(sorts, 10)],
     );
 }
@@ -1397,7 +1393,7 @@ fn remove_redundant_sort_before_topn_prefix() {
     let sort_prefix = vec![sort_asc(field("a"))];
     let topn_sorts = vec![sort_asc(field("a")), sort_desc(field("b"))];
     check_default(
-        vec![S::Sort(sort_prefix), S::TopN(topn_sorts.clone(), 10)],
+        vec![sort(sort_prefix), S::TopN(topn_sorts.clone(), 10)],
         vec![S::TopN(topn_sorts, 10)],
     );
 }
@@ -1407,11 +1403,8 @@ fn remove_redundant_sort_before_topn_not_prefix() {
     let sort_fields = vec![sort_desc(field("a"))];
     let topn_sorts = vec![sort_asc(field("a")), sort_desc(field("b"))];
     check_default(
-        vec![
-            S::Sort(sort_fields.clone()),
-            S::TopN(topn_sorts.clone(), 10),
-        ],
-        vec![S::Sort(sort_fields), S::TopN(topn_sorts, 10)],
+        vec![sort(sort_fields.clone()), S::TopN(topn_sorts.clone(), 10)],
+        vec![sort(sort_fields), S::TopN(topn_sorts, 10)],
     );
 }
 
@@ -1419,7 +1412,7 @@ fn remove_redundant_sort_before_topn_not_prefix() {
 fn remove_redundant_sort_before_mux_topn() {
     let sorts = vec![sort_asc(field("x"))];
     check_default(
-        vec![S::Sort(sorts.clone()), S::MuxTopN(sorts.clone(), 5)],
+        vec![sort(sorts.clone()), S::MuxTopN(sorts.clone(), 5)],
         vec![S::MuxTopN(sorts, 5)],
     );
 }
@@ -1433,10 +1426,7 @@ fn sort_longer_than_topn_unchanged() {
     ];
     let topn_sorts = vec![sort_asc(field("a")), sort_desc(field("b"))];
     check_default(
-        vec![
-            S::Sort(sort_fields.clone()),
-            S::TopN(topn_sorts.clone(), 10),
-        ],
-        vec![S::Sort(sort_fields), S::TopN(topn_sorts, 10)],
+        vec![sort(sort_fields.clone()), S::TopN(topn_sorts.clone(), 10)],
+        vec![sort(sort_fields), S::TopN(topn_sorts, 10)],
     );
 }
