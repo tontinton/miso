@@ -8,7 +8,7 @@ use std::{
     time::Duration,
 };
 
-use axum::async_trait;
+use async_trait::async_trait;
 use collection_macros::btreemap;
 use color_eyre::{
     Result,

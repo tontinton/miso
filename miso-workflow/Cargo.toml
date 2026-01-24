@@ -28,7 +28,7 @@ tokio-util.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
-axum.workspace = true
+async-trait.workspace = true
 bon.workspace = true
 collection_macros.workspace = true
 ctor.workspace = true
