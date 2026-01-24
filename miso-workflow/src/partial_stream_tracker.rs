@@ -10,8 +10,10 @@
 //! When a late source appears, we register existing sources as pending for all IDs
 //! they might still produce.
 //!
-//! Sources that don't support partial streams (like Elasticsearch) never register
-//! here, so they don't block anything.
+//! Some sources don't support partial streams (like Elasticsearch) - they only contribute
+//! to the final state, which gets merged with each partial stream result. When a source
+//! finishes and sends final data, any partial streams it contributed to are dropped to
+//! avoid duplicates.
 
 use hashbrown::{HashMap, HashSet};
 use miso_workflow_types::log::{PartialStreamKey, SourceId, next_source_id};
