@@ -165,6 +165,7 @@ impl From<Vec<ParseError>> for HttpError {
     }
 }
 
+/// Health check endpoint.
 #[utoipa::path(get, path = "/health")]
 async fn health_check() -> impl IntoResponse {
     "OK"
@@ -374,6 +375,7 @@ async fn query_stream(
     }))
 }
 
+/// Returns the optimized workflow plan for a query without executing it.
 #[utoipa::path(post, path = "/explain")]
 async fn explain(
     State(state): State<Arc<App>>,
@@ -390,6 +392,7 @@ async fn explain(
     Ok(format!("{workflow}").into_response())
 }
 
+/// List all connectors.
 #[utoipa::path(get, path = "/connectors")]
 async fn get_connectors(State(state): State<Arc<App>>) -> Result<Response, HttpError> {
     let guard = state.connectors.read().await;
@@ -401,6 +404,7 @@ async fn get_connectors(State(state): State<Arc<App>>) -> Result<Response, HttpE
     Ok(Json(connectors_map).into_response())
 }
 
+/// Get a connector by id.
 #[utoipa::path(get, path = "/connectors/{id}")]
 async fn get_connector(
     State(state): State<Arc<App>>,
@@ -414,6 +418,7 @@ async fn get_connector(
     Ok(Json(connector).into_response())
 }
 
+/// Create or replace a connector.
 #[utoipa::path(post, path = "/connectors/{id}", request_body(content = inline(Object)))]
 async fn post_connector(
     State(state): State<Arc<App>>,
@@ -441,6 +446,7 @@ async fn post_connector(
     Ok(())
 }
 
+/// Delete a connector by id.
 #[utoipa::path(delete, path = "/connectors/{id}")]
 async fn delete_connector(
     State(state): State<Arc<App>>,
@@ -462,6 +468,7 @@ async fn delete_connector(
     Ok(())
 }
 
+/// List all views.
 #[utoipa::path(get, path = "/views")]
 async fn get_views(State(state): State<Arc<App>>) -> Result<Response, HttpError> {
     let guard = state.views.read().await;
@@ -472,6 +479,7 @@ async fn get_views(State(state): State<Arc<App>>) -> Result<Response, HttpError>
     Ok(Json(views_map).into_response())
 }
 
+/// Get a view by id.
 #[utoipa::path(get, path = "/views/{id}")]
 async fn get_view(
     State(state): State<Arc<App>>,
@@ -484,6 +492,7 @@ async fn get_view(
     Ok(Json(steps).into_response())
 }
 
+/// Create or replace a view.
 #[utoipa::path(post, path = "/views/{id}")]
 async fn post_view(
     State(state): State<Arc<App>>,
@@ -499,6 +508,7 @@ async fn post_view(
     Ok(())
 }
 
+/// Delete a view by id.
 #[utoipa::path(delete, path = "/views/{id}")]
 async fn delete_view(
     State(state): State<Arc<App>>,
@@ -519,6 +529,7 @@ async fn delete_view(
     Ok(())
 }
 
+/// Prometheus metrics endpoint.
 #[utoipa::path(get, path = "/metrics")]
 async fn metrics() -> Result<Response, HttpError> {
     let metric_families = prometheus::gather();
