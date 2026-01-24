@@ -63,11 +63,11 @@ impl<S: Mergeable> PartialStreamTracker<S> {
         }
     }
 
-    pub fn update_final<F>(&mut self, f: F)
+    pub fn update_final<F, T>(&mut self, f: F) -> T
     where
-        F: FnOnce(&mut S),
+        F: FnOnce(&mut S) -> T,
     {
-        f(&mut self.final_state);
+        f(&mut self.final_state)
     }
 
     pub fn final_state(&self) -> &S {

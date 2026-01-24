@@ -289,9 +289,10 @@ impl WorkflowStep {
                 let prev = rx.into_creator();
                 let partial_stream = partial_stream.unwrap();
                 let source_id = next_source_id();
+                let memory_limit = workflow_limits.summarize_memory_limit.0;
                 fn_creator(move || {
                     Box::new(PartialStreamIter::new(
-                        create_summarize_iter(prev.create(), config, true),
+                        create_summarize_iter(prev.create(), config, true, memory_limit),
                         partial_stream,
                         source_id,
                     ))
@@ -299,11 +300,15 @@ impl WorkflowStep {
             }
             WorkflowStep::MuxSummarize(config) => {
                 let prev = rx.into_creator();
-                fn_creator(move || create_summarize_iter(prev.create(), config, true))
+                let memory_limit = workflow_limits.summarize_memory_limit.0;
+                fn_creator(move || create_summarize_iter(prev.create(), config, true, memory_limit))
             }
             WorkflowStep::Summarize(config) => {
                 let prev = rx.into_creator();
-                fn_creator(move || create_summarize_iter(prev.create(), config, false))
+                let memory_limit = workflow_limits.summarize_memory_limit.0;
+                fn_creator(move || {
+                    create_summarize_iter(prev.create(), config, false, memory_limit)
+                })
             }
             WorkflowStep::Join(join, workflow) if workflow.steps.is_empty() => {
                 if matches!(join.type_, JoinType::Left | JoinType::Outer) {

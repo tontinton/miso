@@ -28,6 +28,7 @@ use miso_workflow::{
     limits::WorkflowLimits,
     partial_stream::{PARTIAL_STREAM_DONE_FIELD_NAME, PartialStream},
     sort::SortError,
+    summarize::SummarizeError,
 };
 use miso_workflow_types::{expr::Expr, field::Field, field_unwrap, json, log::Log, value::Value};
 use serde::{Deserialize, Serialize};
@@ -2378,6 +2379,7 @@ fn find_sort_error(err: &color_eyre::Report) -> Option<&SortError> {
 async fn sort_memory_limit_exceeded() {
     let limits = WorkflowLimits {
         sort_memory_limit: bytesize::ByteSize::b(100),
+        ..Default::default()
     };
     let input = r#"[{"x": 1, "data": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}, {"x": 2, "data": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}]"#;
     let err = check_with_limits(r#"test.c | sort by x"#, input, "[]", limits)
@@ -2392,6 +2394,7 @@ async fn sort_memory_limit_exceeded() {
 async fn sort_memory_limit_under_limit_succeeds() -> Result<()> {
     let limits = WorkflowLimits {
         sort_memory_limit: bytesize::ByteSize::mb(1),
+        ..Default::default()
     };
     check_with_limits(
         r#"test.c | sort by x"#,
@@ -2406,6 +2409,7 @@ async fn sort_memory_limit_under_limit_succeeds() -> Result<()> {
 async fn sort_memory_limit_empty_input() -> Result<()> {
     let limits = WorkflowLimits {
         sort_memory_limit: bytesize::ByteSize::b(1),
+        ..Default::default()
     };
     check_with_limits(r#"test.c | sort by x"#, r#"[]"#, "[]", limits).await
 }
@@ -2414,6 +2418,7 @@ async fn sort_memory_limit_empty_input() -> Result<()> {
 async fn sort_memory_limit_filter_reduces_usage() -> Result<()> {
     let limits = WorkflowLimits {
         sort_memory_limit: bytesize::ByteSize::b(300),
+        ..Default::default()
     };
     let input = r#"[{"x": 1, "data": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}, {"x": 2, "data": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}, {"x": 3, "data": "cccccccccccccccccccccccccccccccccccc"}]"#;
 
@@ -2426,6 +2431,45 @@ async fn sort_memory_limit_filter_reduces_usage() -> Result<()> {
         r#"test.c | where x == 1 | sort by x"#,
         input,
         r#"[{"x": 1, "data": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]"#,
+        limits,
+    )
+    .await
+}
+
+fn find_summarize_error(err: &color_eyre::Report) -> Option<&SummarizeError> {
+    err.chain()
+        .find_map(|cause| cause.downcast_ref::<SummarizeError>())
+}
+
+#[tokio::test]
+async fn summarize_memory_limit_exceeded() {
+    use miso_workflow::summarize::SummarizeError;
+    let limits = WorkflowLimits {
+        summarize_memory_limit: bytesize::ByteSize::b(100),
+        ..Default::default()
+    };
+    let input = r#"[{"x": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "y": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}]"#;
+    let err = check_with_limits(r#"test.c | summarize count() by x"#, input, "[]", limits)
+        .await
+        .unwrap_err();
+
+    let summarize_err = find_summarize_error(&err).expect("expected SummarizeError in error chain");
+    assert!(matches!(
+        summarize_err,
+        SummarizeError::MemoryLimitExceeded { .. }
+    ));
+}
+
+#[tokio::test]
+async fn summarize_memory_limit_under_limit_succeeds() -> Result<()> {
+    let limits = WorkflowLimits {
+        summarize_memory_limit: bytesize::ByteSize::mb(1),
+        ..Default::default()
+    };
+    check_with_limits(
+        r#"test.c | summarize count() by x"#,
+        r#"[{"x": "a"}, {"x": "b"}]"#,
+        r#"[{"x": "a", "count_": 1}, {"x": "b", "count_": 1}]"#,
         limits,
     )
     .await

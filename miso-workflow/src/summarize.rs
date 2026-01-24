@@ -1,5 +1,7 @@
 use std::{cmp::Ordering, iter};
 
+use bytesize::ByteSize;
+use color_eyre::eyre::Result;
 use hashbrown::{HashMap, HashSet};
 use miso_common::metrics::{ERROR_EVAL, METRICS, STEP_SUMMARIZE};
 use miso_workflow_types::{
@@ -9,9 +11,11 @@ use miso_workflow_types::{
     summarize::{Aggregation, MUX_AVG_COUNT_SUFFIX, MUX_AVG_SUM_SUFFIX, Summarize},
     value::Value,
 };
+use thiserror::Error;
 use tracing::warn;
 
 use crate::interpreter::{LogInterpreter, Val, get_field_value, insert_field_value};
+use crate::memory_size::MemorySize;
 use crate::type_tracker::TypeTracker;
 
 use super::{
@@ -20,6 +24,17 @@ use super::{
     partial_stream_tracker::{Mergeable, PartialStreamTracker},
     try_next_with_partial_stream,
 };
+
+#[derive(Debug, Error)]
+pub enum SummarizeError {
+    #[error(
+        "Summarize operation exceeded memory limit: estimated {estimated} memory usage but limit is {limit}. Consider adding filters to reduce the dataset size or reducing the number of group by fields."
+    )]
+    MemoryLimitExceeded {
+        estimated: ByteSize,
+        limit: ByteSize,
+    },
+}
 
 macro_rules! same_variant {
     ($other:expr, $pat:pat => $body:block) => {
@@ -35,6 +50,7 @@ pub fn create_summarize_iter(
     input: LogIter,
     config: Summarize,
     is_mux: bool,
+    memory_limit: u64,
 ) -> Box<dyn PartialLogIter> {
     let (output_fields, aggregations): (Vec<Field>, Vec<Aggregation>) =
         config.aggs.into_iter().unzip();
@@ -45,6 +61,7 @@ pub fn create_summarize_iter(
         output_fields,
         aggregations,
         is_mux,
+        Some(memory_limit),
     ))
 }
 
@@ -54,12 +71,14 @@ pub struct SummarizeIter {
     output_fields: Vec<Field>,
     aggregations: Vec<Aggregation>,
     is_mux: bool,
+    memory_limit: Option<u64>,
     type_tracker: TypeTracker,
     tracker: PartialStreamTracker<SummarizeState>,
     output: LogIter,
     pending: Vec<LogItem>,
     done: bool,
     rows_processed: u64,
+    current_memory: u64,
 }
 
 impl SummarizeIter {
@@ -69,12 +88,14 @@ impl SummarizeIter {
         output_fields: Vec<Field>,
         aggregations: Vec<Aggregation>,
         is_mux: bool,
+        memory_limit: Option<u64>,
     ) -> Self {
         let initial = if group_by.is_empty() {
             SummarizeState::All(create_aggregates(&aggregations, is_mux))
         } else {
             SummarizeState::GroupBy(HashMap::new())
         };
+        let current_memory = initial.estimate_memory_size() as u64;
         Self {
             type_tracker: TypeTracker::new(group_by.len()),
             input,
@@ -82,11 +103,29 @@ impl SummarizeIter {
             output_fields,
             aggregations,
             is_mux,
+            memory_limit,
             tracker: PartialStreamTracker::new(initial),
             output: Box::new(iter::empty()),
             pending: Vec::new(),
             done: false,
             rows_processed: 0,
+            current_memory,
+        }
+    }
+
+    fn check_memory_limit(&self) -> Option<LogItem> {
+        let limit = self.memory_limit?;
+        let estimated = self.current_memory;
+        if estimated > limit {
+            Some(LogItem::Err(
+                SummarizeError::MemoryLimitExceeded {
+                    estimated: ByteSize::b(estimated),
+                    limit: ByteSize(limit),
+                }
+                .into(),
+            ))
+        } else {
+            None
         }
     }
 
@@ -122,8 +161,8 @@ impl SummarizeIter {
 
     fn process_log(&mut self, log: &Log) -> Option<LogItem> {
         if self.group_by.is_empty() {
-            self.tracker.update_final(|s| s.input_all(log));
-            None
+            let delta = self.tracker.update_final(|s| s.input_all(log));
+            self.current_memory += delta as u64;
         } else {
             let result = self.extract_group_keys(log)?;
             let keys = match result {
@@ -132,20 +171,24 @@ impl SummarizeIter {
             };
             let aggs = &self.aggregations;
             let is_mux = self.is_mux;
-            self.tracker
+            let delta = self
+                .tracker
                 .update_final(|s| s.input_grouped(keys, log, aggs, is_mux));
-            None
+            self.current_memory += delta as u64;
         }
+
+        self.check_memory_limit()
     }
 
     fn process_partial_log(&mut self, log: &Log, key: PartialStreamKey) -> Option<LogItem> {
         if self.group_by.is_empty() {
             let aggs = &self.aggregations;
             let is_mux = self.is_mux;
-            self.tracker
-                .get_or_create_state(key, || SummarizeState::All(create_aggregates(aggs, is_mux)))
-                .input_all(log);
-            None
+            let state = self
+                .tracker
+                .get_or_create_state(key, || SummarizeState::All(create_aggregates(aggs, is_mux)));
+            let delta = state.input_all(log);
+            self.current_memory += delta as u64;
         } else {
             let result = self.extract_group_keys(log)?;
             let keys = match result {
@@ -154,11 +197,14 @@ impl SummarizeIter {
             };
             let aggs = &self.aggregations;
             let is_mux = self.is_mux;
-            self.tracker
-                .get_or_create_state(key, || SummarizeState::GroupBy(HashMap::new()))
-                .input_grouped(keys, log, aggs, is_mux);
-            None
+            let state = self
+                .tracker
+                .get_or_create_state(key, || SummarizeState::GroupBy(HashMap::new()));
+            let delta = state.input_grouped(keys, log, aggs, is_mux);
+            self.current_memory += delta as u64;
         }
+
+        self.check_memory_limit()
     }
 
     fn state_to_logs(&self, state: &SummarizeState) -> Vec<Log> {
@@ -262,13 +308,15 @@ enum SummarizeState {
 }
 
 impl SummarizeState {
-    fn input_all(&mut self, log: &Log) {
+    fn input_all(&mut self, log: &Log) -> usize {
         let SummarizeState::All(aggs) = self else {
-            return;
+            return 0;
         };
+        let mut delta = 0;
         for agg in aggs {
-            agg.input(log);
+            delta += agg.input(log);
         }
+        delta
     }
 
     fn input_grouped(
@@ -277,16 +325,33 @@ impl SummarizeState {
         log: &Log,
         aggregations: &[Aggregation],
         is_mux: bool,
-    ) {
+    ) -> usize {
         let SummarizeState::GroupBy(groups) = self else {
-            return;
+            return 0;
         };
+
+        let mut delta = 0;
+        let key_existed = groups.contains_key(&keys);
+
         let entry = groups
             .entry(keys)
             .or_insert_with(|| create_aggregates(aggregations, is_mux));
-        for agg in entry {
-            agg.input(log);
+
+        if !key_existed {
+            delta += entry
+                .iter()
+                .map(|a| a.estimate_memory_size())
+                .sum::<usize>();
+            delta += entry.capacity() * std::mem::size_of::<AggregateState>();
+            delta += std::mem::size_of::<Vec<Value>>() + std::mem::size_of::<Vec<AggregateState>>();
+            delta += std::mem::size_of::<(Vec<Value>, Vec<AggregateState>)>();
+            delta += std::mem::size_of::<u64>();
         }
+
+        for agg in entry {
+            delta += agg.input(log);
+        }
+        delta
     }
 
     fn to_logs(&self, group_by: &[Expr], output_fields: &[Field]) -> Vec<Log> {
@@ -313,6 +378,63 @@ impl SummarizeState {
                     log
                 })
                 .collect(),
+        }
+    }
+}
+
+impl MemorySize for AggregateState {
+    fn estimate_memory_size(&self) -> usize {
+        match self {
+            AggregateState::Count(_) | AggregateState::Countif { .. } => 8,
+            AggregateState::DCount { seen, .. } => {
+                std::mem::size_of::<AggregateState>()
+                    + std::mem::size_of::<Field>()
+                    + seen.capacity() * (std::mem::size_of::<Value>() + std::mem::size_of::<u64>())
+                    + seen.iter().map(|v| v.estimate_memory_size()).sum::<usize>()
+            }
+            AggregateState::Sum { .. } | AggregateState::Avg { .. } => {
+                std::mem::size_of::<AggregateState>() + 8 + std::mem::size_of::<Field>()
+            }
+            AggregateState::MuxAvg { .. } => {
+                std::mem::size_of::<AggregateState>() + 16 + std::mem::size_of::<Field>() * 2
+            }
+            AggregateState::MinMax {
+                value_memory_size, ..
+            } => {
+                std::mem::size_of::<AggregateState>()
+                    + std::mem::size_of::<Field>()
+                    + std::mem::size_of::<usize>()
+                    + *value_memory_size
+            }
+        }
+    }
+}
+
+impl MemorySize for SummarizeState {
+    fn estimate_memory_size(&self) -> usize {
+        match self {
+            SummarizeState::All(aggs) => {
+                std::mem::size_of::<SummarizeState>()
+                    + aggs.capacity() * std::mem::size_of::<AggregateState>()
+                    + aggs.iter().map(|a| a.estimate_memory_size()).sum::<usize>()
+            }
+            SummarizeState::GroupBy(groups) => {
+                let groups_size: usize = groups
+                    .iter()
+                    .map(|(keys, aggs)| {
+                        let keys_size = keys.capacity() * std::mem::size_of::<Value>()
+                            + keys.iter().map(|v| v.estimate_memory_size()).sum::<usize>();
+                        let aggs_size = aggs.capacity() * std::mem::size_of::<AggregateState>()
+                            + aggs.iter().map(|a| a.estimate_memory_size()).sum::<usize>();
+                        keys_size + aggs_size
+                    })
+                    .sum();
+                std::mem::size_of::<SummarizeState>()
+                    + groups_size
+                    + groups.capacity()
+                        * (std::mem::size_of::<Vec<Value>>()
+                            + std::mem::size_of::<Vec<AggregateState>>())
+            }
         }
     }
 }
@@ -372,6 +494,7 @@ enum AggregateState {
     MinMax {
         field: Field,
         value: Option<Value>,
+        value_memory_size: usize,
         update_order: Ordering,
     },
 }
@@ -406,19 +529,24 @@ impl AggregateState {
             Aggregation::Min(field) => AggregateState::MinMax {
                 field: field.clone(),
                 value: None,
+                value_memory_size: 0,
                 update_order: Ordering::Greater,
             },
             Aggregation::Max(field) => AggregateState::MinMax {
                 field: field.clone(),
                 value: None,
+                value_memory_size: 0,
                 update_order: Ordering::Less,
             },
         }
     }
 
-    fn input(&mut self, log: &Log) {
+    fn input(&mut self, log: &Log) -> usize {
         match self {
-            AggregateState::Count(count) => *count += 1,
+            AggregateState::Count(c) => {
+                *c += 1;
+                0
+            }
             AggregateState::Countif { expr, value } => {
                 let interpreter = LogInterpreter { log };
                 let keep = match interpreter.eval(expr) {
@@ -435,10 +563,19 @@ impl AggregateState {
                 if keep {
                     *value += 1;
                 }
+                0
             }
             AggregateState::DCount { field, seen } => {
                 if let Some(v) = get_field_value(log, field) {
-                    seen.insert(v.clone());
+                    if seen.insert(v.clone()) {
+                        v.estimate_memory_size()
+                            + std::mem::size_of::<Value>()
+                            + std::mem::size_of::<u64>()
+                    } else {
+                        0
+                    }
+                } else {
+                    0
                 }
             }
             AggregateState::Sum { field, value } => {
@@ -447,6 +584,7 @@ impl AggregateState {
                 {
                     *value += x;
                 }
+                0
             }
             AggregateState::Avg { field, sum, count } => {
                 if let Some(v) = get_field_value(log, field)
@@ -455,6 +593,7 @@ impl AggregateState {
                     *sum += x;
                     *count += 1;
                 }
+                0
             }
             AggregateState::MuxAvg {
                 sum_field,
@@ -463,34 +602,46 @@ impl AggregateState {
                 count,
             } => {
                 let Some(sum_value) = get_field_value(log, sum_field) else {
-                    return;
+                    return 0;
                 };
                 let Some(count_value) = get_field_value(log, count_field) else {
-                    return;
+                    return 0;
                 };
                 let (Some(s), Some(c)) = (sum_value.as_f64(), count_value.as_f64()) else {
-                    return;
+                    return 0;
                 };
                 if c <= 0.0 {
-                    return;
+                    return 0;
                 }
                 let new_count = *count + c;
                 let new_avg = *value + (s / c - *value) * (c / new_count);
                 *value = new_avg;
                 *count = new_count;
+                0
             }
             AggregateState::MinMax {
                 field,
                 value,
+                value_memory_size,
                 update_order,
             } => {
                 let Some(v) = get_field_value(log, field) else {
-                    return;
+                    return 0;
                 };
                 match value {
-                    None => *value = Some(v.clone()),
-                    Some(stored) if (*stored).cmp(v) == *update_order => *value = Some(v.clone()),
-                    _ => {}
+                    None => {
+                        *value = Some(v.clone());
+                        *value_memory_size = v.estimate_memory_size();
+                        *value_memory_size
+                    }
+                    Some(stored) if (*stored).cmp(v) == *update_order => {
+                        *value = Some(v.clone());
+                        let new_size = v.estimate_memory_size();
+                        let delta = new_size.wrapping_sub(*value_memory_size);
+                        *value_memory_size = new_size;
+                        delta
+                    }
+                    _ => 0,
                 }
             }
         }
@@ -572,11 +723,16 @@ impl AggregateState {
 
             AggregateState::MinMax {
                 value: v1,
+                value_memory_size,
                 update_order,
                 ..
             } => same_variant!(
                 other,
-                AggregateState::MinMax { value: v2, .. } => {
+                AggregateState::MinMax {
+                    value: v2,
+                    value_memory_size: v2_size,
+                    ..
+                } => {
                     let Some(val2) = v2 else { return };
                     let should_update = match v1.as_ref() {
                         None => true,
@@ -584,6 +740,7 @@ impl AggregateState {
                     };
                     if should_update {
                         *v1 = Some(val2.clone());
+                        *value_memory_size = *v2_size;
                     }
                 }
             ),
