@@ -20,7 +20,7 @@ members = [
 arboard = "3.6.1"
 async-stream = "0.3.6"
 async-trait = "0.1"
-axum = { version = "0.7.7", features = ["macros"] }
+axum = { version = "0.8", features = ["macros"] }
 base64 = "0.22.1"
 bon = "3.6.3"
 bytes = "1.10.1"
@@ -75,6 +75,9 @@ tracing = "0.1.40"
 tracing-opentelemetry = "0.28"
 tracing-subscriber = { version = "0.3.18", features = ["json", "env-filter"] }
 typetag = "0.2.18"
+utoipa = { version = "5", features = ["axum_extras"] }
+utoipa-axum = "0.2"
+utoipa-swagger-ui = { version = "9", features = ["axum"] }
 uuid = { version = "1.11.0", features = ["v7", "serde"] }
 
 [lib]

@@ -10,7 +10,6 @@ use axum::{
     extract::{Path, State},
     http::StatusCode,
     response::{IntoResponse, Response, Sse, sse::Event},
-    routing::{delete, get, post},
 };
 use color_eyre::{
     Result,
@@ -34,6 +33,9 @@ use tokio::{sync::RwLock, task::spawn_blocking};
 use tokio_util::sync::CancellationToken;
 use tower_http::trace::TraceLayer;
 use tracing::{Instrument, Level, Span, debug, error, info, span};
+use utoipa::OpenApi;
+use utoipa_axum::{router::OpenApiRouter, routes};
+use utoipa_swagger_ui::SwaggerUi;
 use uuid::Uuid;
 
 use crate::{
@@ -93,15 +95,17 @@ async fn collect_tokio_metrics() {
     .await;
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 struct QueryRequest {
     /// The query id to set. If not set, the server will randomly generate an id.
+    #[schema(value_type = Option<String>, format = "uuid")]
     query_id: Option<Uuid>,
 
     /// The KQL query to run.
     query: String,
 
     /// If set, send partial results as soon as a split / union subquery finishes.
+    #[schema(value_type = Option<Object>)]
     partial_stream: Option<PartialStream>,
 }
 
@@ -161,6 +165,7 @@ impl From<Vec<ParseError>> for HttpError {
     }
 }
 
+#[utoipa::path(get, path = "/health")]
 async fn health_check() -> impl IntoResponse {
     "OK"
 }
@@ -262,6 +267,7 @@ async fn query_stream_setup(
 }
 
 /// Starts running a new query.
+#[utoipa::path(post, path = "/query")]
 async fn query_stream(
     State(state): State<Arc<App>>,
     Json(req): Json<QueryRequest>,
@@ -368,6 +374,7 @@ async fn query_stream(
     }))
 }
 
+#[utoipa::path(post, path = "/explain")]
 async fn explain(
     State(state): State<Arc<App>>,
     Json(req): Json<QueryRequest>,
@@ -383,6 +390,7 @@ async fn explain(
     Ok(format!("{workflow}").into_response())
 }
 
+#[utoipa::path(get, path = "/connectors")]
 async fn get_connectors(State(state): State<Arc<App>>) -> Result<Response, HttpError> {
     let guard = state.connectors.read().await;
     let mut connectors_map = BTreeMap::new();
@@ -393,6 +401,7 @@ async fn get_connectors(State(state): State<Arc<App>>) -> Result<Response, HttpE
     Ok(Json(connectors_map).into_response())
 }
 
+#[utoipa::path(get, path = "/connectors/{id}")]
 async fn get_connector(
     State(state): State<Arc<App>>,
     Path(id): Path<String>,
@@ -405,6 +414,7 @@ async fn get_connector(
     Ok(Json(connector).into_response())
 }
 
+#[utoipa::path(post, path = "/connectors/{id}", request_body(content = inline(Object)))]
 async fn post_connector(
     State(state): State<Arc<App>>,
     Path(id): Path<String>,
@@ -431,6 +441,7 @@ async fn post_connector(
     Ok(())
 }
 
+#[utoipa::path(delete, path = "/connectors/{id}")]
 async fn delete_connector(
     State(state): State<Arc<App>>,
     Path(id): Path<String>,
@@ -451,6 +462,7 @@ async fn delete_connector(
     Ok(())
 }
 
+#[utoipa::path(get, path = "/views")]
 async fn get_views(State(state): State<Arc<App>>) -> Result<Response, HttpError> {
     let guard = state.views.read().await;
     let mut views_map = BTreeMap::new();
@@ -460,6 +472,7 @@ async fn get_views(State(state): State<Arc<App>>) -> Result<Response, HttpError>
     Ok(Json(views_map).into_response())
 }
 
+#[utoipa::path(get, path = "/views/{id}")]
 async fn get_view(
     State(state): State<Arc<App>>,
     Path(id): Path<String>,
@@ -471,6 +484,7 @@ async fn get_view(
     Ok(Json(steps).into_response())
 }
 
+#[utoipa::path(post, path = "/views/{id}")]
 async fn post_view(
     State(state): State<Arc<App>>,
     Path(id): Path<String>,
@@ -485,6 +499,7 @@ async fn post_view(
     Ok(())
 }
 
+#[utoipa::path(delete, path = "/views/{id}")]
 async fn delete_view(
     State(state): State<Arc<App>>,
     Path(id): Path<String>,
@@ -504,6 +519,7 @@ async fn delete_view(
     Ok(())
 }
 
+#[utoipa::path(get, path = "/metrics")]
 async fn metrics() -> Result<Response, HttpError> {
     let metric_families = prometheus::gather();
     let mut buffer = String::with_capacity(1024);
@@ -518,6 +534,10 @@ async fn metrics() -> Result<Response, HttpError> {
         })?;
     Ok(buffer.into_response())
 }
+
+#[derive(OpenApi)]
+#[openapi(info(title = "Miso API", version = "0.1.0"))]
+struct ApiDoc;
 
 pub enum OptimizationConfig {
     NoOptimizations,
@@ -565,19 +585,21 @@ pub fn create_app(config: OptimizationConfig, config_path: Option<&str>) -> Resu
     let app =
         App::new(connectors, optimizer, query_status_writer).context("create axum app state")?;
 
-    Ok(Router::new()
-        .route("/health", get(health_check))
-        .route("/metrics", get(metrics))
-        .route("/query", post(query_stream))
-        .route("/explain", post(explain))
-        .route("/connectors", get(get_connectors))
-        .route("/connectors/:id", get(get_connector))
-        .route("/connectors/:id", post(post_connector))
-        .route("/connectors/:id", delete(delete_connector))
-        .route("/views", get(get_views))
-        .route("/views/:id", get(get_view))
-        .route("/views/:id", post(post_view))
-        .route("/views/:id", delete(delete_view))
+    let (router, api) = OpenApiRouter::with_openapi(ApiDoc::openapi())
+        .routes(routes!(health_check))
+        .routes(routes!(metrics))
+        .routes(routes!(query_stream))
+        .routes(routes!(explain))
+        .routes(routes!(get_connectors))
+        .routes(routes!(get_connector, post_connector, delete_connector))
+        .routes(routes!(get_views))
+        .routes(routes!(get_view, post_view, delete_view))
         .with_state(Arc::new(app))
-        .layer(TraceLayer::new_for_http()))
+        .split_for_parts();
+
+    let router = router
+        .merge(SwaggerUi::new("/").url("/openapi.json", api))
+        .layer(TraceLayer::new_for_http());
+
+    Ok(router)
 }
