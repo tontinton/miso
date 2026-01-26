@@ -3,7 +3,6 @@ use std::{cmp::Ordering, num::NonZero, thread::available_parallelism};
 use bytesize::ByteSize;
 use color_eyre::eyre::{Context, Result};
 use flume::Receiver;
-use itertools::Itertools;
 use miso_common::metrics::{METRICS, STEP_SORT};
 use miso_workflow_types::{
     field::Field,
@@ -11,7 +10,11 @@ use miso_workflow_types::{
     sort::{NullsOrder, Sort, SortOrder},
     value::Value,
 };
-use rayon::{ThreadPool, ThreadPoolBuilder, iter::ParallelIterator, slice::ParallelSliceMut};
+use rayon::{
+    ThreadPool, ThreadPoolBuilder,
+    iter::{IntoParallelIterator, ParallelIterator},
+    slice::ParallelSliceMut,
+};
 use thiserror::Error;
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
@@ -184,9 +187,11 @@ pub fn parallel_sort(
     cancel: Option<&CancellationToken>,
 ) -> Result<Vec<Log>> {
     let pool = sort_thread_pool()?;
-    let chunk_size = (logs.len() / pool.current_num_threads()).max(PARALLEL_CHUNK_SIZE);
+    let num_threads = pool.current_num_threads();
+    let chunk_size = (logs.len() / num_threads).max(PARALLEL_CHUNK_SIZE);
 
-    Ok(pool.install(|| {
+    pool.install(|| {
+        // Phase 1: Sort chunks in parallel
         let cancelled = logs.par_chunks_mut(chunk_size).any(|chunk| {
             if cancel.is_some_and(|c| c.is_cancelled()) {
                 return true;
@@ -196,15 +201,159 @@ pub fn parallel_sort(
         });
 
         if cancelled || cancel.is_some_and(|c| c.is_cancelled()) {
-            return Vec::new();
+            return Ok(Vec::new());
         }
 
-        logs.chunks(chunk_size)
-            .map(|chunk| chunk.iter())
-            .kmerge_by(|a, b| cmp_logs(a, b, config).is_lt())
-            .cloned()
-            .collect()
-    }))
+        // Phase 2: Parallel merge rounds
+        let num_chunks = logs.len().div_ceil(chunk_size);
+        if num_chunks <= 1 {
+            return Ok(logs);
+        }
+
+        parallel_merge_rounds(logs, chunk_size, num_chunks, config, cancel)
+    })
+}
+
+fn parallel_merge_rounds(
+    logs: Vec<Log>,
+    initial_chunk_size: usize,
+    num_chunks: usize,
+    config: &SortComparator,
+    cancel: Option<&CancellationToken>,
+) -> Result<Vec<Log>> {
+    let mut current = logs;
+    let mut chunk_size = initial_chunk_size;
+    let mut chunks_remaining = num_chunks;
+
+    while chunks_remaining > 1 {
+        // Check cancel between merge rounds
+        if cancel.is_some_and(|c| c.is_cancelled()) {
+            return Ok(Vec::new());
+        }
+
+        // Merge adjacent pairs in parallel
+        let pair_size = chunk_size * 2;
+        let pairs: Vec<_> = current.chunks(pair_size).collect();
+
+        let merged: Vec<Log> = pairs
+            .into_par_iter()
+            .flat_map(|pair| {
+                if pair.len() <= chunk_size {
+                    // Odd chunk, no merge needed
+                    pair.to_vec()
+                } else {
+                    // Merge two sorted halves
+                    let (left, right) = pair.split_at(chunk_size.min(pair.len()));
+                    merge_sorted(left, right, config)
+                }
+            })
+            .collect();
+
+        current = merged;
+        chunk_size = pair_size;
+        chunks_remaining = chunks_remaining.div_ceil(2);
+    }
+
+    Ok(current)
+}
+
+fn merge_sorted(left: &[Log], right: &[Log], config: &SortComparator) -> Vec<Log> {
+    let mut result = Vec::with_capacity(left.len() + right.len());
+    let mut i = 0;
+    let mut j = 0;
+
+    while i < left.len() && j < right.len() {
+        if cmp_logs(&left[i], &right[j], config).is_le() {
+            result.push(left[i].clone());
+            i += 1;
+        } else {
+            result.push(right[j].clone());
+            j += 1;
+        }
+    }
+
+    result.extend(left[i..].iter().cloned());
+    result.extend(right[j..].iter().cloned());
+    result
+}
+
+/// Parallel quicksort using rayon::join for benchmark comparison.
+/// This is an in-place sort that uses parallel partitioning.
+pub fn parallel_quicksort(
+    logs: &mut [Log],
+    config: &SortComparator,
+    cancel: Option<&CancellationToken>,
+) -> bool {
+    let pool = match sort_thread_pool() {
+        Ok(pool) => pool,
+        Err(_) => return false,
+    };
+
+    pool.install(|| parallel_quicksort_inner(logs, config, cancel))
+}
+
+const QUICKSORT_SEQUENTIAL_THRESHOLD: usize = 10_000;
+
+fn parallel_quicksort_inner(
+    logs: &mut [Log],
+    config: &SortComparator,
+    cancel: Option<&CancellationToken>,
+) -> bool {
+    if cancel.is_some_and(|c| c.is_cancelled()) {
+        return true;
+    }
+
+    if logs.len() <= QUICKSORT_SEQUENTIAL_THRESHOLD {
+        logs.sort_unstable_by(|a, b| cmp_logs(a, b, config));
+        return false;
+    }
+
+    let pivot_idx = partition(logs, config);
+
+    let (left, right) = logs.split_at_mut(pivot_idx);
+    let right = &mut right[1..]; // Skip the pivot
+
+    let (left_cancelled, right_cancelled) = rayon::join(
+        || parallel_quicksort_inner(left, config, cancel),
+        || parallel_quicksort_inner(right, config, cancel),
+    );
+
+    left_cancelled || right_cancelled
+}
+
+fn partition(logs: &mut [Log], config: &SortComparator) -> usize {
+    let len = logs.len();
+    if len == 0 {
+        return 0;
+    }
+
+    // Median-of-three pivot selection
+    let mid = len / 2;
+    let last = len - 1;
+
+    // Sort first, mid, last to find median
+    if cmp_logs(&logs[0], &logs[mid], config).is_gt() {
+        logs.swap(0, mid);
+    }
+    if cmp_logs(&logs[mid], &logs[last], config).is_gt() {
+        logs.swap(mid, last);
+    }
+    if cmp_logs(&logs[0], &logs[mid], config).is_gt() {
+        logs.swap(0, mid);
+    }
+
+    // Move pivot to end
+    logs.swap(mid, last);
+
+    let mut i = 0;
+    for j in 0..last {
+        if cmp_logs(&logs[j], &logs[last], config).is_lt() {
+            logs.swap(i, j);
+            i += 1;
+        }
+    }
+    logs.swap(i, last);
+    i
 }
 
 pub fn sort_rx(
@@ -280,6 +429,29 @@ mod tests {
         expected.par_sort_unstable_by(|a, b| cmp_logs(a, b, &comparator));
 
         let actual = parallel_sort(logs, &comparator, None).unwrap();
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn parallel_quicksort_matches_par_sort() {
+        let comparator = SortComparator {
+            by: vec![field_unwrap!("x")],
+            sort_orders: vec![SortOrder::Asc],
+            nulls_orders: vec![NullsOrder::Last],
+        };
+        let logs: Vec<_> = (0..PARALLEL_CHUNK_SIZE * 2)
+            .map(|x| {
+                let random = pseudo_random(x);
+                btreemap! { "x".to_string() => Value::Int(random as i64) }
+            })
+            .collect();
+
+        let mut expected = logs.clone();
+        expected.par_sort_unstable_by(|a, b| cmp_logs(a, b, &comparator));
+
+        let mut actual = logs;
+        parallel_quicksort(&mut actual, &comparator, None);
 
         assert_eq!(actual, expected);
     }
