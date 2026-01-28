@@ -44,6 +44,7 @@ use crate::{
 use self::log_iter_creator::{CancelIterCreator, IterCreator, fn_creator};
 
 pub mod arrow_sort;
+pub mod arrow_sort_final;
 pub mod arrow_sort_optimized;
 pub mod arrow_sort_v2;
 mod cancel_iter;
