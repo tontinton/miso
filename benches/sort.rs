@@ -12,6 +12,7 @@ use std::str::FromStr;
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use miso_workflow::arrow_sort::sort_logs_arrow;
+use miso_workflow::arrow_sort_optimized::sort_logs_arrow_optimized;
 use miso_workflow_types::{
     field::Field,
     field_unwrap,
@@ -319,7 +320,7 @@ fn bench_sort_by_timestamp(c: &mut Criterion) {
         nulls: NullsOrder::Last,
     }];
 
-    for size in [1_000, 10_000, 100_000] {
+    for size in [1_000, 10_000, 100_000, 1_000_000] {
         let logs = generate_timestamp_logs(size, 0.0);
 
         group.bench_with_input(
@@ -341,6 +342,10 @@ fn bench_sort_by_timestamp(c: &mut Criterion) {
         group.bench_with_input(BenchmarkId::new("arrow", size), &logs, |b, logs| {
             b.iter(|| sort_logs_arrow(logs.clone(), &sorts).unwrap());
         });
+
+        group.bench_with_input(BenchmarkId::new("arrow_optimized", size), &logs, |b, logs| {
+            b.iter(|| sort_logs_arrow_optimized(logs.clone(), &sorts).unwrap());
+        });
     }
 
     group.finish();
@@ -356,7 +361,7 @@ fn bench_sort_by_integer(c: &mut Criterion) {
         nulls: NullsOrder::Last,
     }];
 
-    for size in [1_000, 10_000, 100_000] {
+    for size in [1_000, 10_000, 100_000, 1_000_000] {
         let logs = generate_integer_logs(size, 0.0);
 
         group.bench_with_input(
@@ -377,6 +382,10 @@ fn bench_sort_by_integer(c: &mut Criterion) {
 
         group.bench_with_input(BenchmarkId::new("arrow", size), &logs, |b, logs| {
             b.iter(|| sort_logs_arrow(logs.clone(), &sorts).unwrap());
+        });
+
+        group.bench_with_input(BenchmarkId::new("arrow_optimized", size), &logs, |b, logs| {
+            b.iter(|| sort_logs_arrow_optimized(logs.clone(), &sorts).unwrap());
         });
     }
 
@@ -510,7 +519,7 @@ fn bench_sort_multikey(c: &mut Criterion) {
         },
     ];
 
-    for size in [1_000, 10_000, 100_000] {
+    for size in [1_000, 10_000, 100_000, 1_000_000] {
         let logs = generate_multikey_logs(size);
 
         group.bench_with_input(
@@ -531,6 +540,11 @@ fn bench_sort_multikey(c: &mut Criterion) {
 
         group.bench_with_input(BenchmarkId::new("arrow", size), &logs, |b, logs| {
             b.iter(|| sort_logs_arrow(logs.clone(), &sorts).unwrap());
+        });
+
+        // arrow_optimized uses RowConverter for multi-key (should be faster)
+        group.bench_with_input(BenchmarkId::new("arrow_optimized", size), &logs, |b, logs| {
+            b.iter(|| sort_logs_arrow_optimized(logs.clone(), &sorts).unwrap());
         });
     }
 
