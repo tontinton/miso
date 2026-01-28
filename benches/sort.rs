@@ -13,6 +13,7 @@ use std::str::FromStr;
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use miso_workflow::arrow_sort::sort_logs_arrow;
 use miso_workflow::arrow_sort_optimized::sort_logs_arrow_optimized;
+use miso_workflow::arrow_sort_v2::{sort_logs_arrow_v2, sort_logs_arrow_v2_parallel};
 use miso_workflow_types::{
     field::Field,
     field_unwrap,
@@ -345,6 +346,14 @@ fn bench_sort_by_timestamp(c: &mut Criterion) {
 
         group.bench_with_input(BenchmarkId::new("arrow_optimized", size), &logs, |b, logs| {
             b.iter(|| sort_logs_arrow_optimized(logs.clone(), &sorts).unwrap());
+        });
+
+        group.bench_with_input(BenchmarkId::new("arrow_v2", size), &logs, |b, logs| {
+            b.iter(|| sort_logs_arrow_v2(logs.clone(), &sorts).unwrap());
+        });
+
+        group.bench_with_input(BenchmarkId::new("arrow_v2_parallel", size), &logs, |b, logs| {
+            b.iter(|| sort_logs_arrow_v2_parallel(logs.clone(), &sorts).unwrap());
         });
     }
 
