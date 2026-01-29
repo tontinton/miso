@@ -2,18 +2,87 @@ use std::{cmp::Ordering, collections::BinaryHeap, iter, rc::Rc};
 
 use miso_common::metrics::{METRICS, STEP_TOPN};
 use miso_workflow_types::{
+    field::Field,
     log::{Log, LogItem, LogIter, PartialStreamKey},
-    sort::Sort,
+    sort::{NullsOrder, Sort, SortOrder},
+    value::Value,
 };
 use scoped_thread_local::scoped_thread_local;
 
 use super::{
+    interpreter::get_field_value,
     log_utils::PartialStreamItem,
     partial_stream::PartialLogIter,
     partial_stream_tracker::{Mergeable, PartialStreamTracker},
-    sort::{SortComparator, cmp_logs},
     try_next, try_next_with_partial_stream,
 };
+
+#[derive(Debug)]
+struct SortComparator {
+    by: Vec<Field>,
+    sort_orders: Vec<SortOrder>,
+    nulls_orders: Vec<NullsOrder>,
+}
+
+impl SortComparator {
+    fn new(sorts: Vec<Sort>) -> Self {
+        let mut by = Vec::with_capacity(sorts.len());
+        let mut sort_orders = Vec::with_capacity(sorts.len());
+        let mut nulls_orders = Vec::with_capacity(sorts.len());
+
+        for sort in sorts {
+            by.push(sort.by);
+            sort_orders.push(sort.order);
+            nulls_orders.push(sort.nulls);
+        }
+
+        Self {
+            by,
+            sort_orders,
+            nulls_orders,
+        }
+    }
+}
+
+fn cmp_logs(a: &Log, b: &Log, config: &SortComparator) -> Ordering {
+    for ((key, sort_order), nulls_order) in config
+        .by
+        .iter()
+        .zip(&config.sort_orders)
+        .zip(&config.nulls_orders)
+    {
+        let a_val = get_field_value(a, key).unwrap_or(&Value::Null);
+        let b_val = get_field_value(b, key).unwrap_or(&Value::Null);
+        let mut any_null = true;
+        let ordering = match (a_val, b_val, nulls_order) {
+            (Value::Null, Value::Null, _) => Ordering::Equal,
+            (Value::Null, _, NullsOrder::First) => Ordering::Less,
+            (_, Value::Null, NullsOrder::First) => Ordering::Greater,
+            (Value::Null, _, NullsOrder::Last) => Ordering::Greater,
+            (_, Value::Null, NullsOrder::Last) => Ordering::Less,
+            _ => {
+                any_null = false;
+                a_val.cmp(b_val)
+            }
+        };
+
+        if ordering == Ordering::Equal {
+            continue;
+        }
+
+        if any_null {
+            return ordering;
+        }
+
+        return if *sort_order == SortOrder::Asc {
+            ordering
+        } else {
+            ordering.reverse()
+        };
+    }
+
+    Ordering::Equal
+}
 
 struct SortComparatorTLS<'a>(&'a SortComparator);
 
@@ -283,11 +352,6 @@ impl Iterator for PartialTopNIter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use miso_workflow_types::{
-        field::Field,
-        sort::{NullsOrder, SortOrder},
-        value::Value,
-    };
     use std::str::FromStr;
 
     fn plog(val: i64, partial_stream_id: usize, source_id: usize) -> LogItem {

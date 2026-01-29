@@ -119,8 +119,8 @@ macro_rules! impl_op {
             _ => bail!(
                 "unsupported '{}' operation between: {}, {}",
                 $op_str,
-                $lhs.kind(),
-                $rhs.kind()
+                $lhs.name(),
+                $rhs.name()
             ),
         }
     }};
@@ -369,7 +369,7 @@ impl<'a> Val<'a> {
                 Value::String(x) => x
                     .parse::<f64>()
                     .map_err(|_| eyre!("cannot cast '{x}' to float"))?,
-                _ => bail!("cannot cast '{}' to float", cow.as_ref().kind()),
+                _ => bail!("cannot cast '{}' to float", cow.as_ref().name()),
             }),
             CastType::Int => Value::from(match cow.as_ref() {
                 Value::Null => 0,
@@ -380,7 +380,7 @@ impl<'a> Val<'a> {
                 Value::String(x) => x
                     .parse::<i64>()
                     .map_err(|_| eyre!("Cannot cast '{x}' to int"))?,
-                _ => bail!("cannot cast '{}' to int", cow.as_ref().kind()),
+                _ => bail!("cannot cast '{}' to int", cow.as_ref().name()),
             }),
             CastType::String => {
                 if let Cow::Owned(Value::String(x)) = cow {
@@ -395,7 +395,7 @@ impl<'a> Val<'a> {
                     Value::UInt(x) => x.to_string(),
                     Value::Float(x) => x.to_string(),
                     Value::String(x) => x.clone(),
-                    _ => bail!("cannot cast '{}' to string", cow.as_ref().kind()),
+                    _ => bail!("cannot cast '{}' to string", cow.as_ref().name()),
                 })
             }
         };
@@ -430,13 +430,13 @@ impl<'a> Val<'a> {
                 let Some(a) = self_val.as_f64() else {
                     bail!(
                         "cannot bin '{}', currently only numbers and timestamps are supported",
-                        self_val.kind()
+                        self_val.name()
                     );
                 };
                 let Some(b) = by_val.as_f64() else {
                     bail!(
                         "cannot bin by '{}', currently only numbers and timespans are supported",
-                        by_val.kind()
+                        by_val.name()
                     );
                 };
 

@@ -17,6 +17,7 @@ members = [
 ]
 
 [workspace.dependencies]
+arrow = { version = "54", default-features = false }
 arboard = "3.6.1"
 async-stream = "0.3.6"
 async-trait = "0.1"
@@ -100,7 +101,10 @@ tracing-opentelemetry.workspace = true
 tracing-subscriber.workspace = true
 
 [dev-dependencies]
+arrow.workspace = true
 collection_macros.workspace = true
+rayon.workspace = true
+time.workspace = true
 criterion.workspace = true
 ctor.workspace = true
 flume.workspace = true
@@ -139,5 +143,9 @@ incremental = true
 
 [[bench]]
 name = "join"
+harness = false
+
+[[bench]]
+name = "sort"
 harness = false
 

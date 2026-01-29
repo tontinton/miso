@@ -1,10 +1,10 @@
 use std::{fmt::Display, mem::Discriminant};
 
 use color_eyre::eyre::{Result, bail};
-use miso_workflow_types::value::Value;
+use miso_workflow_types::value::{Value, ValueKind};
 
 pub struct TypeTracker {
-    tracked: Vec<Option<Discriminant<Value>>>,
+    tracked: Vec<Option<(Discriminant<Value>, ValueKind)>>,
 }
 
 impl TypeTracker {
@@ -22,7 +22,7 @@ impl TypeTracker {
         let value_type = std::mem::discriminant(value);
         let tracked = &mut self.tracked[index];
 
-        if let Some(t) = tracked {
+        if let Some((t, _)) = tracked {
             if *t != value_type {
                 bail!(
                     "cannot operate over differing types (key '{}'): {:?} != {:?}",
@@ -32,10 +32,17 @@ impl TypeTracker {
                 );
             }
         } else {
-            *tracked = Some(value_type);
+            *tracked = Some((value_type, value.kind()));
         }
 
         Ok(())
+    }
+
+    pub fn into_types(self) -> Vec<ValueKind> {
+        self.tracked
+            .into_iter()
+            .map(|t| t.map(|(_, col_type)| col_type).unwrap_or(ValueKind::Null))
+            .collect()
     }
 }
 
