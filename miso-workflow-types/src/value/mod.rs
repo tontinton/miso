@@ -11,6 +11,7 @@ use std::{
     hash::{Hash, Hasher},
 };
 
+use kinded::Kinded;
 use serde::{Deserialize, Deserializer, Serialize};
 use time::{Duration, OffsetDateTime};
 
@@ -19,7 +20,7 @@ use crate::field::Field;
 pub type Map<K, V> = BTreeMap<K, V>;
 pub type Entry<'a, K, V> = std::collections::btree_map::Entry<'a, K, V>;
 
-#[derive(Clone, Debug)]
+#[derive(Kinded, Clone, Debug)]
 pub enum Value {
     Null,
     Bool(bool),
@@ -460,7 +461,7 @@ impl Serialize for Value {
 }
 
 impl Value {
-    pub fn kind(&self) -> &'static str {
+    pub fn name(&self) -> &'static str {
         match self {
             Value::Null => "null",
             Value::Bool(_) => "bool",
