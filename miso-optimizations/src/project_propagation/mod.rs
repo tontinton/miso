@@ -1,4 +1,4 @@
-mod expr_substitude;
+pub mod expr_substitude;
 
 use hashbrown::{HashMap, HashSet};
 use miso_workflow::WorkflowStep;
