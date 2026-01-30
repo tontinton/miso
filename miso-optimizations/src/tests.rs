@@ -366,10 +366,7 @@ fn reorder_filter_before_sort() {
 #[test_case(
     S::Project(vec![literal_project("c", int_val(50))]),
     S::Filter(Expr::Eq(Box::new(Expr::Field(field("c"))), Box::new(Expr::Literal(int_val(50))))),
-    vec![
-        S::Filter(Expr::Eq(Box::new(Expr::Literal(int_val(50))), Box::new(Expr::Literal(int_val(50))))),
-        S::Project(vec![literal_project("c", int_val(50))])
-    ]
+    vec![S::Project(vec![literal_project("c", int_val(50))])]
     ; "literal through filter"
 )]
 #[test_case(
@@ -925,10 +922,7 @@ fn test_project_propagation_summarize_variants(
         S::Filter(Expr::Eq(Box::new(Expr::Field(field("x"))), Box::new(Expr::Literal(int_val(50))))),
         sort(vec![sort_asc(field("x"))])
     ],
-    vec![
-        S::Filter(Expr::Eq(Box::new(Expr::Literal(int_val(50))), Box::new(Expr::Literal(int_val(50))))),
-        S::Project(vec![literal_project("x", int_val(50))])
-    ]
+    vec![S::Project(vec![literal_project("x", int_val(50))])]
     ; "literal through filter with sort removed"
 )]
 #[test_case(
@@ -993,10 +987,7 @@ fn test_project_propagation_summarize_variants(
         S::Expand(expand(vec![field("x")])),
         S::Filter(Expr::Eq(Box::new(Expr::Field(field("x"))), Box::new(Expr::Literal(int_val(50))))),
     ],
-    vec![
-        S::Filter(Expr::Eq(Box::new(Expr::Literal(int_val(50))), Box::new(Expr::Literal(int_val(50))))),
-        S::Project(vec![literal_project("x", int_val(50))])
-    ]
+    vec![S::Project(vec![literal_project("x", int_val(50))])]
     ; "literal through filter with expand removed"
 )]
 fn test_project_propagation_multi_step(input: Vec<S>, expected: Vec<S>) {
@@ -1453,6 +1444,42 @@ fn summarize_const_to_project() {
         vec![
             S::Limit(1),
             S::Project(vec![literal_project("Column1", string_val("yes"))]),
+        ],
+    );
+}
+
+#[test]
+fn filter_propagation_into_summarize_case() {
+    check_default(
+        vec![
+            S::Filter(Expr::Eq(
+                Box::new(Expr::Field(field("x"))),
+                Box::new(Expr::Literal(int_val(5))),
+            )),
+            S::Summarize(Summarize {
+                aggs: HashMap::new(),
+                by: vec![by_field(
+                    Expr::Case(
+                        vec![(
+                            Expr::Eq(
+                                Box::new(Expr::Field(field("x"))),
+                                Box::new(Expr::Literal(int_val(7))),
+                            ),
+                            Expr::Literal(string_val("no")),
+                        )],
+                        Box::new(Expr::Literal(string_val("yes"))),
+                    ),
+                    "result",
+                )],
+            }),
+        ],
+        vec![
+            S::Filter(Expr::Eq(
+                Box::new(Expr::Field(field("x"))),
+                Box::new(Expr::Literal(int_val(5))),
+            )),
+            S::Limit(1),
+            S::Project(vec![literal_project("result", string_val("yes"))]),
         ],
     );
 }

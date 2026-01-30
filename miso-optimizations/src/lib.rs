@@ -7,6 +7,7 @@ use const_folding::ConstFolding;
 use convert_sort_limit_to_topn::ConvertSortLimitToTopN;
 use dynamic_filter::DynamicFilter;
 use eliminate_unused_fields::EliminateUnusedFields;
+use filter_propagation::FilterPropagation;
 use merge_filters_into_and_filter::MergeFiltersIntoAndFilter;
 use merge_topns::MergeTopNs;
 use mux_into_union::MuxIntoUnion;
@@ -33,6 +34,7 @@ mod convert_sort_limit_to_topn;
 mod dynamic_filter;
 mod eliminate_unused_fields;
 mod field_replacer;
+mod filter_propagation;
 mod merge_filters_into_and_filter;
 mod merge_topns;
 mod mux_into_union;
@@ -124,8 +126,6 @@ impl Optimizer {
                 // Must come after dynamic filtering, so the split scan nodes will also receive
                 // the dynamic filter.
                 opt_once!(SplitScanIntoUnion),
-                // Always returns something, even if the step is unmodified, so run only once.
-                opt_once!(ConstFolding),
                 opt_once!(EliminateUnusedFields),
             ],
             // Predicate pushdowns + optimizations that help predicate pushdowns.
@@ -134,6 +134,8 @@ impl Optimizer {
                 // Project & Extend & Rename.
                 opt!(ProjectPropagationWithEnd),
                 opt!(ProjectPropagationWithoutEnd),
+                opt!(FilterPropagation),
+                opt!(ConstFolding),
                 opt!(RemoveRedundantEmptySteps),
                 // Filter.
                 opt!(RemoveNoOpFilter),
