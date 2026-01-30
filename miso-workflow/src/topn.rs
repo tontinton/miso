@@ -354,26 +354,8 @@ impl Iterator for PartialTopNIter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_utils::{pdone, plog_val as plog};
     use std::str::FromStr;
-
-    fn plog(val: i64, partial_stream_id: usize, source_id: usize) -> LogItem {
-        let mut l = Log::new();
-        l.insert("x".into(), Value::from(val));
-        LogItem::PartialStreamLog(
-            l,
-            PartialStreamKey {
-                partial_stream_id,
-                source_id,
-            },
-        )
-    }
-
-    fn pdone(partial_stream_id: usize, source_id: usize) -> LogItem {
-        LogItem::PartialStreamDone(PartialStreamKey {
-            partial_stream_id,
-            source_id,
-        })
-    }
 
     fn top2_desc() -> (Vec<Sort>, usize) {
         (

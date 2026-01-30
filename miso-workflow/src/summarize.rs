@@ -770,30 +770,7 @@ fn expr_to_field(expr: &Expr) -> Option<&Field> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use miso_workflow_types::log::PartialStreamKey;
-
-    fn make_log(x: i64) -> Log {
-        let mut log = Log::new();
-        log.insert("x".into(), Value::from(x));
-        log
-    }
-
-    fn plog(log: Log, partial_stream_id: usize, source_id: usize) -> LogItem {
-        LogItem::PartialStreamLog(
-            log,
-            PartialStreamKey {
-                partial_stream_id,
-                source_id,
-            },
-        )
-    }
-
-    fn pdone(partial_stream_id: usize, source_id: usize) -> LogItem {
-        LogItem::PartialStreamDone(PartialStreamKey {
-            partial_stream_id,
-            source_id,
-        })
-    }
+    use crate::test_utils::{make_log, pdone, plog};
 
     fn create_summarize_iter_with_limit(input: Vec<LogItem>, limit: u64) -> SummarizeIter {
         SummarizeIter::new(

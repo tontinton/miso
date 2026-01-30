@@ -69,6 +69,8 @@ mod type_tracker;
 mod union;
 
 #[cfg(test)]
+pub mod test_utils;
+#[cfg(test)]
 mod tests;
 
 pub const CHANNEL_CAPACITY: usize = 256;

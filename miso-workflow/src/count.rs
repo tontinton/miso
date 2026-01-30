@@ -149,28 +149,7 @@ impl PartialLogIter for CountIter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use miso_workflow_types::log::PartialStreamKey;
-
-    fn log() -> LogItem {
-        LogItem::Log(Log::new())
-    }
-
-    fn plog(partial_stream_id: usize, source_id: usize) -> LogItem {
-        LogItem::PartialStreamLog(
-            Log::new(),
-            PartialStreamKey {
-                partial_stream_id,
-                source_id,
-            },
-        )
-    }
-
-    fn pdone(partial_stream_id: usize, source_id: usize) -> LogItem {
-        LogItem::PartialStreamDone(PartialStreamKey {
-            partial_stream_id,
-            source_id,
-        })
-    }
+    use crate::test_utils::{log, pdone, plog_empty as plog};
 
     fn collect_items(input: Vec<LogItem>) -> Vec<LogItem> {
         CountIter::new_simple(Box::new(input.into_iter())).collect()
