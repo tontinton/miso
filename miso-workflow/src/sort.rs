@@ -156,12 +156,15 @@ fn build_column_array(
 
         ValueKind::Timestamp => {
             let n = logs.len();
-            let mut values = vec![0i64; n];
-            let mut nulls = vec![false; n];
-            for (i, log) in logs.iter().enumerate() {
+            let mut values = Vec::with_capacity(n);
+            let mut nulls = Vec::with_capacity(n);
+            for log in logs {
                 if let Some(Value::Timestamp(ts)) = get_field_value(log, field) {
-                    values[i] = ts.unix_timestamp_nanos() as i64;
-                    nulls[i] = true;
+                    values.push(ts.unix_timestamp_nanos() as i64);
+                    nulls.push(true);
+                } else {
+                    values.push(0);
+                    nulls.push(false);
                 }
             }
             Arc::new(TimestampNanosecondArray::new(
