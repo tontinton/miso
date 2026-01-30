@@ -1,3 +1,5 @@
+//! Merges logs from multiple input channels. Emits SourceDone when each source finishes.
+
 use crossbeam_utils::Backoff;
 use flume::{Receiver, RecvError, TryRecvError};
 use futures_lite::future::block_on;

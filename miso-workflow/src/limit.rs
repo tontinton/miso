@@ -1,3 +1,5 @@
+//! Takes the first N logs then stops. Tracks limits separately per partial stream.
+
 use hashbrown::HashMap;
 use miso_common::metrics::{METRICS, STEP_LIMIT};
 use miso_workflow_types::log::{LogItem, LogIter, PartialStreamKey};

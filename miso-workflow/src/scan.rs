@@ -1,3 +1,5 @@
+//! Reads logs from a data source via a connector. Supports dynamic filters from joins.
+
 use std::{future::Future, sync::Arc, time::Duration};
 
 use color_eyre::{Result, eyre::Context};

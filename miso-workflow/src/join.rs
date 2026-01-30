@@ -1,3 +1,6 @@
+//! Hash join supporting inner, outer, left, and right joins. Can partition across threads
+//! for parallelism. Supports dynamic filters to push join keys to the other side. Memory limited.
+
 use std::hash::BuildHasher;
 use std::iter;
 
