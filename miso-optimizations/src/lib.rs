@@ -26,6 +26,7 @@ use remove_redundant_steps_before_aggregation::RemoveRedundantStepsBeforeAggrega
 use reorder_filter_before_sort::ReorderFilterBeforeSort;
 use short_circuit_false_filter::ShortCircuitFalseFilter;
 use split_scan_to_union::SplitScanIntoUnion;
+use summarize_const_to_project::SummarizeConstToProject;
 
 mod const_folding;
 mod convert_sort_limit_to_topn;
@@ -51,6 +52,7 @@ mod remove_redundant_steps_before_aggregation;
 mod reorder_filter_before_sort;
 mod short_circuit_false_filter;
 mod split_scan_to_union;
+mod summarize_const_to_project;
 
 #[cfg(test)]
 mod test_utils;
@@ -143,9 +145,10 @@ impl Optimizer {
                 opt!(PushLimitIntoTopN),
                 opt!(MergeTopNs),
                 opt!(RemoveRedundantSortBeforeTopN),
-                // Count.
+                // Summarize.
                 opt!(RemoveRedundantSortsBeforeAggregation),
                 opt!(RemoveRedundantStepsBeforeAggregation),
+                opt!(SummarizeConstToProject),
                 // Union.
                 opt!(PushUnionIntoScan),
                 opt!(PushStepsIntoUnion),

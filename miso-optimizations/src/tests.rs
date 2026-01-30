@@ -1439,3 +1439,20 @@ fn sort_longer_than_topn_unchanged() {
         vec![sort(sort_fields), S::TopN(topn_sorts, 10)],
     );
 }
+
+#[test]
+fn summarize_const_to_project() {
+    check_default(
+        vec![S::Summarize(Summarize {
+            aggs: HashMap::new(),
+            by: vec![by_field(
+                Expr::Literal(Value::String("yes".to_string())),
+                "Column1",
+            )],
+        })],
+        vec![
+            S::Limit(1),
+            S::Project(vec![literal_project("Column1", string_val("yes"))]),
+        ],
+    );
+}
