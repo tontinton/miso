@@ -1,3 +1,5 @@
+//! Writes logs to a sink while forwarding them downstream unchanged.
+
 use std::sync::Arc;
 
 use flume::Sender;

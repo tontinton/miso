@@ -1,3 +1,5 @@
+//! Keeps the top N logs using a heap. More memory efficient than sort + limit for small N.
+
 use std::{cmp::Ordering, collections::BinaryHeap, iter, rc::Rc};
 
 use miso_common::metrics::{METRICS, STEP_TOPN};

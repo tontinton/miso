@@ -1,3 +1,5 @@
+//! Renames fields in each log.
+
 use miso_common::metrics::{METRICS, STEP_RENAME};
 use miso_workflow_types::{
     field::Field,

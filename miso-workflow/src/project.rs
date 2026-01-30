@@ -1,3 +1,5 @@
+//! Evaluates expressions and outputs selected fields. Extend mode adds to existing fields.
+
 use miso_common::metrics::{METRICS, STEP_PROJECT};
 use miso_workflow_types::{
     log::{Log, LogItem, LogIter},

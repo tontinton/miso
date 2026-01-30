@@ -1,3 +1,5 @@
+//! Expands array or object fields into multiple rows, one per element.
+
 use std::{collections::BTreeMap, vec};
 
 use miso_common::metrics::{METRICS, STEP_EXPAND};

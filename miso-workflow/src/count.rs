@@ -1,3 +1,5 @@
+//! Counts logs and emits a single result. Mux mode sums existing count fields instead.
+
 use std::iter;
 
 use miso_common::metrics::{METRICS, STEP_COUNT};

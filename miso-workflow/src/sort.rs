@@ -1,3 +1,5 @@
+//! Collects all logs, sorts them using Arrow's columnar format for speed. Memory limited.
+
 use std::{num::NonZero, sync::Arc, thread::available_parallelism};
 
 use arrow::{

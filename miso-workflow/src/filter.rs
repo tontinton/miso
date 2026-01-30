@@ -1,3 +1,5 @@
+//! Keeps logs where the expression evaluates to true. Drops the rest.
+
 use miso_common::metrics::{ERROR_EVAL, METRICS, STEP_FILTER};
 use miso_workflow_types::{
     expr::Expr,
