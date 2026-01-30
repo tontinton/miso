@@ -471,7 +471,7 @@ fn test_summarize() {
                 Some(Aggregation::Sum(_))
             ));
 
-            assert!(matches!(summarize.by[0], Expr::Field(_)));
+            assert!(matches!(summarize.by[0].expr, Expr::Field(_)));
         }
         _ => panic!("Expected Summarize step"),
     }

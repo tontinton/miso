@@ -1405,10 +1405,10 @@ impl Connector for ElasticsearchConnector {
         let mut aggs = Map::new();
         let mut current_agg = &mut aggs;
 
-        for (i, expr) in config.by.iter().enumerate() {
+        for (i, bf) in config.by.iter().enumerate() {
             let name = format!("{AGGREGATION_RESULTS_NAME}_{i}");
 
-            let bucket_def = match expr {
+            let bucket_def = match &bf.expr {
                 Expr::Field(field) => json!({
                     "terms": {
                         "field": field,
@@ -1416,10 +1416,10 @@ impl Connector for ElasticsearchConnector {
                     }
                 }),
                 Expr::Bin(lhs, rhs) => {
-                    let Expr::Field(field) = &**lhs else {
+                    let Expr::Field(field) = lhs.as_ref() else {
                         return None;
                     };
-                    let Expr::Literal(value) = &**rhs else {
+                    let Expr::Literal(value) = rhs.as_ref() else {
                         return None;
                     };
                     match value {
@@ -1463,9 +1463,9 @@ impl Connector for ElasticsearchConnector {
         let group_by = config
             .by
             .iter()
-            .map(|expr| match expr {
+            .map(|bf| match &bf.expr {
                 Expr::Field(field) => Some(field.to_string()),
-                Expr::Bin(lhs, _) => match &**lhs {
+                Expr::Bin(lhs, _) => match lhs.as_ref() {
                     Expr::Field(field) => Some(field.to_string()),
                     _ => None,
                 },

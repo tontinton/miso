@@ -15,7 +15,7 @@ use miso_workflow_types::{
     project::ProjectField,
     query::{QueryStep, ScanKind},
     sort::{NullsOrder, Sort, SortOrder},
-    summarize::{Aggregation, Summarize},
+    summarize::{Aggregation, ByField, Summarize},
     value::Value,
 };
 use serde::Serialize;
@@ -666,6 +666,7 @@ fn expr_default_name(expr: &Expr) -> Option<String> {
     Some(match expr {
         Expr::Field(field) => field.to_string(),
         Expr::Cast(_, inner) => expr_default_name(inner)?,
+        Expr::Bin(lhs, _) => expr_default_name(lhs)?,
         _ => return None,
     })
 }
@@ -704,6 +705,20 @@ fn name_project_fields(fields: Vec<UnnamedProjectField>) -> Vec<ProjectField> {
             }
         };
         result.push(ProjectField { from: pf.from, to });
+    }
+    result
+}
+
+fn name_summarize_by(exprs: Vec<Expr>) -> Vec<ByField> {
+    let mut result = vec![];
+    let mut used_names: HashSet<String> = HashSet::new();
+    for expr in exprs {
+        let name = if let Some(default) = expr_default_name(&expr) {
+            generate_unique_name(&default, &default, &mut used_names)
+        } else {
+            generate_unique_name("Column", "Column1", &mut used_names)
+        };
+        result.push(ByField { expr, name });
     }
     result
 }
@@ -964,7 +979,7 @@ where
             }
             QueryStep::Summarize(Summarize {
                 aggs,
-                by: by.unwrap_or_default(),
+                by: name_summarize_by(by.unwrap_or_default()),
             })
         })
         .labelled("summarize")

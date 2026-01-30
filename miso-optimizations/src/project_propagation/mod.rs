@@ -8,7 +8,7 @@ use miso_workflow_types::{
     field::Field,
     project::ProjectField,
     sort::Sort,
-    summarize::{Aggregation, Summarize},
+    summarize::{Aggregation, ByField, Summarize},
     value::Value,
 };
 
@@ -289,12 +289,19 @@ fn rewrite_summarize(
 
         sum.by
             .into_iter()
-            .map(|e| expr_subst.substitute(e))
+            .map(|bf| {
+                let new_expr = expr_subst.substitute(bf.expr);
+                let new_name = renames.get(&bf.name).cloned().unwrap_or(bf.name);
+                ByField {
+                    name: new_name,
+                    expr: new_expr,
+                }
+            })
             .collect::<Vec<_>>()
     };
 
-    for e in &new_by {
-        summarize_output_fields.extend(e.fields());
+    for bf in &new_by {
+        summarize_output_fields.insert(bf.name.clone());
     }
 
     let expr_subst = ExprSubstitute::new(renames, literals);

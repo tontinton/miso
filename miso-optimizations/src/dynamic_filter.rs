@@ -127,7 +127,7 @@ fn calculate_max_distinct_count(
                     return None;
                 }
                 prev_dcount = dcount.take();
-                fields = summarize.by.iter().map(|x| x.to_string()).collect();
+                fields = summarize.by.iter().map(|bf| bf.name.to_string()).collect();
             }
 
             WorkflowStep::Sort(..) | WorkflowStep::Filter(..) => {}

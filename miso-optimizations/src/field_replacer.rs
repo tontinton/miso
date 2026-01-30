@@ -6,7 +6,7 @@ use miso_workflow_types::{
     field::Field,
     project::ProjectField,
     sort::Sort,
-    summarize::{Aggregation, Summarize},
+    summarize::{Aggregation, ByField, Summarize},
 };
 
 pub struct FieldReplacer<'a> {
@@ -90,7 +90,10 @@ impl FieldReplacer<'_> {
             by: summarize
                 .by
                 .into_iter()
-                .map(|e| self.transform(e))
+                .map(|bf| ByField {
+                    name: bf.name,
+                    expr: self.transform(bf.expr),
+                })
                 .collect(),
         }
     }
