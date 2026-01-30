@@ -153,6 +153,8 @@ enum SplunkOp {
         numeric_agg_fields: HashSet<String>,
     },
     Count,
+    /// `| rename old as new, ...` - used to rename fields after stats
+    Rename(Vec<(String, String)>),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -272,6 +274,15 @@ impl SplunkHandle {
                 SplunkOp::Count => {
                     spl.push_str(" | stats count");
                 }
+                SplunkOp::Rename(renames) => {
+                    spl.push_str(" | rename ");
+                    let rename_clause = renames
+                        .iter()
+                        .map(|(from, to)| format!("{} as {}", from, to))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    spl.push_str(&rename_clause);
+                }
             }
         }
 
@@ -356,6 +367,14 @@ impl fmt::Display for SplunkHandle {
                     }
                 }
                 SplunkOp::Count => items.push("count".to_string()),
+                SplunkOp::Rename(renames) => {
+                    let s = renames
+                        .iter()
+                        .map(|(from, to)| format!("{} as {}", from, to))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    items.push(format!("rename={}", s));
+                }
             }
         }
 
@@ -1062,28 +1081,35 @@ impl Connector for SplunkConnector {
 
         let aggs = agg_parts.join(", ");
 
-        let by_fields: Vec<String> = config
-            .by
-            .iter()
-            .filter_map(|bf| match &bf.expr {
-                Expr::Field(field) => Some(field.to_string()),
+        let mut by_fields = Vec::new();
+        let mut renames = Vec::new();
+        for bf in &config.by {
+            match &bf.expr {
+                Expr::Field(field) => {
+                    by_fields.push(field.to_string());
+                    if *field != bf.name {
+                        renames.push((field.to_string(), bf.name.to_string()));
+                    }
+                }
                 // Splunk's binning syntax is different and more complex.
                 // For now, don't push down summarize when binning is involved.
-                Expr::Bin(..) => None,
-                _ => None,
-            })
-            .collect();
-
-        if by_fields.len() != config.by.len() {
-            return None;
+                Expr::Bin(..) => return None,
+                _ => return None,
+            }
         }
 
-        Some(Box::new(handle.push(SplunkOp::Stats {
+        let mut handle = handle.push(SplunkOp::Stats {
             aggs,
             by: by_fields,
             timestamp_agg_fields,
             numeric_agg_fields,
-        })))
+        });
+
+        if !renames.is_empty() {
+            handle = handle.push(SplunkOp::Rename(renames));
+        }
+
+        Some(Box::new(handle))
     }
 
     fn apply_union(

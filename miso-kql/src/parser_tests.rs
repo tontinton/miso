@@ -478,6 +478,28 @@ fn test_summarize() {
 }
 
 #[test]
+fn test_summarize_with_aliased_by_field() {
+    let query = "connector.table | summarize cnt=count() by u=user, src_ip";
+    let result = parse_unwrap!(query);
+
+    match &result[1] {
+        QueryStep::Summarize(summarize) => {
+            assert_eq!(summarize.aggs.len(), 1);
+            assert_eq!(summarize.by.len(), 2);
+
+            assert_eq!(summarize.by[0].name, field_unwrap!("u"));
+            assert!(matches!(&summarize.by[0].expr, Expr::Field(f) if *f == field_unwrap!("user")));
+
+            assert_eq!(summarize.by[1].name, field_unwrap!("src_ip"));
+            assert!(
+                matches!(&summarize.by[1].expr, Expr::Field(f) if *f == field_unwrap!("src_ip"))
+            );
+        }
+        _ => panic!("Expected Summarize step"),
+    }
+}
+
+#[test]
 fn test_summarize_unnamed_aggregations() {
     let query = "connector.table | summarize count(), sum(field1), avg(field2)";
     let result = parse_unwrap!(query);

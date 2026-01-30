@@ -262,6 +262,12 @@ pub const BASE_PREDICATE_PUSHDOWN_TESTS: &[TestCase] = &[
         count: 8,
         name: "summarize_multiple_groupby",
     },
+    TestCase {
+        query: r#"test.stack | summarize c=count() by u=user"#,
+        expected: expected!("test.stack"),
+        count: 5,
+        name: "summarize_with_aliased_by_field",
+    },
     // Top-N and sorting
     TestCase {
         query: r#"test.stack | summarize minQuestionId=min(questionId) by user | top 3 by minQuestionId"#,
