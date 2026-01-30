@@ -1471,9 +1471,9 @@ impl Connector for QuickwitConnector {
             .by
             .iter()
             .map(|bf| match &bf.expr {
-                Expr::Field(field) => Some(field.to_string()),
+                Expr::Field(_) => Some(bf.name.to_string()),
                 Expr::Bin(lhs, _) => match lhs.as_ref() {
-                    Expr::Field(field) => Some(field.to_string()),
+                    Expr::Field(_) => Some(bf.name.to_string()),
                     _ => None,
                 },
                 _ => None,

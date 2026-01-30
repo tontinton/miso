@@ -709,11 +709,14 @@ fn name_project_fields(fields: Vec<UnnamedProjectField>) -> Vec<ProjectField> {
     result
 }
 
-fn name_summarize_by(exprs: Vec<Expr>) -> Vec<ByField> {
+fn name_summarize_by(exprs: Vec<(Option<Field>, Expr)>) -> Vec<ByField> {
     let mut result = vec![];
     let mut used_names: HashSet<String> = HashSet::new();
-    for expr in exprs {
-        let name = if let Some(default) = expr_default_name(&expr) {
+    for (explicit_name, expr) in exprs {
+        let name = if let Some(name) = explicit_name {
+            used_names.insert(name.to_string());
+            name
+        } else if let Some(default) = expr_default_name(&expr) {
             generate_unique_name(&default, &default, &mut used_names)
         } else {
             generate_unique_name("Column", "Column1", &mut used_names)
@@ -933,7 +936,7 @@ where
         .labelled("summarize aggregation")
         .boxed();
 
-    let summarize_agg_expr = (field_no_arr.then_ignore(just(Token::Eq)).or_not())
+    let summarize_agg_expr = (field_no_arr.clone().then_ignore(just(Token::Eq)).or_not())
         .then(summarize_agg)
         .map(|(maybe_field, agg)| (maybe_field, agg))
         .labelled("summarize aggregation expression")
@@ -944,12 +947,20 @@ where
         .collect::<Vec<_>>()
         .boxed();
 
+    let summarize_by_expr = field_no_arr
+        .clone()
+        .then_ignore(just(Token::Eq))
+        .or_not()
+        .then(expr.clone())
+        .labelled("summarize by expression")
+        .boxed();
+
     let summarize_step = just(Token::Summarize)
         .ignore_then(summarize_agg_exprs)
         .then(
             just(Token::By)
                 .ignore_then(
-                    expr.clone()
+                    summarize_by_expr
                         .separated_by(just(Token::Comma))
                         .collect::<Vec<_>>(),
                 )
