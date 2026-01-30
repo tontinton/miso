@@ -1,3 +1,8 @@
+//! Aggregates logs with count, sum, avg, min, max, dcount. Supports grouping by fields.
+//!
+//! Partial streams are accumulated separately, then merged when emitting. Memory is
+//! tracked per-group - when the limit is hit, partial streams are dropped first.
+
 use std::{cmp::Ordering, iter};
 
 use bytesize::ByteSize;
@@ -21,9 +26,19 @@ use crate::type_tracker::TypeTracker;
 use super::{
     log_utils::PartialStreamItem,
     partial_stream::PartialLogIter,
-    partial_stream_tracker::{Mergeable, PartialStreamTracker},
+    partial_stream_tracker::{MemoryError, Mergeable, PartialStreamTracker},
     try_next_with_partial_stream,
 };
+
+macro_rules! same_variant {
+    ($other:expr, $pat:pat => $body:block) => {
+        if let $pat = $other {
+            $body
+        } else {
+            unreachable!("merge called with mismatched AggregateState")
+        }
+    };
+}
 
 #[derive(Debug, Error)]
 pub enum SummarizeError {
@@ -36,14 +51,14 @@ pub enum SummarizeError {
     },
 }
 
-macro_rules! same_variant {
-    ($other:expr, $pat:pat => $body:block) => {
-        if let $pat = $other {
-            $body
-        } else {
-            unreachable!("merge called with mismatched AggregateState")
+impl From<MemoryError> for SummarizeError {
+    fn from(e: MemoryError) -> Self {
+        match e {
+            MemoryError::MemoryLimitExceeded { estimated, limit } => {
+                Self::MemoryLimitExceeded { estimated, limit }
+            }
         }
-    };
+    }
 }
 
 pub fn create_summarize_iter(
@@ -61,7 +76,7 @@ pub fn create_summarize_iter(
         output_fields,
         aggregations,
         is_mux,
-        Some(memory_limit),
+        memory_limit,
     ))
 }
 
@@ -71,14 +86,12 @@ pub struct SummarizeIter {
     output_fields: Vec<Field>,
     aggregations: Vec<Aggregation>,
     is_mux: bool,
-    memory_limit: Option<u64>,
     type_tracker: TypeTracker,
     tracker: PartialStreamTracker<SummarizeState>,
     output: LogIter,
     pending: Vec<LogItem>,
     done: bool,
     rows_processed: u64,
-    current_memory: u64,
 }
 
 impl SummarizeIter {
@@ -88,14 +101,20 @@ impl SummarizeIter {
         output_fields: Vec<Field>,
         aggregations: Vec<Aggregation>,
         is_mux: bool,
-        memory_limit: Option<u64>,
+        memory_limit: u64,
     ) -> Self {
         let initial = if group_by.is_empty() {
             SummarizeState::All(create_aggregates(&aggregations, is_mux))
         } else {
             SummarizeState::GroupBy(HashMap::new())
         };
-        let current_memory = initial.estimate_memory_size() as u64;
+
+        let initial_memory = initial.estimate_memory_size() as u64;
+        let mut tracker = PartialStreamTracker::with_memory_limit(initial, memory_limit);
+        tracker
+            .update_final_with_memory(|_| initial_memory)
+            .unwrap();
+
         Self {
             type_tracker: TypeTracker::new(group_by.len()),
             input,
@@ -103,29 +122,11 @@ impl SummarizeIter {
             output_fields,
             aggregations,
             is_mux,
-            memory_limit,
-            tracker: PartialStreamTracker::new(initial),
+            tracker,
             output: Box::new(iter::empty()),
             pending: Vec::new(),
             done: false,
             rows_processed: 0,
-            current_memory,
-        }
-    }
-
-    fn check_memory_limit(&self) -> Option<LogItem> {
-        let limit = self.memory_limit?;
-        let estimated = self.current_memory;
-        if estimated > limit {
-            Some(LogItem::Err(
-                SummarizeError::MemoryLimitExceeded {
-                    estimated: ByteSize::b(estimated),
-                    limit: ByteSize(limit),
-                }
-                .into(),
-            ))
-        } else {
-            None
         }
     }
 
@@ -161,50 +162,50 @@ impl SummarizeIter {
 
     fn process_log(&mut self, log: &Log) -> Option<LogItem> {
         if self.group_by.is_empty() {
-            let delta = self.tracker.update_final(|s| s.input_all(log));
-            self.current_memory += delta as u64;
+            self.tracker
+                .update_final_with_memory(|s| s.input_all(log) as u64)
+                .err()
+                .map(|e| LogItem::Err(SummarizeError::from(e).into()))
         } else {
             let result = self.extract_group_keys(log)?;
             let keys = match result {
                 Ok(k) => k,
                 Err(e) => return Some(e),
             };
-            let aggs = &self.aggregations;
-            let is_mux = self.is_mux;
-            let delta = self
-                .tracker
-                .update_final(|s| s.input_grouped(keys, log, aggs, is_mux));
-            self.current_memory += delta as u64;
+            self.tracker
+                .update_final_with_memory(|s| {
+                    s.input_grouped(keys, log, &self.aggregations, self.is_mux) as u64
+                })
+                .err()
+                .map(|e| LogItem::Err(SummarizeError::from(e).into()))
         }
-
-        self.check_memory_limit()
     }
 
     fn process_partial_log(&mut self, log: &Log, key: PartialStreamKey) -> Option<LogItem> {
         if self.group_by.is_empty() {
-            let aggs = &self.aggregations;
-            let is_mux = self.is_mux;
-            let state = self
-                .tracker
-                .get_or_create_state(key, || SummarizeState::All(create_aggregates(aggs, is_mux)));
-            let delta = state.input_all(log);
-            self.current_memory += delta as u64;
+            self.tracker
+                .update_partial_with_memory(
+                    key,
+                    || SummarizeState::All(create_aggregates(&self.aggregations, self.is_mux)),
+                    |s| s.input_all(log) as u64,
+                )
+                .err()
+                .map(|e| LogItem::Err(SummarizeError::from(e).into()))
         } else {
             let result = self.extract_group_keys(log)?;
             let keys = match result {
                 Ok(k) => k,
                 Err(e) => return Some(e),
             };
-            let aggs = &self.aggregations;
-            let is_mux = self.is_mux;
-            let state = self
-                .tracker
-                .get_or_create_state(key, || SummarizeState::GroupBy(HashMap::new()));
-            let delta = state.input_grouped(keys, log, aggs, is_mux);
-            self.current_memory += delta as u64;
+            self.tracker
+                .update_partial_with_memory(
+                    key,
+                    || SummarizeState::GroupBy(HashMap::new()),
+                    |s| s.input_grouped(keys, log, &self.aggregations, self.is_mux) as u64,
+                )
+                .err()
+                .map(|e| LogItem::Err(SummarizeError::from(e).into()))
         }
-
-        self.check_memory_limit()
     }
 
     fn state_to_logs(&self, state: &SummarizeState) -> Vec<Log> {
@@ -763,5 +764,70 @@ fn expr_to_field(expr: &Expr) -> Option<&Field> {
             _ => None,
         },
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use miso_workflow_types::log::PartialStreamKey;
+
+    fn make_log(x: i64) -> Log {
+        let mut log = Log::new();
+        log.insert("x".into(), Value::from(x));
+        log
+    }
+
+    fn plog(log: Log, partial_stream_id: usize, source_id: usize) -> LogItem {
+        LogItem::PartialStreamLog(
+            log,
+            PartialStreamKey {
+                partial_stream_id,
+                source_id,
+            },
+        )
+    }
+
+    fn pdone(partial_stream_id: usize, source_id: usize) -> LogItem {
+        LogItem::PartialStreamDone(PartialStreamKey {
+            partial_stream_id,
+            source_id,
+        })
+    }
+
+    fn create_summarize_iter_with_limit(input: Vec<LogItem>, limit: u64) -> SummarizeIter {
+        SummarizeIter::new(
+            Box::new(input.into_iter()),
+            vec![Expr::Field("x".parse().unwrap())],
+            vec!["count_".parse().unwrap()],
+            vec![Aggregation::Count],
+            false,
+            limit,
+        )
+    }
+
+    fn has_error(iter: SummarizeIter) -> bool {
+        iter.into_iter().any(|item| matches!(item, LogItem::Err(_)))
+    }
+
+    #[test]
+    fn memory_limit_drops_partial_stream_before_erroring() {
+        let mut input_with_partial = Vec::new();
+        for i in 0..100 {
+            input_with_partial.push(plog(make_log(i), 0, 1));
+        }
+        input_with_partial.push(pdone(0, 1));
+        input_with_partial.push(LogItem::Log(make_log(999)));
+
+        let iter = create_summarize_iter_with_limit(input_with_partial, 3000);
+        assert!(!has_error(iter));
+
+        let mut input_final_only = Vec::new();
+        for i in 0..100 {
+            input_final_only.push(LogItem::Log(make_log(i)));
+        }
+
+        let iter = create_summarize_iter_with_limit(input_final_only, 500);
+        assert!(has_error(iter));
     }
 }
