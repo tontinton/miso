@@ -10,7 +10,7 @@ use miso_workflow_types::{
     field_unwrap,
     project::ProjectField,
     sort::{NullsOrder, Sort, SortOrder},
-    summarize::{Aggregation, Summarize},
+    summarize::{Aggregation, ByField, Summarize},
     value::Value,
 };
 
@@ -108,7 +108,14 @@ pub fn case(predicates: Vec<(Expr, Expr)>, default: Expr) -> Expr {
     Expr::Case(predicates, Box::new(default))
 }
 
-pub fn summarize(agg_field: &str, agg: Aggregation, by: Vec<Expr>) -> S {
+pub fn by_field(expr: Expr, name: &str) -> ByField {
+    ByField {
+        expr,
+        name: field(name),
+    }
+}
+
+pub fn summarize(agg_field: &str, agg: Aggregation, by: Vec<ByField>) -> S {
     S::Summarize(Summarize {
         aggs: hashmap! { field(agg_field) => agg },
         by,
@@ -118,6 +125,12 @@ pub fn summarize(agg_field: &str, agg: Aggregation, by: Vec<Expr>) -> S {
 pub fn summarize_by(fields: &[&str]) -> S {
     S::Summarize(Summarize {
         aggs: HashMap::new(),
-        by: fields.iter().map(|f| Expr::Field(field(f))).collect(),
+        by: fields
+            .iter()
+            .map(|f| ByField {
+                expr: Expr::Field(field(f)),
+                name: field(f),
+            })
+            .collect(),
     })
 }

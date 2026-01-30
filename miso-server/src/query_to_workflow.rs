@@ -6,7 +6,7 @@ use miso_workflow::{Workflow, WorkflowStep, scan::Scan, tee::Tee};
 use miso_workflow_types::{
     expr::Expr,
     query::{QueryStep, ScanKind},
-    summarize::Summarize,
+    summarize::{ByField, Summarize},
 };
 use tracing::info;
 
@@ -151,7 +151,13 @@ fn to_workflow_steps_inner(
             QueryStep::Distinct(by) => {
                 steps.push(WorkflowStep::Summarize(Summarize {
                     aggs: HashMap::new(),
-                    by: by.into_iter().map(Expr::Field).collect(),
+                    by: by
+                        .into_iter()
+                        .map(|f| ByField {
+                            name: f.clone(),
+                            expr: Expr::Field(f),
+                        })
+                        .collect(),
                 }));
             }
             QueryStep::Union(inner_steps) => {

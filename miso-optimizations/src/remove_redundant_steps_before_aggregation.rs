@@ -56,12 +56,12 @@ mod tests {
     use test_case::test_case;
 
     use super::RemoveRedundantStepsBeforeAggregation;
-    use crate::test_utils::{field, project_field, summarize};
+    use crate::test_utils::{by_field, field, project_field, summarize};
     use crate::{Optimization, OptimizationResult};
 
     #[test_case(
         S::Project(vec![project_field("unused", Expr::Field(field("a")))]),
-        summarize("c", Aggregation::Sum(field("x")), vec![Expr::Field(field("y"))])
+        summarize("c", Aggregation::Sum(field("x")), vec![by_field(Expr::Field(field("y")), "y")])
         ; "project"
     )]
     #[test_case(
@@ -90,7 +90,7 @@ mod tests {
     )]
     #[test_case(
         S::Extend(vec![project_field("x", Expr::Field(field("a")))]),
-        S::Summarize(Summarize { aggs: hashmap! {}, by: vec![Expr::Field(field("x"))] })
+        S::Summarize(Summarize { aggs: hashmap! {}, by: vec![by_field(Expr::Field(field("x")), "x")] })
         ; "extend_field_in_group_by"
     )]
     #[test_case(

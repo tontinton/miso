@@ -2526,3 +2526,43 @@ async fn join_memory_limit_under_limit_succeeds() -> Result<()> {
         .await
         .context("join memory limit under limit should succeed")
 }
+
+#[tokio::test]
+async fn summarize_by_literal() -> Result<()> {
+    check(
+        r#"test.c | summarize by "yes""#,
+        r#"[{"x": 1}, {"x": 2}]"#,
+        r#"[{"Column1": "yes"}]"#,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn summarize_by_literal_with_field() -> Result<()> {
+    check(
+        r#"test.c | summarize by "yes", x, "no""#,
+        r#"[{"x": 1}, {"x": 2}]"#,
+        r#"[{"Column1": "yes", "x": 1, "Column2": "no"}, {"Column1": "yes", "x": 2, "Column2": "no"}]"#,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn summarize_by_duplicate_field() -> Result<()> {
+    check(
+        r#"test.c | summarize by x, x"#,
+        r#"[{"x": 1}, {"x": 2}]"#,
+        r#"[{"x": 1, "x1": 1}, {"x": 2, "x1": 2}]"#,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn summarize_by_cast() -> Result<()> {
+    check(
+        r#"test.c | summarize count() by tostring(x)"#,
+        r#"[{"x": 1}, {"x": 2}, {"x": 1}]"#,
+        r#"[{"x": "1", "count_": 2}, {"x": "2", "count_": 1}]"#,
+    )
+    .await
+}

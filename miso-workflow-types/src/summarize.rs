@@ -9,6 +9,18 @@ pub const MUX_AVG_SUM_SUFFIX: &str = "_sum";
 pub const MUX_AVG_COUNT_SUFFIX: &str = "_num";
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct ByField {
+    pub expr: Expr,
+    pub name: Field,
+}
+
+impl fmt::Display for ByField {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}={}", self.name, self.expr)
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum Aggregation {
     Count,
@@ -53,17 +65,17 @@ impl Aggregation {
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct Summarize {
     pub aggs: HashMap<Field, Aggregation>,
-    pub by: Vec<Expr>,
+    pub by: Vec<ByField>,
 }
 
 impl fmt::Display for Summarize {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "by=[")?;
-        for (i, by) in self.by.iter().enumerate() {
+        for (i, pf) in self.by.iter().enumerate() {
             if i > 0 {
                 write!(f, ", ")?;
             }
-            write!(f, "{by}")?;
+            write!(f, "{pf}")?;
         }
         write!(f, "], aggs=[")?;
         for (i, (key, agg)) in self.aggs.iter().enumerate() {
@@ -89,9 +101,12 @@ impl Summarize {
                     aggs.insert(field, agg);
                 }
                 Aggregation::DCount(input_field) => {
-                    let new_by = Expr::Field(input_field);
-                    if !self.by.contains(&new_by) {
-                        self.by.push(new_by);
+                    let new_by_expr = Expr::Field(input_field.clone());
+                    if !self.by.iter().any(|bf| bf.expr == new_by_expr) {
+                        self.by.push(ByField {
+                            name: input_field.clone(),
+                            expr: new_by_expr,
+                        });
                     }
                 }
                 Aggregation::Avg(input_field) => {
@@ -139,8 +154,8 @@ impl Summarize {
             }
         }
 
-        for expr in &self.by {
-            fields.extend(expr.fields());
+        for bf in &self.by {
+            fields.extend(bf.expr.fields());
         }
 
         fields

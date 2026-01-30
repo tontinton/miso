@@ -152,7 +152,7 @@ mod tests {
     use test_case::test_case;
 
     use super::compute_required_before_step;
-    use crate::test_utils::{field, project_field, sort_asc, summarize};
+    use crate::test_utils::{by_field, field, project_field, sort_asc, summarize};
 
     fn required(step: &S, after: &[&str]) -> HashSet<String> {
         let after = after.iter().map(|s| field(s)).collect();
@@ -172,7 +172,7 @@ mod tests {
         let step = summarize(
             "r",
             Aggregation::Sum(field("x")),
-            vec![Expr::Field(field("y"))],
+            vec![by_field(Expr::Field(field("y")), "y")],
         );
         assert_eq!(
             required(&step, &[]),

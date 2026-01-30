@@ -1065,7 +1065,7 @@ impl Connector for SplunkConnector {
         let by_fields: Vec<String> = config
             .by
             .iter()
-            .filter_map(|expr| match expr {
+            .filter_map(|bf| match &bf.expr {
                 Expr::Field(field) => Some(field.to_string()),
                 // Splunk's binning syntax is different and more complex.
                 // For now, don't push down summarize when binning is involved.

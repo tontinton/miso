@@ -13,7 +13,7 @@ use miso_workflow_types::{
     expr::Expr,
     field::Field,
     log::{Log, LogItem, LogIter, PartialStreamKey},
-    summarize::{Aggregation, MUX_AVG_COUNT_SUFFIX, MUX_AVG_SUM_SUFFIX, Summarize},
+    summarize::{Aggregation, ByField, MUX_AVG_COUNT_SUFFIX, MUX_AVG_SUM_SUFFIX, Summarize},
     value::Value,
 };
 use thiserror::Error;
@@ -82,7 +82,7 @@ pub fn create_summarize_iter(
 
 pub struct SummarizeIter {
     input: LogIter,
-    group_by: Vec<Expr>,
+    group_by: Vec<ByField>,
     output_fields: Vec<Field>,
     aggregations: Vec<Aggregation>,
     is_mux: bool,
@@ -97,7 +97,7 @@ pub struct SummarizeIter {
 impl SummarizeIter {
     fn new(
         input: LogIter,
-        group_by: Vec<Expr>,
+        group_by: Vec<ByField>,
         output_fields: Vec<Field>,
         aggregations: Vec<Aggregation>,
         is_mux: bool,
@@ -134,8 +134,8 @@ impl SummarizeIter {
         let interpreter = LogInterpreter { log };
         let mut keys = Vec::with_capacity(self.group_by.len());
 
-        for (i, expr) in self.group_by.iter().enumerate() {
-            let value = match interpreter.eval(expr) {
+        for (i, bf) in self.group_by.iter().enumerate() {
+            let value = match interpreter.eval(&bf.expr) {
                 Ok(Val(None)) => Value::Null,
                 Ok(v) => v.0.unwrap().into_owned(),
                 Err(e) => {
@@ -151,7 +151,7 @@ impl SummarizeIter {
             if value == Value::Null {
                 return None;
             }
-            if let Err(e) = self.type_tracker.check(i, &value, expr) {
+            if let Err(e) = self.type_tracker.check(i, &value, &bf.expr) {
                 return Some(Err(LogItem::Err(e)));
             }
             keys.push(value);
@@ -355,7 +355,7 @@ impl SummarizeState {
         delta
     }
 
-    fn to_logs(&self, group_by: &[Expr], output_fields: &[Field]) -> Vec<Log> {
+    fn to_logs(&self, group_by: &[ByField], output_fields: &[Field]) -> Vec<Log> {
         match self {
             SummarizeState::All(aggs) => {
                 let mut log = Log::new();
@@ -368,10 +368,8 @@ impl SummarizeState {
                 .iter()
                 .map(|(keys, aggs)| {
                     let mut log = Log::new();
-                    for (expr, value) in group_by.iter().zip(keys) {
-                        if let Some(field) = expr_to_field(expr) {
-                            insert_field_value(&mut log, field, value.clone());
-                        }
+                    for (bf, value) in group_by.iter().zip(keys) {
+                        insert_field_value(&mut log, &bf.name, value.clone());
                     }
                     for (field, agg) in output_fields.iter().zip(aggs) {
                         insert_field_value(&mut log, field, agg.value());
@@ -756,26 +754,19 @@ fn create_aggregates(aggregations: &[Aggregation], is_mux: bool) -> Vec<Aggregat
         .collect()
 }
 
-fn expr_to_field(expr: &Expr) -> Option<&Field> {
-    match expr {
-        Expr::Field(f) => Some(f),
-        Expr::Bin(lhs, _) => match &**lhs {
-            Expr::Field(f) => Some(f),
-            _ => None,
-        },
-        _ => None,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::test_utils::{make_log, pdone, plog};
 
     fn create_summarize_iter_with_limit(input: Vec<LogItem>, limit: u64) -> SummarizeIter {
+        let field: Field = "x".parse().unwrap();
         SummarizeIter::new(
             Box::new(input.into_iter()),
-            vec![Expr::Field("x".parse().unwrap())],
+            vec![ByField {
+                name: field.clone(),
+                expr: Expr::Field(field),
+            }],
             vec!["count_".parse().unwrap()],
             vec![Aggregation::Count],
             false,
