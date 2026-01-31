@@ -73,12 +73,16 @@ fn apply(
         return None;
     }
 
-    if matches!(
-        &steps[1],
-        WorkflowStep::Project(..) | WorkflowStep::Extend(..) | WorkflowStep::Rename(..)
-    ) {
+    if !with_end_step
+        && matches!(
+            &steps[1],
+            WorkflowStep::Project(..) | WorkflowStep::Extend(..) | WorkflowStep::Rename(..)
+        )
+    {
         // Switching between project, extend, and rename will cause infinite loop, as it will keep getting into
         // this optimization and keep switching positions between them.
+        // This check only applies when there's no end step (Summarize), because with a Summarize the
+        // Project/Extend can be fully eliminated rather than just moved.
         return None;
     }
 

@@ -504,7 +504,6 @@ fn test_project_propagation_through_next_step(first_step: S, second_step: S, exp
     ],
     vec![
         S::Limit(1),
-        S::Extend(vec![rename_project("c", "b")]),
         S::Project(vec![rename_project("a", "b")])
     ]
     ; "rename project through extend"
@@ -548,7 +547,6 @@ fn test_project_propagation_through_next_step(first_step: S, second_step: S, exp
     ],
     vec![
         S::Limit(1),
-        S::Extend(vec![literal_project("d", int_val(50))]),
         S::Project(vec![literal_project("c", int_val(50))])
     ]
     ; "literal through extend"
@@ -613,10 +611,6 @@ fn test_project_propagation_through_next_step(first_step: S, second_step: S, exp
     ],
     vec![
         S::Limit(1),
-        S::Extend(vec![
-            rename_project("d", "b"),
-            literal_project("e", int_val(10)),
-        ]),
         S::Project(vec![
             rename_project("a", "b"),
             literal_project("c", int_val(10)),
