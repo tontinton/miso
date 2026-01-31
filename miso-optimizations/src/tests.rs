@@ -1096,7 +1096,7 @@ fn test_project_propagation_rename_summarize_by_bin() {
 }
 
 #[test]
-fn test_project_propagation_complex_expression_no_optimization() {
+fn test_project_propagation_complex_expression() {
     let complex_expr = Expr::Plus(
         Box::new(Expr::Field(field("b"))),
         Box::new(Expr::Field(field("c"))),
@@ -1111,18 +1111,18 @@ fn test_project_propagation_complex_expression_no_optimization() {
     ];
 
     let expected = vec![
-        S::Project(vec![project_field("a", complex_expr)]),
         S::Filter(Expr::Gt(
-            Box::new(Expr::Field(field("a"))),
+            Box::new(complex_expr.clone()),
             Box::new(Expr::Literal(int_val(10))),
         )),
+        S::Project(vec![project_field("a", complex_expr)]),
     ];
 
     check_default(input, expected);
 }
 
 #[test]
-fn test_project_propagation_partial_optimization_with_mixed_expressions() {
+fn test_project_propagation_with_mixed_expressions() {
     let complex_expr = Expr::Plus(
         Box::new(Expr::Field(field("c"))),
         Box::new(Expr::Field(field("e"))),
@@ -1140,12 +1140,117 @@ fn test_project_propagation_partial_optimization_with_mixed_expressions() {
     ];
 
     let expected = vec![
-        S::Project(vec![project_field("d", complex_expr)]),
         S::Filter(Expr::Eq(
             Box::new(Expr::Field(field("b"))),
             Box::new(Expr::Literal(string_val("test"))),
         )),
-        S::Project(vec![rename_project("a", "b")]),
+        S::Project(vec![
+            rename_project("a", "b"),
+            project_field("d", complex_expr),
+        ]),
+    ];
+
+    check_default(input, expected);
+}
+
+#[test]
+fn test_project_propagation_complex_expr_to_summarize() {
+    let case_expr = case(vec![(eq(field_expr("x"), lit(8)), lit(1))], lit(2));
+
+    let input = vec![
+        S::Extend(vec![project_field("code", case_expr.clone())]),
+        S::Summarize(Summarize {
+            aggs: hashmap! { field("cnt") => Aggregation::Count },
+            by: vec![by_field(field_expr("code"), "code")],
+        }),
+    ];
+
+    let expected = vec![S::Summarize(Summarize {
+        aggs: hashmap! { field("cnt") => Aggregation::Count },
+        by: vec![by_field(case_expr, "code")],
+    })];
+
+    check_default(input, expected);
+}
+
+#[test]
+fn test_project_propagation_complex_expr_through_filter() {
+    let case_expr = case(vec![(eq(field_expr("x"), lit(8)), lit(1))], lit(2));
+
+    let input = vec![
+        S::Extend(vec![project_field("code", case_expr)]),
+        S::Filter(eq(field_expr("code"), lit(1))),
+    ];
+
+    // After propagation, the filter becomes case(x==8,1,2)==1
+    // which then gets simplified by constant folding to x==8
+    // and the extend is eliminated since code is not used after the filter
+    let expected = vec![S::Filter(eq(field_expr("x"), lit(8)))];
+
+    check_default(input, expected);
+}
+
+#[test]
+fn test_project_propagation_exists_with_complex_expr() {
+    let case_expr = case(vec![(eq(field_expr("x"), lit(8)), lit(1))], lit(2));
+
+    let input = vec![
+        S::Extend(vec![project_field("code", case_expr.clone())]),
+        S::Filter(Expr::Exists(field("code"))),
+    ];
+
+    // exists(code) should NOT be converted to true - it must be preserved
+    let expected = vec![
+        S::Filter(Expr::Exists(field("code"))),
+        S::Extend(vec![project_field("code", case_expr)]),
+    ];
+
+    check_default(input, expected);
+}
+
+#[test]
+fn test_project_propagation_complex_expr_in_filter_only() {
+    // When first step is Extend with complex expr and second is Filter,
+    // the complex expr is substituted in the filter
+    let case_expr = case(vec![(eq(field_expr("x"), lit(8)), lit(1))], lit(2));
+
+    let input = vec![
+        S::Extend(vec![project_field("code", case_expr.clone())]),
+        S::Filter(gt(field_expr("code"), lit(0))),
+    ];
+
+    let expected = vec![
+        S::Filter(gt(case_expr.clone(), lit(0))),
+        S::Extend(vec![project_field("code", case_expr)]),
+    ];
+
+    check_default(input, expected);
+}
+
+#[test]
+fn test_project_propagation_chained_field_in_expr() {
+    // project a = b, c = a + d: filter should use b + d, project keeps original exprs
+    let input = vec![
+        S::Project(vec![
+            rename_project("a", "b"),
+            project_field(
+                "c",
+                Expr::Plus(Box::new(field_expr("a")), Box::new(field_expr("d"))),
+            ),
+        ]),
+        S::Filter(gt(field_expr("c"), lit(0))),
+    ];
+
+    // Filter is rewritten to use source fields. Project keeps original expr since
+    // input field `a` still exists when project runs.
+    let filter_expr = Expr::Plus(Box::new(field_expr("b")), Box::new(field_expr("d")));
+    let project_expr = Expr::Plus(Box::new(field_expr("a")), Box::new(field_expr("d")));
+    let expected = vec![
+        S::Filter(gt(filter_expr, lit(0))),
+        S::Project(vec![
+            rename_project("a", "b"),
+            project_field("c", project_expr),
+        ]),
     ];
 
     check_default(input, expected);
