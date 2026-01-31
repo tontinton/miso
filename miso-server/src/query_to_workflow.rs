@@ -2,7 +2,8 @@ use std::sync::Arc;
 
 use axum::http::StatusCode;
 use hashbrown::HashMap;
-use miso_workflow::{Workflow, WorkflowStep, scan::Scan, tee::Tee};
+use miso_connectors::Sink;
+use miso_workflow::{Workflow, WorkflowStep, scan::Scan, tee::Tee, write::Write};
 use miso_workflow_types::{
     expr::Expr,
     query::{QueryStep, ScanKind},
@@ -186,24 +187,40 @@ fn to_workflow_steps_inner(
                 connector: connector_name,
                 collection: collection_name,
             } => {
-                let Some(connector_state) = connectors.get(&connector_name).cloned() else {
-                    return Err(HttpError::from_string(
-                        StatusCode::NOT_FOUND,
-                        format!("connector '{connector_name}' not found"),
-                    ));
-                };
-
-                let Some(sink) = connector_state.connector.create_sink(&collection_name) else {
-                    return Err(HttpError::from_string(
-                        StatusCode::BAD_REQUEST,
-                        format!("connector '{connector_name}' does not support sink operations"),
-                    ));
-                };
-
+                let sink = create_sink(connectors, connector_name, collection_name)?;
                 steps.push(WorkflowStep::Tee(Tee::new(Arc::from(sink))));
+            }
+            QueryStep::Write {
+                connector: connector_name,
+                collection: collection_name,
+            } => {
+                let sink = create_sink(connectors, connector_name, collection_name)?;
+                steps.push(WorkflowStep::Write(Write::new(Arc::from(sink))));
             }
         }
     }
 
     Ok(steps)
+}
+
+fn create_sink(
+    connectors: &ConnectorsMap,
+    connector_name: String,
+    collection_name: String,
+) -> Result<Box<dyn Sink>, HttpError> {
+    let Some(connector_state) = connectors.get(&connector_name).cloned() else {
+        return Err(HttpError::from_string(
+            StatusCode::NOT_FOUND,
+            format!("connector '{connector_name}' not found"),
+        ));
+    };
+
+    let Some(sink) = connector_state.connector.create_sink(&collection_name) else {
+        return Err(HttpError::from_string(
+            StatusCode::BAD_REQUEST,
+            format!("connector '{connector_name}' does not support sink operations"),
+        ));
+    };
+
+    Ok(sink)
 }

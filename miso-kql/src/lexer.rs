@@ -152,6 +152,8 @@ pub enum Token {
     Count,
     #[token("tee")]
     Tee,
+    #[token("write")]
+    Write,
     #[token("countif")]
     Countif,
     #[token("dcount")]

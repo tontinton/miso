@@ -140,6 +140,7 @@ impl fmt::Display for DisplayableWorkflowStep<'_> {
             WorkflowStep::Count => write!(f, "{pre}Count"),
             WorkflowStep::MuxCount => write!(f, "{pre}MuxCount"),
             WorkflowStep::Tee(_) => write!(f, "{pre}Tee"),
+            WorkflowStep::Write(_) => write!(f, "{pre}Write"),
         }
     }
 }
