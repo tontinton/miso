@@ -178,13 +178,16 @@ mod tests {
         Collection, Connector, QueryHandle, QueryResponse, Split,
         stats::{CollectionStats, ConnectorStats, FieldStats},
     };
-    use miso_workflow::{WorkflowStep, scan::Scan};
-    use miso_workflow_types::{expr::Expr, summarize::Summarize};
+    use miso_workflow::{Workflow, WorkflowStep, scan::Scan};
+    use miso_workflow_types::{expr::Expr, join::Join, summarize::Summarize};
     use parking_lot::Mutex;
     use serde::{Deserialize, Serialize};
+    use test_case::test_case;
 
-    use super::calculate_max_distinct_count;
-    use crate::test_utils::summarize_by;
+    use super::{
+        DynamicFilter, JoinType, Optimization, OptimizationResult, calculate_max_distinct_count,
+    };
+    use crate::test_utils::{field, summarize_by};
 
     #[derive(Debug, Clone, Serialize, Deserialize, Default)]
     struct TestHandle;
@@ -265,39 +268,43 @@ mod tests {
 
     #[test]
     fn limit_takes_minimum_of_limit_and_stats() {
-        let s = scan(vec![("id", 100)]);
-        assert_eq!(calc(&s, &[WorkflowStep::Limit(10)]), Some(10));
-
-        let s = scan(vec![("id", 5)]);
-        assert_eq!(calc(&s, &[WorkflowStep::Limit(100)]), Some(5));
-
-        let s = scan(vec![]);
-        assert_eq!(calc(&s, &[WorkflowStep::Limit(25)]), Some(25));
+        assert_eq!(
+            calc(&scan(vec![("id", 100)]), &[WorkflowStep::Limit(10)]),
+            Some(10)
+        );
+        assert_eq!(
+            calc(&scan(vec![("id", 5)]), &[WorkflowStep::Limit(100)]),
+            Some(5)
+        );
+        assert_eq!(calc(&scan(vec![]), &[WorkflowStep::Limit(25)]), Some(25));
     }
 
     #[test]
     fn summarize_multiplies_group_by_distinct_counts() {
-        let s = scan(vec![("a", 5), ("b", 7)]);
-        assert_eq!(calc(&s, &[summarize_by(&["a", "b"])]), Some(35));
+        assert_eq!(
+            calc(
+                &scan(vec![("a", 5), ("b", 7)]),
+                &[summarize_by(&["a", "b"])]
+            ),
+            Some(35)
+        );
     }
 
     #[test]
     fn summarize_with_empty_group_by_returns_one() {
-        let s = scan(vec![("id", 100)]);
-        assert_eq!(calc(&s, &[summarize_by(&[])]), Some(1));
+        assert_eq!(
+            calc(&scan(vec![("id", 100)]), &[summarize_by(&[])]),
+            Some(1)
+        );
     }
 
     #[test]
     fn summarize_with_limit_takes_minimum() {
         let s = scan(vec![("category", 100)]);
-
-        // Limit after summarize
         assert_eq!(
             calc(&s, &[summarize_by(&["category"]), WorkflowStep::Limit(10)]),
             Some(10)
         );
-
-        // Limit before summarize (iterates reverse: summarize then limit)
         assert_eq!(
             calc(&s, &[WorkflowStep::Limit(10), summarize_by(&["category"])]),
             Some(10)
@@ -306,7 +313,7 @@ mod tests {
 
     #[test]
     fn summarize_falls_back_to_limit_when_stats_incomplete() {
-        let s = scan(vec![("a", 10)]); // missing "b"
+        let s = scan(vec![("a", 10)]);
         assert_eq!(
             calc(&s, &[summarize_by(&["a", "b"]), WorkflowStep::Limit(50)]),
             Some(50)
@@ -366,11 +373,7 @@ mod tests {
     #[test]
     fn overflow_in_group_by_multiplication() {
         let s = scan(vec![("a", u64::MAX), ("b", 2)]);
-
-        // Without limit fallback -> None
         assert_eq!(calc(&s, &[summarize_by(&["a", "b"])]), None);
-
-        // With limit fallback -> uses limit
         assert_eq!(
             calc(&s, &[summarize_by(&["a", "b"]), WorkflowStep::Limit(100)]),
             Some(100)
@@ -380,7 +383,6 @@ mod tests {
     #[test]
     fn unsupported_steps_return_none() {
         let s = scan(vec![("id", 100)]);
-
         assert_eq!(calc(&s, &[WorkflowStep::Project(vec![])]), None);
         assert_eq!(calc(&s, &[WorkflowStep::Extend(vec![])]), None);
         assert_eq!(calc(&s, &[WorkflowStep::MuxLimit(10)]), None);
@@ -389,7 +391,7 @@ mod tests {
                 &s,
                 &[WorkflowStep::MuxSummarize(Summarize {
                     aggs: HashMap::new(),
-                    by: vec![],
+                    by: vec![]
                 })]
             ),
             None
@@ -414,7 +416,51 @@ mod tests {
 
     #[test]
     fn zero_distinct_count_results_in_zero() {
-        let s = scan(vec![("a", 0), ("b", 100)]);
-        assert_eq!(calc(&s, &[summarize_by(&["a", "b"])]), Some(0));
+        assert_eq!(
+            calc(
+                &scan(vec![("a", 0), ("b", 100)]),
+                &[summarize_by(&["a", "b"])]
+            ),
+            Some(0)
+        );
+    }
+
+    fn apply_opt(left: u64, right: u64, join_type: JoinType) -> (bool, bool) {
+        let join_step = WorkflowStep::Join(
+            Join {
+                on: (field("id"), field("id")),
+                type_: join_type,
+                partitions: 1,
+            },
+            Workflow::new(vec![WorkflowStep::Scan(scan(vec![("id", right)]))]),
+        );
+        let steps = vec![WorkflowStep::Scan(scan(vec![("id", left)])), join_step];
+
+        match DynamicFilter::new(100).apply(&steps, &[]) {
+            OptimizationResult::Changed(s) => {
+                let WorkflowStep::Join(_, w) = &s[1] else {
+                    unreachable!()
+                };
+                let WorkflowStep::Scan(s) = &w.steps[0] else {
+                    unreachable!()
+                };
+                (true, s.add_not_to_dynamic_filter)
+            }
+            _ => (false, false),
+        }
+    }
+
+    #[test_case(10, 20, JoinType::Inner => (true, false); "inner_both_small")]
+    #[test_case(10, 200, JoinType::Inner => (true, false); "inner_left_small")]
+    #[test_case(200, 10, JoinType::Inner => (true, false); "inner_right_small")]
+    #[test_case(200, 200, JoinType::Inner => (false, false); "inner_both_large")]
+    #[test_case(10, 200, JoinType::Left => (true, false); "left_preferred_small")]
+    #[test_case(200, 10, JoinType::Left => (true, true); "left_opposite_small_adds_not")]
+    #[test_case(200, 200, JoinType::Left => (false, false); "left_both_large")]
+    #[test_case(200, 10, JoinType::Right => (true, false); "right_preferred_small")]
+    #[test_case(10, 200, JoinType::Right => (true, true); "right_opposite_small_adds_not")]
+    #[test_case(200, 200, JoinType::Right => (false, false); "right_both_large")]
+    fn dynamic_filter_join_types(left: u64, right: u64, jt: JoinType) -> (bool, bool) {
+        apply_opt(left, right, jt)
     }
 }
