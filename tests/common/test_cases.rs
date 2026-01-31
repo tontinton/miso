@@ -310,10 +310,7 @@ pub const BASE_PREDICATE_PUSHDOWN_TESTS: &[TestCase] = &[
     },
     TestCase {
         query: r#"test.stack | top 5 by questionId | top 3 by questionId"#,
-        expected: expected!(
-            "test.stack",
-            Elastic | Quickwit => "test.stack | top 3 by questionId",
-        ),
+        expected: expected!("test.stack"),
         count: 3,
         name: "topn_after_topn",
     },

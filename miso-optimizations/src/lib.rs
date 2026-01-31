@@ -112,6 +112,10 @@ fn to_kind(steps: &[WorkflowStep]) -> Vec<WorkflowStepKind> {
     steps.iter().map(|x| x.kind()).collect()
 }
 
+fn chain(groups: impl IntoIterator<Item = Vec<OptimizationStep>>) -> Vec<OptimizationStep> {
+    groups.into_iter().flatten().collect()
+}
+
 impl Optimizer {
     pub fn empty() -> Self {
         Self {
@@ -120,54 +124,69 @@ impl Optimizer {
         }
     }
 
-    pub fn with_dynamic_filtering(max_distinct_values: u64) -> Self {
-        Self::new(vec![
-            // Pre predicate pushdowns.
+    fn setup(max_distinct_values: u64) -> Vec<OptimizationStep> {
+        vec![
+            opt_once!(DynamicFilter::new(max_distinct_values)),
+            opt_once!(SplitScanIntoUnion), // Must come after DynamicFilter
+            opt_once!(EliminateUnusedFields),
+        ]
+    }
+
+    fn expr_simplification() -> Vec<OptimizationStep> {
+        vec![
+            opt!(InvertBranchFilter),
+            opt!(ConstFolding),
+            opt!(RemoveNoOpFilter),
+            opt!(ShortCircuitFalseFilter),
+            opt!(RemoveRedundantEmptySteps),
+        ]
+    }
+
+    fn predicate_pushdown() -> Vec<OptimizationStep> {
+        chain([
+            // Limit/TopN - merge/optimize BEFORE pushing.
             vec![
-                opt_once!(DynamicFilter::new(max_distinct_values)),
-                // Must come after dynamic filtering, so the split scan nodes will also receive
-                // the dynamic filter.
-                opt_once!(SplitScanIntoUnion),
-                opt_once!(EliminateUnusedFields),
-            ],
-            // Predicate pushdowns + optimizations that help predicate pushdowns.
-            vec![
-                opt!(PushIntoScan),
-                // Project & Extend & Rename.
-                opt!(ProjectPropagationWithEnd),
-                opt!(ProjectPropagationWithoutEnd),
-                opt!(FilterPropagation),
-                opt!(InvertBranchFilter),
-                opt!(ConstFolding),
-                opt!(RemoveRedundantEmptySteps),
-                // Filter.
-                opt!(RemoveNoOpFilter),
-                opt!(ShortCircuitFalseFilter),
-                opt!(ReorderFilterBeforeSort),
-                // Limit & TopN.
                 opt!(PushLimitIntoLimit),
                 opt!(ConvertSortLimitToTopN),
                 opt!(PushLimitIntoTopN),
                 opt!(MergeTopNs),
                 opt!(RemoveRedundantSortBeforeTopN),
-                // Summarize.
+            ],
+            // Aggregation - simplify BEFORE pushing.
+            vec![
                 opt!(RemoveRedundantSortsBeforeAggregation),
                 opt!(RemoveRedundantStepsBeforeAggregation),
                 opt!(SummarizeConstToProject),
-                // Union.
+            ],
+            // Pushdowns.
+            vec![
+                opt!(PushIntoScan),
                 opt!(PushUnionIntoScan),
-                opt!(PushStepsIntoUnion),
-                // Mux.
-                opt!(MuxIntoUnion),
-                // Join.
                 opt!(PushJoinIntoScan),
             ],
-            // Post predicate pushdowns.
+            // Union - AFTER pushing, to have better chances of union pushdown.
+            vec![opt!(PushStepsIntoUnion), opt!(MuxIntoUnion)],
+            // Predicate pushdown removes steps and might allow for more simplifications.
+            Self::expr_simplification(),
+            // Move steps around to enable pushdowns.
             vec![
-                // Merge filters into AND only after no more filters to pushdown, as this
-                // optimization is only good for in-process filtering.
-                opt!(MergeFiltersIntoAndFilter),
+                opt!(ReorderFilterBeforeSort),
+                opt!(ProjectPropagationWithEnd),
+                opt!(ProjectPropagationWithoutEnd),
+                opt!(FilterPropagation),
             ],
+        ])
+    }
+
+    pub fn with_dynamic_filtering(max_distinct_values: u64) -> Self {
+        Self::new(vec![
+            Self::setup(max_distinct_values),
+            // Simplify expressions before any pushdowns.
+            Self::expr_simplification(),
+            Self::predicate_pushdown(),
+            // Merge filters into AND only after no more filters to pushdown, as this
+            // optimization is only good for in-process filtering.
+            vec![opt!(MergeFiltersIntoAndFilter)],
         ])
     }
 
