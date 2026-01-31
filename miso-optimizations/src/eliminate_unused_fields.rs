@@ -27,14 +27,10 @@ impl Optimization for EliminateUnusedFields {
     }
 
     fn apply(&self, steps: &[WorkflowStep], _groups: &[Group]) -> OptimizationResult {
-        apply(steps)
-    }
-}
-
-fn apply(steps: &[WorkflowStep]) -> OptimizationResult {
-    match transform_steps(steps) {
-        Some(steps) => OptimizationResult::Changed(steps),
-        None => OptimizationResult::Unchanged,
+        match transform_steps(steps) {
+            Some(steps) => OptimizationResult::Changed(steps),
+            None => OptimizationResult::Unchanged,
+        }
     }
 }
 
