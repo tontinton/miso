@@ -341,4 +341,49 @@ pub const BASE_PREDICATE_PUSHDOWN_TESTS: &[TestCase] = &[
         count: 2,
         name: "union_with_filter_and_topn",
     },
+    TestCase {
+        query: r#"test.stack | extend first_word = extract("^(\\w+)", 1, title) | where exists(first_word)"#,
+        expected: expected!(
+            "test.stack",
+            Elastic | Quickwit => r#"test.stack | extend first_word = extract("^(\\w+)", 1, title) | where exists(first_word)"#,
+        ),
+        count: 8,
+        name: "extract_first_word_from_title",
+    },
+    TestCase {
+        query: r#"test.stack | extend has_datetime = extract("(DateTime)", 1, body) | where has_datetime == "DateTime""#,
+        expected: expected!(
+            "test.stack",
+            Elastic | Quickwit => r#"test.stack | extend has_datetime = extract("(DateTime)", 1, body) | where has_datetime == "DateTime""#,
+        ),
+        count: 3,
+        name: "extract_and_filter_on_result",
+    },
+    TestCase {
+        query: r#"test.stack | extend user_type = extract("(question|answer)", 1, type) | where user_type == "question""#,
+        expected: expected!(
+            "test.stack",
+            Elastic | Quickwit => r#"test.stack | extend user_type = extract("(question|answer)", 1, type) | where user_type == "question""#,
+        ),
+        count: 8,
+        name: "extract_from_type_field",
+    },
+    TestCase {
+        query: r#"test.stack | extend first_word = extract("^(\\w+)", 1, title) | summarize c = count() by first_word | where exists(first_word)"#,
+        expected: expected!(
+            // TODO: should be pushdown to splunk, but eliminate_unused_fields.rs adds a project after the scan. And we don't have apply_project in Splunk.
+            r#"test.stack | extend first_word = extract("^(\\w+)", 1, title) | summarize c = count() by first_word | where exists(first_word)"#,
+        ),
+        count: 7,
+        name: "extract_then_summarize",
+    },
+    TestCase {
+        query: r#"test.stack | where type == "question" | extend calc = extract("^(Calculate)", 1, title) | where calc == "Calculate""#,
+        expected: expected!(
+            "test.stack",
+            Elastic | Quickwit => r#"test.stack | extend calc = extract("^(Calculate)", 1, title) | where calc == "Calculate""#,
+        ),
+        count: 2,
+        name: "extract_with_preceding_filter",
+    },
 ];
