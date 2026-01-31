@@ -155,6 +155,14 @@ enum SplunkOp {
     Count,
     /// `| rename old as new, ...` - used to rename fields after stats
     Rename(Vec<(String, String)>),
+    /// `| rex field=... "..."` - regex extraction
+    Rex {
+        field: String,
+        pattern: String,
+        output_field: String,
+    },
+    /// `| fields - field1, field2, ...` - remove fields from output
+    FieldsRemove(Vec<String>),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -283,6 +291,16 @@ impl SplunkHandle {
                         .join(", ");
                     spl.push_str(&rename_clause);
                 }
+                SplunkOp::Rex {
+                    field,
+                    pattern,
+                    output_field: _,
+                } => {
+                    spl.push_str(&format!(" | rex field={} \"{}\"", field, pattern));
+                }
+                SplunkOp::FieldsRemove(fields) => {
+                    spl.push_str(&format!(" | fields - {}", fields.join(", ")));
+                }
             }
         }
 
@@ -374,6 +392,19 @@ impl fmt::Display for SplunkHandle {
                         .collect::<Vec<_>>()
                         .join(", ");
                     items.push(format!("rename={}", s));
+                }
+                SplunkOp::Rex {
+                    field,
+                    pattern,
+                    output_field,
+                } => {
+                    items.push(format!(
+                        "rex field={} \"{}\" -> {}",
+                        field, pattern, output_field
+                    ));
+                }
+                SplunkOp::FieldsRemove(fields) => {
+                    items.push(format!("fields - {}", fields.join(", ")));
                 }
             }
         }
@@ -492,24 +523,43 @@ fn is_timestamp_field(field: &Field) -> bool {
 enum FilterResult {
     Search(String),
     Where(String),
+    /// Rex extraction followed by a where clause filter on the extracted field.
+    RexThenWhere {
+        rex: SplunkOp,
+        filter_field: String,
+        filter_value: String,
+    },
 }
 
 impl FilterResult {
-    fn into_spl_op(self) -> SplunkOp {
+    fn into_spl_ops(self) -> Vec<SplunkOp> {
         match self {
-            FilterResult::Search(s) => SplunkOp::Search(s),
-            FilterResult::Where(s) => SplunkOp::Where(s),
+            FilterResult::Search(s) => vec![SplunkOp::Search(s)],
+            FilterResult::Where(s) => vec![SplunkOp::Where(s)],
+            FilterResult::RexThenWhere {
+                rex,
+                filter_field,
+                filter_value,
+            } => vec![
+                rex,
+                SplunkOp::Where(format!("{filter_field}={filter_value}")),
+                SplunkOp::FieldsRemove(vec![filter_field]),
+            ],
         }
     }
 
-    fn unwrap_str(&self) -> &str {
+    fn as_str(&self) -> Option<&str> {
         match self {
-            FilterResult::Search(s) | FilterResult::Where(s) => s,
+            FilterResult::Search(s) | FilterResult::Where(s) => Some(s),
+            FilterResult::RexThenWhere { .. } => None,
         }
     }
 
     fn is_where(&self) -> bool {
-        matches!(self, FilterResult::Where(_))
+        matches!(
+            self,
+            FilterResult::Where(_) | FilterResult::RexThenWhere { .. }
+        )
     }
 }
 
@@ -535,16 +585,45 @@ fn format_spl_value_for_search(value: &Value) -> String {
     }
 }
 
+/// Compile a filter like `extract(regex, group, field) == value` to a Rex + Where.
+fn compile_extract_filter(
+    regex_expr: &Expr,
+    group_expr: &Expr,
+    source_expr: &Expr,
+    value: &Value,
+) -> Option<FilterResult> {
+    let Expr::Literal(Value::String(pattern)) = regex_expr else {
+        return None;
+    };
+    let Expr::Literal(group_val) = group_expr else {
+        return None;
+    };
+    let group = group_val.as_i64()?;
+    let Expr::Field(source_field) = source_expr else {
+        return None;
+    };
+
+    let output_field = format!("_extract_{}", source_field.to_string().replace('.', "_"));
+
+    let splunk_pattern = convert_to_splunk_named_capture(pattern, group, &output_field)?;
+
+    Some(FilterResult::RexThenWhere {
+        rex: SplunkOp::Rex {
+            field: source_field.to_string(),
+            pattern: splunk_pattern,
+            output_field: output_field.clone(),
+        },
+        filter_field: output_field,
+        filter_value: format_spl_value(value),
+    })
+}
+
 fn compile_filter_to_spl(expr: &Expr) -> Option<FilterResult> {
     Some(match expr {
         Expr::Or(left, right) => {
             let left_result = compile_filter_to_spl(left)?;
             let right_result = compile_filter_to_spl(right)?;
-            let combined = format!(
-                "({} OR {})",
-                left_result.unwrap_str(),
-                right_result.unwrap_str()
-            );
+            let combined = format!("({} OR {})", left_result.as_str()?, right_result.as_str()?);
             if left_result.is_where() || right_result.is_where() {
                 FilterResult::Where(combined)
             } else {
@@ -554,11 +633,7 @@ fn compile_filter_to_spl(expr: &Expr) -> Option<FilterResult> {
         Expr::And(left, right) => {
             let left_result = compile_filter_to_spl(left)?;
             let right_result = compile_filter_to_spl(right)?;
-            let combined = format!(
-                "({} AND {})",
-                left_result.unwrap_str(),
-                right_result.unwrap_str()
-            );
+            let combined = format!("({} AND {})", left_result.as_str()?, right_result.as_str()?);
             if left_result.is_where() || right_result.is_where() {
                 FilterResult::Where(combined)
             } else {
@@ -567,7 +642,7 @@ fn compile_filter_to_spl(expr: &Expr) -> Option<FilterResult> {
         }
         Expr::Not(inner) => {
             let inner_result = compile_filter_to_spl(inner)?;
-            let combined = format!("NOT {}", inner_result.unwrap_str());
+            let combined = format!("NOT {}", inner_result.as_str()?);
             if inner_result.is_where() {
                 FilterResult::Where(combined)
             } else {
@@ -579,15 +654,20 @@ fn compile_filter_to_spl(expr: &Expr) -> Option<FilterResult> {
             FilterResult::Where(format!("isnotnull({})", field))
         }
 
-        Expr::Eq(lhs, rhs) => {
-            let (Expr::Field(field), Expr::Literal(value)) = (&**lhs, &**rhs) else {
-                return None;
-            };
-            if field.has_array_access() {
-                return None;
+        Expr::Eq(lhs, rhs) => match (&**lhs, &**rhs) {
+            (Expr::Field(field), Expr::Literal(value))
+            | (Expr::Literal(value), Expr::Field(field)) => {
+                if field.has_array_access() {
+                    return None;
+                }
+                FilterResult::Search(format!("{}={}", field, format_spl_value_for_search(value)))
             }
-            FilterResult::Search(format!("{}={}", field, format_spl_value_for_search(value)))
-        }
+            (Expr::Extract(regex_expr, group_expr, source_expr), Expr::Literal(value))
+            | (Expr::Literal(value), Expr::Extract(regex_expr, group_expr, source_expr)) => {
+                compile_extract_filter(regex_expr, group_expr, source_expr, value)?
+            }
+            _ => return None,
+        },
         Expr::Ne(lhs, rhs) => {
             let (Expr::Field(field), Expr::Literal(value)) = (&**lhs, &**rhs) else {
                 return None;
@@ -706,6 +786,78 @@ fn compile_filter_to_spl(expr: &Expr) -> Option<FilterResult> {
 
         _ => return None,
     })
+}
+
+/// Convert KQL positional capture group to Splunk named capture.
+///
+/// For example, pattern `error: (\d+)` with group 1 and output "code"
+/// becomes `error: (?<code>\d+)`.
+///
+/// This function finds the Nth capture group (1-indexed) in the regex pattern
+/// and converts it to a named capture group with the specified output name.
+fn convert_to_splunk_named_capture(pattern: &str, group: i64, output: &str) -> Option<String> {
+    if group <= 0 {
+        return None;
+    }
+
+    let mut result = String::with_capacity(pattern.len() + output.len() + 4);
+    let mut current_group = 0i64;
+    let mut chars = pattern.chars().peekable();
+
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            result.push(c);
+            if let Some(next) = chars.next() {
+                result.push(next);
+            }
+        } else if c == '(' {
+            let is_non_capturing = if chars.peek() == Some(&'?') {
+                let remaining: String = chars.clone().take(3).collect();
+                remaining.starts_with("?:")
+                    || remaining.starts_with("?=")
+                    || remaining.starts_with("?!")
+                    || remaining.starts_with("?<!")
+                    || remaining.starts_with("?<=")
+            } else {
+                false
+            };
+
+            if is_non_capturing {
+                result.push(c);
+            } else {
+                current_group += 1;
+                if current_group == group {
+                    result.push_str(&format!("(?<{}>", output));
+                    if chars.peek() == Some(&'?') {
+                        chars.next();
+                        if chars.peek() == Some(&'<') || chars.peek() == Some(&'P') {
+                            if chars.peek() == Some(&'P') {
+                                chars.next();
+                            }
+                            chars.next();
+                            while let Some(&ch) = chars.peek() {
+                                if ch == '>' {
+                                    chars.next();
+                                    break;
+                                }
+                                chars.next();
+                            }
+                        }
+                    }
+                } else {
+                    result.push(c);
+                }
+            }
+        } else {
+            result.push(c);
+        }
+    }
+
+    if current_group < group {
+        return None;
+    }
+
+    Some(result)
 }
 
 impl SplunkConnector {
@@ -963,7 +1115,9 @@ impl Connector for SplunkConnector {
 
         if let Some(ref expr) = remaining_expr {
             let filter_result = compile_filter_to_spl(expr)?;
-            new_handle = new_handle.push(filter_result.into_spl_op());
+            for op in filter_result.into_spl_ops() {
+                new_handle = new_handle.push(op);
+            }
         }
 
         Some(Box::new(new_handle))
@@ -1110,6 +1264,43 @@ impl Connector for SplunkConnector {
         }
 
         Some(Box::new(handle))
+    }
+
+    fn apply_extend(
+        &self,
+        projections: &[ProjectField],
+        handle: &dyn QueryHandle,
+    ) -> Option<Box<dyn QueryHandle>> {
+        let handle = downcast_unwrap!(handle, SplunkHandle);
+        let mut new_handle = handle.clone();
+
+        for proj in projections {
+            let Expr::Extract(regex_expr, group_expr, source_expr) = &proj.from else {
+                return None;
+            };
+
+            let Expr::Literal(Value::String(pattern)) = regex_expr.as_ref() else {
+                return None;
+            };
+            let Expr::Literal(group_val) = group_expr.as_ref() else {
+                return None;
+            };
+            let group = group_val.as_i64()?;
+            let Expr::Field(source_field) = source_expr.as_ref() else {
+                return None;
+            };
+
+            let splunk_pattern =
+                convert_to_splunk_named_capture(pattern, group, &proj.to.to_string())?;
+
+            new_handle = new_handle.push(SplunkOp::Rex {
+                field: source_field.to_string(),
+                pattern: splunk_pattern,
+                output_field: proj.to.to_string(),
+            });
+        }
+
+        Some(Box::new(new_handle))
     }
 
     fn apply_union(
@@ -1272,7 +1463,7 @@ mod tests {
             );
             let result = compile_filter_to_spl(&expr).unwrap();
             assert!(matches!(result, FilterResult::Search(_)));
-            assert_eq!(result.unwrap_str(), "foo=CASE(\"bar\")");
+            assert_eq!(result.as_str().unwrap(), "foo=CASE(\"bar\")");
         }
 
         #[test]
@@ -1283,7 +1474,7 @@ mod tests {
             );
             let result = compile_filter_to_spl(&expr).unwrap();
             assert!(matches!(result, FilterResult::Search(_)));
-            assert_eq!(result.unwrap_str(), "count=42");
+            assert_eq!(result.as_str().unwrap(), "count=42");
         }
 
         #[test]
@@ -1293,7 +1484,7 @@ mod tests {
                 Box::new(Expr::Literal(Value::String("error".into()))),
             );
             let result = compile_filter_to_spl(&expr).unwrap();
-            assert_eq!(result.unwrap_str(), "status!=CASE(\"error\")");
+            assert_eq!(result.as_str().unwrap(), "status!=CASE(\"error\")");
         }
 
         #[test]
@@ -1304,25 +1495,29 @@ mod tests {
             assert_eq!(
                 compile_filter_to_spl(&Expr::Gt(field_box(), value_box()))
                     .unwrap()
-                    .unwrap_str(),
+                    .as_str()
+                    .unwrap(),
                 "value>100"
             );
             assert_eq!(
                 compile_filter_to_spl(&Expr::Gte(field_box(), value_box()))
                     .unwrap()
-                    .unwrap_str(),
+                    .as_str()
+                    .unwrap(),
                 "value>=100"
             );
             assert_eq!(
                 compile_filter_to_spl(&Expr::Lt(field_box(), value_box()))
                     .unwrap()
-                    .unwrap_str(),
+                    .as_str()
+                    .unwrap(),
                 "value<100"
             );
             assert_eq!(
                 compile_filter_to_spl(&Expr::Lte(field_box(), value_box()))
                     .unwrap()
-                    .unwrap_str(),
+                    .as_str()
+                    .unwrap(),
                 "value<=100"
             );
         }
@@ -1340,11 +1535,11 @@ mod tests {
 
             let and_result = compile_filter_to_spl(&Expr::And(eq_a.clone(), eq_b.clone())).unwrap();
             assert!(matches!(and_result, FilterResult::Search(_)));
-            assert_eq!(and_result.unwrap_str(), "(a=1 AND b=2)");
+            assert_eq!(and_result.as_str().unwrap(), "(a=1 AND b=2)");
 
             let or_result = compile_filter_to_spl(&Expr::Or(eq_a, eq_b)).unwrap();
             assert!(matches!(or_result, FilterResult::Search(_)));
-            assert_eq!(or_result.unwrap_str(), "(a=1 OR b=2)");
+            assert_eq!(or_result.as_str().unwrap(), "(a=1 OR b=2)");
         }
 
         #[test]
@@ -1354,7 +1549,7 @@ mod tests {
                 Box::new(Expr::Literal(Value::Int(1))),
             )));
             let result = compile_filter_to_spl(&expr).unwrap();
-            assert_eq!(result.unwrap_str(), "NOT a=1");
+            assert_eq!(result.as_str().unwrap(), "NOT a=1");
         }
 
         #[test]
@@ -1363,7 +1558,7 @@ mod tests {
             let exists_expr = Expr::Exists(field("optional_field"));
             let exists_result = compile_filter_to_spl(&exists_expr).unwrap();
             assert!(matches!(exists_result, FilterResult::Where(_)));
-            assert_eq!(exists_result.unwrap_str(), "isnotnull(optional_field)");
+            assert_eq!(exists_result.as_str().unwrap(), "isnotnull(optional_field)");
 
             // has -> like(lower(), ...)
             let has_expr = Expr::Has(
@@ -1372,7 +1567,10 @@ mod tests {
             );
             let has_result = compile_filter_to_spl(&has_expr).unwrap();
             assert!(matches!(has_result, FilterResult::Where(_)));
-            assert_eq!(has_result.unwrap_str(), "like(lower(message), \"%error%\")");
+            assert_eq!(
+                has_result.as_str().unwrap(),
+                "like(lower(message), \"%error%\")"
+            );
         }
 
         #[test]
@@ -1386,7 +1584,7 @@ mod tests {
             );
             let result = compile_filter_to_spl(&expr).unwrap();
             assert!(matches!(result, FilterResult::Where(_)));
-            assert_eq!(result.unwrap_str(), "(a=1 AND isnotnull(b))");
+            assert_eq!(result.as_str().unwrap(), "(a=1 AND isnotnull(b))");
         }
 
         #[test]
@@ -1400,7 +1598,7 @@ mod tests {
             );
             let result = compile_filter_to_spl(&expr).unwrap();
             assert_eq!(
-                result.unwrap_str(),
+                result.as_str().unwrap(),
                 "(status=CASE(\"a\") OR status=CASE(\"b\"))"
             );
         }
@@ -1412,7 +1610,7 @@ mod tests {
                 Box::new(Expr::Literal(Value::String("/api/".into()))),
             );
             let result = compile_filter_to_spl(&expr).unwrap();
-            assert_eq!(result.unwrap_str(), "path=/api/*");
+            assert_eq!(result.as_str().unwrap(), "path=/api/*");
         }
     }
 
@@ -1511,6 +1709,239 @@ mod tests {
             let updated = handle.with_time_constraints(Some(1000), Some(2000));
             assert_eq!(updated.earliest, Some(1000));
             assert_eq!(updated.latest, Some(2000));
+        }
+    }
+
+    mod convert_named_capture {
+        use super::*;
+
+        #[test]
+        fn simple_capture_group() {
+            // Pattern: error: (\d+) with group 1 -> error: (?<code>\d+)
+            let result = convert_to_splunk_named_capture(r"error: (\d+)", 1, "code");
+            assert_eq!(result, Some(r"error: (?<code>\d+)".to_string()));
+        }
+
+        #[test]
+        fn second_capture_group() {
+            // Pattern: (\w+): (\d+) with group 2 -> (\w+): (?<num>\d+)
+            let result = convert_to_splunk_named_capture(r"(\w+): (\d+)", 2, "num");
+            assert_eq!(result, Some(r"(\w+): (?<num>\d+)".to_string()));
+        }
+
+        #[test]
+        fn group_zero_returns_none() {
+            // Group 0 is entire match, can't be named
+            let result = convert_to_splunk_named_capture(r"(\d+)", 0, "code");
+            assert_eq!(result, None);
+        }
+
+        #[test]
+        fn invalid_group_number_returns_none() {
+            // Group 5 doesn't exist in pattern with only 1 group
+            let result = convert_to_splunk_named_capture(r"(\d+)", 5, "code");
+            assert_eq!(result, None);
+        }
+
+        #[test]
+        fn preserves_escaped_parens() {
+            // Escaped parens should not be counted as groups
+            let result = convert_to_splunk_named_capture(r"\(test\) (\d+)", 1, "num");
+            assert_eq!(result, Some(r"\(test\) (?<num>\d+)".to_string()));
+        }
+
+        #[test]
+        fn skips_non_capturing_groups() {
+            // (?:...) should not be counted as a capture group
+            let result = convert_to_splunk_named_capture(r"(?:prefix)(\d+)", 1, "num");
+            assert_eq!(result, Some(r"(?:prefix)(?<num>\d+)".to_string()));
+        }
+
+        #[test]
+        fn counts_named_groups_as_capturing() {
+            let result = convert_to_splunk_named_capture(r"(?<existing>\w+)(\d+)", 1, "word");
+            assert_eq!(result, Some(r"(?<word>\w+)(\d+)".to_string()));
+
+            let result = convert_to_splunk_named_capture(r"(?<existing>\w+)(\d+)", 2, "num");
+            assert_eq!(result, Some(r"(?<existing>\w+)(?<num>\d+)".to_string()));
+        }
+
+        #[test]
+        fn handles_python_style_named_groups() {
+            let result = convert_to_splunk_named_capture(r"(?P<existing>\w+)(\d+)", 1, "word");
+            assert_eq!(result, Some(r"(?<word>\w+)(\d+)".to_string()));
+        }
+
+        #[test]
+        fn skips_lookahead_and_lookbehind() {
+            let result = convert_to_splunk_named_capture(r"(?=prefix)(\d+)", 1, "num");
+            assert_eq!(result, Some(r"(?=prefix)(?<num>\d+)".to_string()));
+
+            let result = convert_to_splunk_named_capture(r"(?!bad)(\d+)", 1, "num");
+            assert_eq!(result, Some(r"(?!bad)(?<num>\d+)".to_string()));
+
+            let result = convert_to_splunk_named_capture(r"(?<=pre)(\d+)", 1, "num");
+            assert_eq!(result, Some(r"(?<=pre)(?<num>\d+)".to_string()));
+
+            let result = convert_to_splunk_named_capture(r"(?<!bad)(\d+)", 1, "num");
+            assert_eq!(result, Some(r"(?<!bad)(?<num>\d+)".to_string()));
+        }
+    }
+
+    mod rex_spl {
+        use super::*;
+
+        #[test]
+        fn basic_rex_command() {
+            let handle = SplunkHandle::default().push(SplunkOp::Rex {
+                field: "message".to_string(),
+                pattern: r"error: (?<code>\d+)".to_string(),
+                output_field: "code".to_string(),
+            });
+            assert_eq!(
+                handle.build_spl("myindex"),
+                r#"search (index="myindex") | rex field=message "error: (?<code>\d+)""#
+            );
+        }
+
+        #[test]
+        fn rex_with_other_ops() {
+            let handle = SplunkHandle::default()
+                .push(SplunkOp::Search("foo=bar".into()))
+                .push(SplunkOp::Rex {
+                    field: "msg".to_string(),
+                    pattern: r"id=(?<id>\w+)".to_string(),
+                    output_field: "id".to_string(),
+                })
+                .push(SplunkOp::Head(100));
+            assert_eq!(
+                handle.build_spl("myindex"),
+                r#"search (index="myindex") | search foo=bar | rex field=msg "id=(?<id>\w+)" | head 100"#
+            );
+        }
+
+        #[test]
+        fn rex_followed_by_filter() {
+            // Simulates: extend code = extract("...", 1, msg) | where code == "123"
+            // After pushdown, rex creates the field, then filter uses it
+            let handle = SplunkHandle::default()
+                .push(SplunkOp::Rex {
+                    field: "msg".to_string(),
+                    pattern: r"error: (?<code>\d+)".to_string(),
+                    output_field: "code".to_string(),
+                })
+                .push(SplunkOp::Search(r#"code=CASE("123")"#.into()));
+            assert_eq!(
+                handle.build_spl("myindex"),
+                r#"search (index="myindex") | rex field=msg "error: (?<code>\d+)" | search code=CASE("123")"#
+            );
+        }
+
+        #[test]
+        fn rex_followed_by_where() {
+            // Simulates: extend code = extract("...", 1, msg) | where code != "error"
+            let handle = SplunkHandle::default()
+                .push(SplunkOp::Rex {
+                    field: "msg".to_string(),
+                    pattern: r"status: (?<status>\w+)".to_string(),
+                    output_field: "status".to_string(),
+                })
+                .push(SplunkOp::Where(r#"status != "error""#.into()));
+            assert_eq!(
+                handle.build_spl("myindex"),
+                r#"search (index="myindex") | rex field=msg "status: (?<status>\w+)" | where status != "error""#
+            );
+        }
+
+        #[test]
+        fn fields_remove() {
+            let handle = SplunkHandle::default()
+                .push(SplunkOp::Rex {
+                    field: "msg".to_string(),
+                    pattern: r"(?<_tmp>\w+)".to_string(),
+                    output_field: "_tmp".to_string(),
+                })
+                .push(SplunkOp::Where(r#"_tmp="foo""#.into()))
+                .push(SplunkOp::FieldsRemove(vec!["_tmp".to_string()]));
+            assert_eq!(
+                handle.build_spl("myindex"),
+                r#"search (index="myindex") | rex field=msg "(?<_tmp>\w+)" | where _tmp="foo" | fields - _tmp"#
+            );
+        }
+    }
+
+    mod extract_filter_vs_extend_filter {
+        use super::*;
+        use miso_workflow_types::{expr::Expr, field::Field, value::Value};
+
+        fn field(name: &str) -> Field {
+            name.parse().unwrap()
+        }
+
+        fn string_lit(s: &str) -> Value {
+            Value::String(s.to_string())
+        }
+
+        #[test]
+        fn filter_with_inlined_extract_creates_temporary_field_and_removes_it() {
+            // where extract("^(Calculate)", 1, title) == "Calculate"
+            // -> rex + where + fields-remove (temporary field not in output)
+            let filter_expr = Expr::Eq(
+                Box::new(Expr::Extract(
+                    Box::new(Expr::Literal(Value::String("^(Calculate)".to_string()))),
+                    Box::new(Expr::Literal(Value::Int(1))),
+                    Box::new(Expr::Field(field("title"))),
+                )),
+                Box::new(Expr::Literal(string_lit("Calculate"))),
+            );
+
+            let result = compile_filter_to_spl(&filter_expr);
+            assert!(result.is_some(), "Should compile successfully");
+
+            let ops = result.unwrap().into_spl_ops();
+
+            assert_eq!(
+                ops.len(),
+                3,
+                "Expected 3 operations: Rex, Where, FieldsRemove"
+            );
+            assert!(
+                matches!(&ops[0], SplunkOp::Rex { field, pattern, output_field }
+                    if field == "title"
+                    && pattern == "^(?<_extract_title>Calculate)"
+                    && output_field == "_extract_title"),
+                "First op should be Rex with temporary field name"
+            );
+            assert!(
+                matches!(&ops[1], SplunkOp::Where(w) if w == r#"_extract_title="Calculate""#),
+                "Second op should be Where filtering on temporary field"
+            );
+            assert!(
+                matches!(&ops[2], SplunkOp::FieldsRemove(fields) if fields == &vec!["_extract_title".to_string()]),
+                "Third op should remove the temporary field"
+            );
+        }
+
+        #[test]
+        fn extend_then_filter_keeps_user_field() {
+            // extend calc = extract(...) | where calc == "Calculate"
+            // -> simple search (no fields-remove since user's field should be in output)
+            let filter_expr = Expr::Eq(
+                Box::new(Expr::Field(field("calc"))),
+                Box::new(Expr::Literal(string_lit("Calculate"))),
+            );
+
+            let result = compile_filter_to_spl(&filter_expr);
+            assert!(result.is_some(), "Should compile successfully");
+
+            let ops = result.unwrap().into_spl_ops();
+
+            assert_eq!(ops.len(), 1, "Expected 1 operation: Search");
+            assert!(
+                matches!(&ops[0], SplunkOp::Search(s) if s == r#"calc=CASE("Calculate")"#),
+                "Should be a simple Search on the user's field, got: {:?}",
+                ops[0]
+            );
         }
     }
 }
