@@ -237,6 +237,7 @@ where
         Token::Let => "let".to_string(),
         Token::Between => "between".to_string(),
         Token::Case => "case".to_string(),
+        Token::Extract => "extract".to_string(),
     }
 }
 
@@ -475,6 +476,32 @@ where
             .labelled("bin")
             .boxed();
 
+        let extract = just(Token::Extract)
+            .ignore_then(
+                expr.clone()
+                    .then_ignore(just(Token::Comma))
+                    .then(expr.clone())
+                    .then_ignore(just(Token::Comma))
+                    .then(expr.clone())
+                    .delimited_by(just(Token::LParen), just(Token::RParen))
+                    .recover_with(via_parser(nested_delimiters(
+                        Token::LParen,
+                        Token::RParen,
+                        [(Token::LBracket, Token::RBracket)],
+                        |_| {
+                            (
+                                (Expr::Literal(Value::Null), Expr::Literal(Value::Null)),
+                                Expr::Literal(Value::Null),
+                            )
+                        },
+                    ))),
+            )
+            .map(|((regex, group), source)| {
+                Expr::Extract(Box::new(regex), Box::new(group), Box::new(source))
+            })
+            .labelled("extract")
+            .boxed();
+
         let expr_delimited_by_parentheses = expr
             .clone()
             .delimited_by(just(Token::LParen), just(Token::RParen))
@@ -512,6 +539,7 @@ where
         let atom = literal
             .or(expr_delimited_by_parentheses)
             .or(bin)
+            .or(extract)
             .or(not)
             .or(negate)
             .or(cast)

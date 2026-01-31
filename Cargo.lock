@@ -2560,6 +2560,7 @@ dependencies = [
  "miso-workflow-types",
  "parking_lot",
  "rayon",
+ "regex",
  "scoped_thread_local",
  "scopeguard",
  "serde",
