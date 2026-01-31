@@ -6,18 +6,31 @@ use miso_workflow_types::{expr::Expr, expr_visitor::ExprTransformer, field::Fiel
 type RenameHook<'a> = RefCell<Box<dyn FnMut(Field, &Field) + 'a>>;
 type LiteralHook<'a> = RefCell<Box<dyn FnMut(Field, &Value) + 'a>>;
 
+static EMPTY_EXPRS: std::sync::LazyLock<HashMap<Field, Expr>> =
+    std::sync::LazyLock::new(HashMap::new);
+
 pub struct ExprSubstitute<'a> {
     renames: &'a HashMap<Field, Field>,
     literals: &'a HashMap<Field, Value>,
+    exprs: &'a HashMap<Field, Expr>,
     rename_hook: Option<RenameHook<'a>>,
     literal_hook: Option<LiteralHook<'a>>,
 }
 
 impl<'a> ExprSubstitute<'a> {
     pub fn new(renames: &'a HashMap<Field, Field>, literals: &'a HashMap<Field, Value>) -> Self {
+        Self::with_exprs(renames, literals, &EMPTY_EXPRS)
+    }
+
+    pub fn with_exprs(
+        renames: &'a HashMap<Field, Field>,
+        literals: &'a HashMap<Field, Value>,
+        exprs: &'a HashMap<Field, Expr>,
+    ) -> Self {
         Self {
             renames,
             literals,
+            exprs,
             rename_hook: None,
             literal_hook: None,
         }
@@ -61,6 +74,8 @@ impl<'a> ExprTransformer for ExprSubstitute<'a> {
                 hook.borrow_mut()(field, to);
             }
             Expr::Field(to.clone())
+        } else if let Some(expr) = self.exprs.get(&field) {
+            self.transform(expr.clone())
         } else {
             Expr::Field(field)
         }

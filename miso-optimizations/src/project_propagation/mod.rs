@@ -84,50 +84,34 @@ fn apply(
 
     let mut renames: HashMap<Field, Field> = HashMap::new(); // a = b
     let mut literals: HashMap<Field, Value> = HashMap::new(); // c = 50
-    let mut unhandled_projects = Vec::new();
+    let mut exprs: HashMap<Field, Expr> = HashMap::new(); // code = case(...)
 
-    let (project_fields, step_type) = match &steps[0] {
-        WorkflowStep::Project(fields) => (fields, StepType::Project),
-        WorkflowStep::Extend(fields) => (fields, StepType::Extend),
+    let step_type = match &steps[0] {
+        WorkflowStep::Project(fields) => {
+            categorize_fields(fields, &mut renames, &mut literals, &mut exprs);
+            StepType::Project
+        }
+        WorkflowStep::Extend(fields) => {
+            categorize_fields(fields, &mut renames, &mut literals, &mut exprs);
+            StepType::Extend
+        }
         WorkflowStep::Rename(renames_to_track) => {
             for (from, to) in renames_to_track {
                 renames.insert(to.clone(), from.clone());
             }
-            (&vec![], StepType::Rename)
+            StepType::Rename
         }
         _ => return None,
     };
 
-    for pf in project_fields.iter().cloned() {
-        match pf.from {
-            Expr::Field(src) => {
-                renames.insert(pf.to, src);
-            }
-            Expr::Literal(val) => {
-                literals.insert(pf.to, val);
-            }
-            from => {
-                unhandled_projects.push(ProjectField { from, to: pf.to });
-            }
-        }
-    }
-
-    if renames.is_empty() && literals.is_empty() {
+    if renames.is_empty() && literals.is_empty() && exprs.is_empty() {
         return None;
     }
 
     let mut out = Vec::new();
-    if !unhandled_projects.is_empty() {
-        let step = match step_type {
-            StepType::Project => WorkflowStep::Project(unhandled_projects),
-            StepType::Extend => WorkflowStep::Extend(unhandled_projects),
-            StepType::Rename => unreachable!("rename cannot include unhandled projects"),
-        };
-        out.push(step);
-    }
 
     {
-        let expr_subst = ExprSubstitute::new(&renames, &literals);
+        let expr_subst = ExprSubstitute::with_exprs(&renames, &literals, &exprs);
 
         let (middle_start, middle_end) = middle_group;
         for step in steps[middle_start..middle_end].iter().cloned() {
@@ -153,7 +137,7 @@ fn apply(
                 WorkflowStep::Limit(n) => WorkflowStep::Limit(n),
 
                 WorkflowStep::Extend(fields) => {
-                    let new_fields = rewrite_project_fields(fields, &renames, &literals);
+                    let new_fields = rewrite_project_fields(fields, &renames, &literals, &exprs);
                     if new_fields.is_empty() {
                         continue;
                     }
@@ -161,7 +145,7 @@ fn apply(
                 }
 
                 WorkflowStep::Expand(mut expand) => {
-                    expand.fields = rewrite_expand(expand.fields, &renames, &literals);
+                    expand.fields = rewrite_expand(expand.fields, &renames, &literals, &exprs);
                     if expand.fields.is_empty() {
                         continue;
                     }
@@ -177,12 +161,8 @@ fn apply(
 
     if !with_end_step {
         let step = match step_type {
-            StepType::Project => {
-                WorkflowStep::Project(renames_and_literals_to_project_fields(renames, literals))
-            }
-            StepType::Extend => {
-                WorkflowStep::Extend(renames_and_literals_to_project_fields(renames, literals))
-            }
+            StepType::Project => WorkflowStep::Project(to_project_fields(renames, literals, exprs)),
+            StepType::Extend => WorkflowStep::Extend(to_project_fields(renames, literals, exprs)),
             StepType::Rename => {
                 WorkflowStep::Rename(renames.into_iter().map(|(to, from)| (from, to)).collect())
             }
@@ -195,7 +175,7 @@ fn apply(
     match tail {
         WorkflowStep::Summarize(sum) | WorkflowStep::MuxSummarize(sum) => {
             let (new_sum, post_project_fields) =
-                rewrite_summarize(sum.clone(), &renames, &literals)?;
+                rewrite_summarize(sum.clone(), &renames, &literals, &exprs)?;
 
             if !new_sum.is_empty() {
                 let step = match tail {
@@ -211,7 +191,7 @@ fn apply(
             }
         }
         WorkflowStep::Project(fields) => {
-            let new_fields = rewrite_project_fields(fields.to_vec(), &renames, &literals);
+            let new_fields = rewrite_project_fields(fields.to_vec(), &renames, &literals, &exprs);
             out.push(WorkflowStep::Project(new_fields));
         }
         _ => unreachable!("not in end pattern"),
@@ -238,8 +218,9 @@ fn rewrite_project_fields(
     fields: Vec<ProjectField>,
     renames: &HashMap<Field, Field>,
     literals: &HashMap<Field, Value>,
+    exprs: &HashMap<Field, Expr>,
 ) -> Vec<ProjectField> {
-    let expr_subst = ExprSubstitute::new(renames, literals);
+    let expr_subst = ExprSubstitute::with_exprs(renames, literals, exprs);
     fields
         .into_iter()
         .map(|pf| ProjectField {
@@ -253,8 +234,9 @@ fn rewrite_expand(
     fields: Vec<Field>,
     renames: &HashMap<Field, Field>,
     literals: &HashMap<Field, Value>,
+    exprs: &HashMap<Field, Expr>,
 ) -> Vec<Field> {
-    let expr_subst = ExprSubstitute::new(renames, literals);
+    let expr_subst = ExprSubstitute::with_exprs(renames, literals, exprs);
     fields
         .into_iter()
         .filter_map(|f| {
@@ -267,16 +249,38 @@ fn rewrite_expand(
         .collect()
 }
 
+fn categorize_fields(
+    fields: &[ProjectField],
+    renames: &mut HashMap<Field, Field>,
+    literals: &mut HashMap<Field, Value>,
+    exprs: &mut HashMap<Field, Expr>,
+) {
+    for pf in fields.iter().cloned() {
+        match pf.from {
+            Expr::Field(src) => {
+                renames.insert(pf.to, src);
+            }
+            Expr::Literal(val) => {
+                literals.insert(pf.to, val);
+            }
+            from => {
+                exprs.insert(pf.to, from);
+            }
+        }
+    }
+}
+
 fn rewrite_summarize(
     sum: Summarize,
     renames: &HashMap<Field, Field>,
     literals: &HashMap<Field, Value>,
+    exprs: &HashMap<Field, Expr>,
 ) -> Option<(Summarize, Vec<ProjectField>)> {
     let mut project_fields = Vec::new();
     let mut summarize_output_fields = HashSet::new();
 
     let new_by = {
-        let expr_subst = ExprSubstitute::new(renames, literals)
+        let expr_subst = ExprSubstitute::with_exprs(renames, literals, exprs)
             .with_literal_hook(|f, v| {
                 project_fields.push(ProjectField {
                     from: Expr::Literal(v.clone()),
@@ -304,7 +308,7 @@ fn rewrite_summarize(
         summarize_output_fields.insert(bf.name.clone());
     }
 
-    let expr_subst = ExprSubstitute::new(renames, literals);
+    let expr_subst = ExprSubstitute::with_exprs(renames, literals, exprs);
     let mut new_aggs = HashMap::new();
 
     for (k, agg) in sum.aggs {
@@ -409,11 +413,12 @@ fn rewrite_summarize(
     Some((summarize_step, project_fields))
 }
 
-fn renames_and_literals_to_project_fields(
+fn to_project_fields(
     renames: HashMap<Field, Field>,
     literals: HashMap<Field, Value>,
+    exprs: HashMap<Field, Expr>,
 ) -> Vec<ProjectField> {
-    let mut project_fields = Vec::with_capacity(renames.len() + literals.len());
+    let mut project_fields = Vec::with_capacity(renames.len() + literals.len() + exprs.len());
     for (to, from) in renames {
         project_fields.push(ProjectField {
             to,
@@ -425,6 +430,9 @@ fn renames_and_literals_to_project_fields(
             to,
             from: Expr::Literal(value),
         });
+    }
+    for (to, expr) in exprs {
+        project_fields.push(ProjectField { to, from: expr });
     }
     project_fields
 }
