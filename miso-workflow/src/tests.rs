@@ -184,6 +184,9 @@ async fn assert_workflows(
     workflow_limits: WorkflowLimits,
     should_cancel: bool,
 ) -> Result<()> {
+    let non_optimized_str = format!("{no_optimizations_workflow}");
+    let optimized_str = format!("{optimizations_workflow}");
+
     let cancel = CancellationToken::new();
     if should_cancel {
         cancel.cancel();
@@ -219,7 +222,8 @@ async fn assert_workflows(
 
     assert_eq!(
         logs, optimized_logs,
-        "results of workflow should equal results of optimized workflow query, even after sorting"
+        "results of workflow should equal results of optimized workflow query, even after sorting.\nNon optimized:\n{}\nOptimized:\n{}",
+        non_optimized_str, optimized_str,
     );
 
     Ok(())
