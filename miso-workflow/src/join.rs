@@ -20,7 +20,7 @@ use miso_workflow_types::{
     field::Field,
     join::{Join, JoinType},
     log::{Log, LogItem, LogIter},
-    value::{Entry, Value},
+    value::Value,
 };
 use thiserror::Error;
 use tokio_util::sync::CancellationToken;
@@ -33,9 +33,6 @@ use crate::{
     memory_size::MemorySize,
     spawn_thread::{ThreadRx, spawn},
 };
-
-const MERGED_LEFT_SUFFIX: &str = "_left";
-const MERGED_RIGHT_SUFFIX: &str = "_right";
 
 #[derive(Debug, Error)]
 pub enum JoinError {
@@ -57,31 +54,30 @@ macro_rules! send_ret_on_err {
     };
 }
 
+/// Finds a unique key name for the right-side column by appending KQL-style suffixes.
+/// KQL adds "1" suffix to right-side columns that conflict with left-side columns.
+/// If "key1" already exists, it tries "key2", "key3", etc.
+fn find_unique_right_key(left: &Log, base_key: &str) -> String {
+    let mut suffix_num = 1u32;
+    loop {
+        let candidate = format!("{base_key}{suffix_num}");
+        if !left.contains_key(&candidate) {
+            return candidate;
+        }
+        suffix_num += 1;
+    }
+}
+
 fn merge_left_with_right(join_value: &Value, mut left: Log, right: Log) -> Log {
     for (key, value) in right {
-        match left.entry(key) {
-            Entry::Occupied(entry) => {
-                if join_value == entry.get() {
-                    // Keep existing value.
-                    continue;
-                }
-
-                let key = entry.key();
-
-                let mut left_key = String::with_capacity(key.len() + MERGED_LEFT_SUFFIX.len());
-                left_key.push_str(key);
-                left_key.push_str(MERGED_LEFT_SUFFIX);
-
-                let mut right_key = String::with_capacity(key.len() + MERGED_RIGHT_SUFFIX.len());
-                right_key.push_str(key);
-                right_key.push_str(MERGED_RIGHT_SUFFIX);
-
-                let existing_value = entry.remove();
-                left.insert(left_key, existing_value);
+        match left.get(&key) {
+            Some(existing) if join_value == existing => {}
+            Some(_) => {
+                let right_key = find_unique_right_key(&left, &key);
                 left.insert(right_key, value);
             }
-            Entry::Vacant(entry) => {
-                entry.insert(value);
+            None => {
+                left.insert(key, value);
             }
         }
     }
