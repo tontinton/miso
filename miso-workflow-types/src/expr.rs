@@ -261,4 +261,78 @@ impl Expr {
         self._fields(&mut out);
         out
     }
+
+    /// Try to invert a branch expression (like `case`) given a target value.
+    ///
+    /// For `case(cond, val_true, val_false)` with target:
+    /// - `target == val_true` -> `cond`
+    /// - `target == val_false` -> `NOT(cond)`
+    /// - no match -> `false`
+    ///
+    /// For multi-branch `case(c1, v1, c2, v2, ..., default)`:
+    /// - `target == v1` -> `c1`
+    /// - `target == v2` -> `NOT(c1) AND c2`
+    /// - `target == default` -> `NOT(c1) AND NOT(c2) AND ...`
+    /// - multiple matches -> OR the conditions
+    ///
+    /// Returns `None` if the expression is not a branch or has non-literal values.
+    pub fn try_invert_branch(&self, target: &Value) -> Option<Expr> {
+        match self {
+            Expr::Case(predicates, default) => invert_case(predicates, default, target),
+            _ => None,
+        }
+    }
+}
+
+fn invert_case(predicates: &[(Expr, Expr)], default: &Expr, target: &Value) -> Option<Expr> {
+    let Expr::Literal(default_val) = default else {
+        return None;
+    };
+
+    let mut matching_conditions: Vec<Expr> = Vec::new();
+    let mut negated_conditions: Vec<Expr> = Vec::new();
+
+    for (cond, then_expr) in predicates {
+        let Expr::Literal(then_val) = then_expr else {
+            return None;
+        };
+
+        let branch_cond = and_all(negated_conditions.iter().cloned().chain([cond.clone()]));
+        if then_val == target {
+            matching_conditions.push(branch_cond);
+        }
+        negated_conditions.push(Expr::Not(Box::new(cond.clone())));
+    }
+
+    if default_val == target {
+        if negated_conditions.is_empty() {
+            matching_conditions.push(Expr::Literal(Value::Bool(true)));
+        } else {
+            matching_conditions.push(and_all(negated_conditions));
+        }
+    }
+
+    if matching_conditions.is_empty() {
+        Some(Expr::Literal(Value::Bool(false)))
+    } else {
+        Some(or_all(matching_conditions))
+    }
+}
+
+fn fold_exprs(
+    exprs: impl IntoIterator<Item = Expr>,
+    combine: fn(Box<Expr>, Box<Expr>) -> Expr,
+) -> Expr {
+    exprs
+        .into_iter()
+        .reduce(|acc, e| combine(Box::new(acc), Box::new(e)))
+        .expect("fold_exprs requires at least one element")
+}
+
+fn and_all(exprs: impl IntoIterator<Item = Expr>) -> Expr {
+    fold_exprs(exprs, Expr::And)
+}
+
+fn or_all(exprs: impl IntoIterator<Item = Expr>) -> Expr {
+    fold_exprs(exprs, Expr::Or)
 }

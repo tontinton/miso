@@ -8,6 +8,7 @@ use convert_sort_limit_to_topn::ConvertSortLimitToTopN;
 use dynamic_filter::DynamicFilter;
 use eliminate_unused_fields::EliminateUnusedFields;
 use filter_propagation::FilterPropagation;
+use invert_branch_filter::InvertBranchFilter;
 use merge_filters_into_and_filter::MergeFiltersIntoAndFilter;
 use merge_topns::MergeTopNs;
 use mux_into_union::MuxIntoUnion;
@@ -35,6 +36,7 @@ mod dynamic_filter;
 mod eliminate_unused_fields;
 mod field_replacer;
 mod filter_propagation;
+mod invert_branch_filter;
 mod merge_filters_into_and_filter;
 mod merge_topns;
 mod mux_into_union;
@@ -135,6 +137,7 @@ impl Optimizer {
                 opt!(ProjectPropagationWithEnd),
                 opt!(ProjectPropagationWithoutEnd),
                 opt!(FilterPropagation),
+                opt!(InvertBranchFilter),
                 opt!(ConstFolding),
                 opt!(RemoveRedundantEmptySteps),
                 // Filter.
