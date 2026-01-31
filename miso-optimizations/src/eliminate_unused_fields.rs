@@ -23,7 +23,7 @@ pub struct EliminateUnusedFields;
 impl Optimization for EliminateUnusedFields {
     fn pattern(&self) -> Pattern {
         // End at steps that outputs different fields.
-        pattern!(Scan ([^Tee]+?) [Count MuxCount Summarize MuxSummarize Project])
+        pattern!(Scan ([^Tee Write]+?) [Count MuxCount Summarize MuxSummarize Project])
     }
 
     fn apply(&self, steps: &[WorkflowStep], _groups: &[Group]) -> OptimizationResult {
@@ -139,7 +139,10 @@ fn compute_required_before_step(step: &WorkflowStep, mut after: HashSet<Field>) 
             after
         }
 
-        WorkflowStep::Union(_) | WorkflowStep::Tee(_) | WorkflowStep::Scan(_) => after,
+        WorkflowStep::Union(_)
+        | WorkflowStep::Tee(_)
+        | WorkflowStep::Write(_)
+        | WorkflowStep::Scan(_) => after,
     }
 }
 

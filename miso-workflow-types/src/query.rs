@@ -26,6 +26,10 @@ pub enum QueryStep {
         connector: String,
         collection: String,
     },
+    Write {
+        connector: String,
+        collection: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

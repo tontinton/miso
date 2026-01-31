@@ -43,6 +43,7 @@ pub const STEP_TOPN: &str = "topn";
 pub const STEP_RENAME: &str = "rename";
 pub const STEP_COUNT: &str = "count";
 pub const STEP_TEE: &str = "tee";
+pub const STEP_WRITE: &str = "write";
 
 pub struct Metrics {
     pub query_latency: Histogram,

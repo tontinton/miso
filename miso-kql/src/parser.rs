@@ -226,6 +226,7 @@ where
         Token::Union => "union".to_string(),
         Token::Count => "count".to_string(),
         Token::Tee => "tee".to_string(),
+        Token::Write => "write".to_string(),
         Token::Countif => "countif".to_string(),
         Token::DCount => "dcount".to_string(),
         Token::Sum => "sum".to_string(),
@@ -1140,12 +1141,23 @@ where
     let tee_step = just(Token::Tee)
         .ignore_then(ident.clone())
         .then_ignore(just(Token::Dot))
-        .then(ident)
+        .then(ident.clone())
         .map(|(connector, collection)| QueryStep::Tee {
             connector,
             collection,
         })
         .labelled("tee")
+        .boxed();
+
+    let write_step = just(Token::Write)
+        .ignore_then(ident.clone())
+        .then_ignore(just(Token::Dot))
+        .then(ident)
+        .map(|(connector, collection)| QueryStep::Write {
+            connector,
+            collection,
+        })
+        .labelled("write")
         .boxed();
 
     filter_step
@@ -1162,6 +1174,7 @@ where
         .or(join_step)
         .or(count_step)
         .or(tee_step)
+        .or(write_step)
         .recover_with(skip_until(
             none_of([Token::Pipe]).ignored(),
             just(Token::Pipe).ignored(),

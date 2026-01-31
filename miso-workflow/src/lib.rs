@@ -39,6 +39,7 @@ use crate::{
     tee::{Tee, tee_creator},
     topn::{PartialTopNIter, TopNIter},
     union::UnionIter,
+    write::{Write, write_creator},
 };
 
 use self::log_iter_creator::{CancelIterCreator, IterCreator, fn_creator};
@@ -67,6 +68,7 @@ pub mod tee;
 pub mod topn;
 mod type_tracker;
 mod union;
+pub mod write;
 
 #[cfg(test)]
 pub mod test_utils;
@@ -133,6 +135,9 @@ pub enum WorkflowStep {
 
     /// Write logs to a sink while also forwarding them downstream.
     Tee(Tee),
+
+    /// Write logs to a sink and consume them (returns nothing).
+    Write(Write),
 }
 
 #[derive(Debug, Clone)]
@@ -382,6 +387,11 @@ impl WorkflowStep {
                 async_tasks.push(task);
                 creator
             }
+            WorkflowStep::Write(write) => {
+                let (creator, task) = write_creator(rx.into_creator(), write);
+                async_tasks.push(task);
+                creator
+            }
         };
 
         Ok((creator, threads, async_tasks))
@@ -418,7 +428,8 @@ impl WorkflowStep {
             | Self::MuxCount
             | Self::Summarize(..)
             | Self::MuxSummarize(..)
-            | Self::Tee(..) => true,
+            | Self::Tee(..)
+            | Self::Write(..) => true,
         }
     }
 }
