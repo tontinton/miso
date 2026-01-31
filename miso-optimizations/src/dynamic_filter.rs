@@ -73,21 +73,35 @@ impl Optimization for DynamicFilter {
         let watch = Watch::default();
         right_scan.dynamic_filter_tx = Some(watch.clone());
 
-        fn is_join_allowed(join: JoinType, required: JoinType) -> bool {
-            join == JoinType::Inner || join == required
-        }
+        let producer_is_left = match join.type_ {
+            JoinType::Inner => {
+                if left_dcount < self.max_distinct_values && right_dcount < self.max_distinct_values
+                {
+                    left_dcount <= right_dcount
+                } else if left_dcount < self.max_distinct_values {
+                    true
+                } else if right_dcount < self.max_distinct_values {
+                    false
+                } else {
+                    return OptimizationResult::Unchanged;
+                }
+            }
 
-        let try_left =
-            left_dcount < self.max_distinct_values && is_join_allowed(join.type_, JoinType::Left);
+            JoinType::Left if left_dcount < self.max_distinct_values => true,
 
-        let try_right =
-            right_dcount < self.max_distinct_values && is_join_allowed(join.type_, JoinType::Right);
+            JoinType::Right if right_dcount < self.max_distinct_values => false,
 
-        let producer_is_left = match (try_left, try_right) {
-            (true, true) => left_dcount <= right_dcount,
-            (true, false) => true,
-            (false, true) => false,
-            (false, false) => return OptimizationResult::Unchanged,
+            // Neither side strictly allowed, but at least one is small.
+            _ => {
+                if left_dcount >= self.max_distinct_values
+                    && right_dcount >= self.max_distinct_values
+                {
+                    return OptimizationResult::Unchanged;
+                }
+
+                right_scan.add_not_to_dynamic_filter = true;
+                left_dcount <= right_dcount
+            }
         };
 
         if producer_is_left {
@@ -241,6 +255,7 @@ mod tests {
             stats: Arc::new(Mutex::new(connector_stats)),
             dynamic_filter_tx: None,
             dynamic_filter_rx: None,
+            add_not_to_dynamic_filter: false,
         }
     }
 

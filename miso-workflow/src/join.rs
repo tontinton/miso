@@ -291,24 +291,35 @@ pub struct DynamicFilterTx {
     tx: Watch<Expr>,
     is_left: bool,
     field: Field,
+    add_not_to_dynamic_filter: bool,
     values: HashSet<Value>,
 }
 
 impl DynamicFilterTx {
-    pub fn new(tx: Watch<Expr>, is_left: bool, field: Field) -> Self {
+    pub fn new(
+        tx: Watch<Expr>,
+        is_left: bool,
+        field: Field,
+        add_not_to_dynamic_filter: bool,
+    ) -> Self {
         Self {
             tx,
             is_left,
             field,
+            add_not_to_dynamic_filter,
             values: HashSet::new(),
         }
     }
 
     fn send(self) {
-        self.tx.set(Expr::In(
+        let mut expr = Expr::In(
             Box::new(Expr::Field(self.field)),
             self.values.into_iter().map(Expr::Literal).collect(),
-        ))
+        );
+        if self.add_not_to_dynamic_filter {
+            expr = Expr::Not(Box::new(expr));
+        }
+        self.tx.set(expr);
     }
 }
 

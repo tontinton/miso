@@ -39,6 +39,7 @@ pub struct Scan {
 
     pub dynamic_filter_tx: Option<Watch<Expr>>,
     pub dynamic_filter_rx: Option<Watch<Expr>>,
+    pub add_not_to_dynamic_filter: bool,
 }
 
 impl PartialEq for Scan {
@@ -71,6 +72,7 @@ impl Scan {
             stats,
             dynamic_filter_tx: None,
             dynamic_filter_rx: None,
+            add_not_to_dynamic_filter: false,
         })
     }
 

@@ -330,7 +330,12 @@ impl WorkflowStep {
                     } else {
                         join.on.1.clone()
                     };
-                    DynamicFilterTx::new(tx, is_left_sending_dynamic_filter, field)
+                    DynamicFilterTx::new(
+                        tx,
+                        is_left_sending_dynamic_filter,
+                        field,
+                        scan.add_not_to_dynamic_filter,
+                    )
                 });
 
                 let (right_rxs, _right_source_ids, inner_threads, inner_async_tasks) =
