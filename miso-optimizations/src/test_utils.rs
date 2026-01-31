@@ -80,6 +80,10 @@ pub fn lit(val: i64) -> Expr {
     Expr::Literal(Value::Int(val))
 }
 
+pub fn eq(l: Expr, r: Expr) -> Expr {
+    Expr::Eq(Box::new(l), Box::new(r))
+}
+
 pub fn gt(l: Expr, r: Expr) -> Expr {
     Expr::Gt(Box::new(l), Box::new(r))
 }
