@@ -270,7 +270,7 @@ fn run_optimization_pass(
                     &matched_groups,
                 ) {
                     OptimizationResult::Unchanged => {
-                        current_start += end - start;
+                        current_start += 1;
                         continue;
                     }
                     OptimizationResult::Changed(new_steps) => new_steps,
