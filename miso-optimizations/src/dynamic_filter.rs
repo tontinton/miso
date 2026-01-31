@@ -1,3 +1,22 @@
+//! Speeds up joins by filtering early when one side is small.
+//!
+//! Joins can be expensive when both sides return lots of data. But often one side
+//! has few distinct values on the join key - think joining a small lookup table
+//! to a huge event stream. If we know those values upfront, we can filter the
+//! big side *before* reading all that data.
+//!
+//! This optimization estimates distinct counts on each join side using connector
+//! stats (field cardinality) combined with pipeline hints (limits, summarize groups).
+//! When one side is small enough, we set up a `Watch` channel: the small side
+//! broadcasts its join key values, the big side filters incoming data to only
+//! matching keys.
+//!
+//! For inner joins, either side can be the producer (we pick the smaller one).
+//! For left/right joins, semantics matter - we prefer the side that preserves
+//! all rows. When we have to use the "wrong" side, we add NOT to the filter
+//! (e.g., for a left join with small right side, we filter out non-matching
+//! rows from the left side, which is safe because they'd produce no output anyway).
+
 use miso_common::watch::Watch;
 use miso_workflow::{WorkflowStep, scan::Scan};
 use miso_workflow_types::join::JoinType;
