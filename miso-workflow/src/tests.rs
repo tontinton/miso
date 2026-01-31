@@ -1170,10 +1170,10 @@ async fn join_inner(partitions: usize) -> Result<()> {
         })
         .expect(
             r#"[
-                {"id": 1, "value_left": "one", "value_right": "ONE"},
-                {"id": 1, "value_left": "dup", "value_right": "ONE"},
-                {"id": 2, "value_left": "two", "value_right": "TWO"},
-                {"id": 2, "value_left": "two", "value_right": "DUP"}
+                {"id": 1, "value": "one", "value1": "ONE"},
+                {"id": 1, "value": "dup", "value1": "ONE"},
+                {"id": 2, "value": "two", "value1": "TWO"},
+                {"id": 2, "value": "two", "value1": "DUP"}
             ]"#
         )
         .apply_filter_tx(tx)
@@ -1234,10 +1234,10 @@ async fn join_outer(partitions: usize) -> Result<()> {
         })
         .expect(
             r#"[
-                {"id": 1, "value_left": "one", "value_right": "ONE"},
-                {"id": 1, "value_left": "dup", "value_right": "ONE"},
-                {"id": 2, "value_left": "two", "value_right": "TWO"},
-                {"id": 2, "value_left": "two", "value_right": "DUP"},
+                {"id": 1, "value": "one", "value1": "ONE"},
+                {"id": 1, "value": "dup", "value1": "ONE"},
+                {"id": 2, "value": "two", "value1": "TWO"},
+                {"id": 2, "value": "two", "value1": "DUP"},
                 {"id": 3, "value": "three"},
                 {"id": 4, "value": "FOUR"}
             ]"#
@@ -2007,10 +2007,23 @@ async fn join_with_null_keys(partitions: usize) -> Result<()> {
         })
         .expect(
             r#"[
-                {"id": null, "value_left": "b", "value_right": "B"},
-                {"id": 1, "value_left": "a", "value_right": "A"}
+                {"id": null, "value": "b", "value1": "B"},
+                {"id": 1, "value": "a", "value1": "A"}
             ]"#,
         )
+        .call()
+        .await
+}
+
+#[tokio::test]
+async fn join_column_suffix_increments() -> Result<()> {
+    check_multi_collection()
+        .query(r#"test.left | join (test.right) on id"#)
+        .input(btreemap! {
+            "left"  => r#"[{"id": 1, "x": "a", "x1": "b"}]"#,
+            "right" => r#"[{"id": 1, "x": "A", "x1": "B"}]"#,
+        })
+        .expect(r#"[{"id": 1, "x": "a", "x1": "b", "x2": "A", "x11": "B"}]"#)
         .call()
         .await
 }
@@ -2051,8 +2064,8 @@ async fn join_outer_with_nulls() -> Result<()> {
         })
         .expect(
             r#"[
-                {"id": null, "value_left": "b", "value_right": "B"},
-                {"id": 1, "value_left": "a", "value_right": "A"}
+                {"id": null, "value": "b", "value1": "B"},
+                {"id": 1, "value": "a", "value1": "A"}
             ]"#,
         )
         .call()
@@ -2571,8 +2584,8 @@ async fn join_memory_limit_under_limit_succeeds() -> Result<()> {
         })
         .expect(
             r#"[
-                {"id": 1, "value_left": "one", "value_right": "ONE"},
-                {"id": 2, "value_left": "two", "value_right": "TWO"}
+                {"id": 1, "value": "one", "value1": "ONE"},
+                {"id": 2, "value": "two", "value1": "TWO"}
             ]"#,
         )
         .workflow_limits(limits)
