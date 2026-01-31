@@ -155,6 +155,12 @@ enum SplunkOp {
     Count,
     /// `| rename old as new, ...` - used to rename fields after stats
     Rename(Vec<(String, String)>),
+    /// `| rex field=... "..."` - regex extraction
+    Rex {
+        field: String,
+        pattern: String,
+        output_field: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -283,6 +289,13 @@ impl SplunkHandle {
                         .join(", ");
                     spl.push_str(&rename_clause);
                 }
+                SplunkOp::Rex {
+                    field,
+                    pattern,
+                    output_field: _,
+                } => {
+                    spl.push_str(&format!(" | rex field={} \"{}\"", field, pattern));
+                }
             }
         }
 
@@ -374,6 +387,13 @@ impl fmt::Display for SplunkHandle {
                         .collect::<Vec<_>>()
                         .join(", ");
                     items.push(format!("rename={}", s));
+                }
+                SplunkOp::Rex {
+                    field,
+                    pattern,
+                    output_field,
+                } => {
+                    items.push(format!("rex field={} \"{}\" -> {}", field, pattern, output_field));
                 }
             }
         }
@@ -706,6 +726,52 @@ fn compile_filter_to_spl(expr: &Expr) -> Option<FilterResult> {
 
         _ => return None,
     })
+}
+
+/// Convert KQL positional capture group to Splunk named capture.
+///
+/// For example, pattern `error: (\d+)` with group 1 and output "code"
+/// becomes `error: (?<code>\d+)`.
+///
+/// This function finds the Nth capture group (1-indexed) in the regex pattern
+/// and converts it to a named capture group with the specified output name.
+fn convert_to_splunk_named_capture(pattern: &str, group: i64, output: &str) -> Option<String> {
+    if group <= 0 {
+        return None;
+    }
+
+    let mut result = String::with_capacity(pattern.len() + output.len() + 4);
+    let mut current_group = 0i64;
+    let mut chars = pattern.chars().peekable();
+    let target_group = group;
+
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            result.push(c);
+            if let Some(next) = chars.next() {
+                result.push(next);
+            }
+        } else if c == '(' {
+            if chars.peek() == Some(&'?') {
+                result.push(c);
+            } else {
+                current_group += 1;
+                if current_group == target_group {
+                    result.push_str(&format!("(?<{}>", output));
+                } else {
+                    result.push(c);
+                }
+            }
+        } else {
+            result.push(c);
+        }
+    }
+
+    if current_group < target_group {
+        return None;
+    }
+
+    Some(result)
 }
 
 impl SplunkConnector {
@@ -1112,6 +1178,45 @@ impl Connector for SplunkConnector {
         Some(Box::new(handle))
     }
 
+    fn apply_extend(
+        &self,
+        projections: &[ProjectField],
+        handle: &dyn QueryHandle,
+    ) -> Option<Box<dyn QueryHandle>> {
+        let handle = downcast_unwrap!(handle, SplunkHandle);
+        let mut new_handle = handle.clone();
+
+        for proj in projections {
+            let Expr::Extract(regex_expr, group_expr, source_expr) = &proj.from else {
+                return None;
+            };
+
+            let Expr::Literal(Value::String(pattern)) = regex_expr.as_ref() else {
+                return None;
+            };
+            let Expr::Literal(group_val) = group_expr.as_ref() else {
+                return None;
+            };
+            let Some(group) = group_val.as_i64() else {
+                return None;
+            };
+            let Expr::Field(source_field) = source_expr.as_ref() else {
+                return None;
+            };
+
+            let splunk_pattern =
+                convert_to_splunk_named_capture(pattern, group, &proj.to.to_string())?;
+
+            new_handle = new_handle.push(SplunkOp::Rex {
+                field: source_field.to_string(),
+                pattern: splunk_pattern,
+                output_field: proj.to.to_string(),
+            });
+        }
+
+        Some(Box::new(new_handle))
+    }
+
     fn apply_union(
         &self,
         _scan_collection: &str,
@@ -1511,6 +1616,118 @@ mod tests {
             let updated = handle.with_time_constraints(Some(1000), Some(2000));
             assert_eq!(updated.earliest, Some(1000));
             assert_eq!(updated.latest, Some(2000));
+        }
+    }
+
+    mod convert_named_capture {
+        use super::*;
+
+        #[test]
+        fn simple_capture_group() {
+            // Pattern: error: (\d+) with group 1 -> error: (?<code>\d+)
+            let result = convert_to_splunk_named_capture(r"error: (\d+)", 1, "code");
+            assert_eq!(result, Some(r"error: (?<code>\d+)".to_string()));
+        }
+
+        #[test]
+        fn second_capture_group() {
+            // Pattern: (\w+): (\d+) with group 2 -> (\w+): (?<num>\d+)
+            let result = convert_to_splunk_named_capture(r"(\w+): (\d+)", 2, "num");
+            assert_eq!(result, Some(r"(\w+): (?<num>\d+)".to_string()));
+        }
+
+        #[test]
+        fn group_zero_returns_none() {
+            // Group 0 is entire match, can't be named
+            let result = convert_to_splunk_named_capture(r"(\d+)", 0, "code");
+            assert_eq!(result, None);
+        }
+
+        #[test]
+        fn invalid_group_number_returns_none() {
+            // Group 5 doesn't exist in pattern with only 1 group
+            let result = convert_to_splunk_named_capture(r"(\d+)", 5, "code");
+            assert_eq!(result, None);
+        }
+
+        #[test]
+        fn preserves_escaped_parens() {
+            // Escaped parens should not be counted as groups
+            let result = convert_to_splunk_named_capture(r"\(test\) (\d+)", 1, "num");
+            assert_eq!(result, Some(r"\(test\) (?<num>\d+)".to_string()));
+        }
+
+        #[test]
+        fn skips_non_capturing_groups() {
+            // (?:...) should not be counted as a capture group
+            let result = convert_to_splunk_named_capture(r"(?:prefix)(\d+)", 1, "num");
+            assert_eq!(result, Some(r"(?:prefix)(?<num>\d+)".to_string()));
+        }
+    }
+
+    mod rex_spl {
+        use super::*;
+
+        #[test]
+        fn basic_rex_command() {
+            let handle = SplunkHandle::default().push(SplunkOp::Rex {
+                field: "message".to_string(),
+                pattern: r"error: (?<code>\d+)".to_string(),
+                output_field: "code".to_string(),
+            });
+            assert_eq!(
+                handle.build_spl("myindex"),
+                r#"search (index="myindex") | rex field=message "error: (?<code>\d+)""#
+            );
+        }
+
+        #[test]
+        fn rex_with_other_ops() {
+            let handle = SplunkHandle::default()
+                .push(SplunkOp::Search("foo=bar".into()))
+                .push(SplunkOp::Rex {
+                    field: "msg".to_string(),
+                    pattern: r"id=(?<id>\w+)".to_string(),
+                    output_field: "id".to_string(),
+                })
+                .push(SplunkOp::Head(100));
+            assert_eq!(
+                handle.build_spl("myindex"),
+                r#"search (index="myindex") | search foo=bar | rex field=msg "id=(?<id>\w+)" | head 100"#
+            );
+        }
+
+        #[test]
+        fn rex_followed_by_filter() {
+            // Simulates: extend code = extract("...", 1, msg) | where code == "123"
+            // After pushdown, rex creates the field, then filter uses it
+            let handle = SplunkHandle::default()
+                .push(SplunkOp::Rex {
+                    field: "msg".to_string(),
+                    pattern: r"error: (?<code>\d+)".to_string(),
+                    output_field: "code".to_string(),
+                })
+                .push(SplunkOp::Search(r#"code=CASE("123")"#.into()));
+            assert_eq!(
+                handle.build_spl("myindex"),
+                r#"search (index="myindex") | rex field=msg "error: (?<code>\d+)" | search code=CASE("123")"#
+            );
+        }
+
+        #[test]
+        fn rex_followed_by_where() {
+            // Simulates: extend code = extract("...", 1, msg) | where code != "error"
+            let handle = SplunkHandle::default()
+                .push(SplunkOp::Rex {
+                    field: "msg".to_string(),
+                    pattern: r"status: (?<status>\w+)".to_string(),
+                    output_field: "status".to_string(),
+                })
+                .push(SplunkOp::Where(r#"status != "error""#.into()));
+            assert_eq!(
+                handle.build_spl("myindex"),
+                r#"search (index="myindex") | rex field=msg "status: (?<status>\w+)" | where status != "error""#
+            );
         }
     }
 }
