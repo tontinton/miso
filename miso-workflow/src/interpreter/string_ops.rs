@@ -1,3 +1,44 @@
+use std::cell::RefCell;
+use std::collections::HashMap;
+
+use color_eyre::eyre::{Result, bail, eyre};
+use miso_workflow_types::value::Value;
+use regex::Regex;
+
+thread_local! {
+    /// Cache compiled regexes per thread to avoid recompilation overhead
+    /// when the same pattern is used repeatedly (e.g., in row-by-row evaluation).
+    static REGEX_CACHE: RefCell<HashMap<String, Regex>> = RefCell::new(HashMap::new());
+}
+
+pub(crate) fn extract(source: &str, pattern: &str, capture_group: i64) -> Result<Option<Value>> {
+    if capture_group < 0 {
+        bail!("capture group index must be non-negative");
+    }
+
+    REGEX_CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        let re = if let Some(re) = cache.get(pattern) {
+            re
+        } else {
+            let compiled =
+                Regex::new(pattern).map_err(|e| eyre!("invalid regex pattern: {}", e))?;
+            cache.insert(pattern.to_string(), compiled);
+            cache.get(pattern).unwrap()
+        };
+
+        let Some(caps) = re.captures(source) else {
+            return Ok(Some(Value::Null));
+        };
+
+        let group_idx = capture_group as usize;
+        match caps.get(group_idx) {
+            Some(m) => Ok(Some(Value::String(m.as_str().to_string()))),
+            None => Ok(Some(Value::Null)),
+        }
+    })
+}
+
 /// Generic function to find a phrase in text using configurable search and comparison callbacks.
 fn find_phrase_with_boundaries<F, G>(
     text: &str,
@@ -100,5 +141,47 @@ mod tests {
         assert!(!has("short", "longer"));
         assert!(has("exact", "exact"));
         assert!(has_cs("exact", "exact"));
+    }
+
+    #[test]
+    fn test_extract_basic() {
+        let result = extract("error code: 123", "code: (\\d+)", 1).unwrap();
+        assert_eq!(result, Some(Value::String("123".to_string())));
+    }
+
+    #[test]
+    fn test_extract_no_match() {
+        let result = extract("no numbers", "(\\d+)", 1).unwrap();
+        assert_eq!(result, Some(Value::Null));
+    }
+
+    #[test]
+    fn test_extract_invalid_group() {
+        let result = extract("123", "(\\d+)", 5).unwrap();
+        assert_eq!(result, Some(Value::Null));
+    }
+
+    #[test]
+    fn test_extract_group_zero() {
+        let result = extract("abc 123 def", "\\d+", 0).unwrap();
+        assert_eq!(result, Some(Value::String("123".to_string())));
+    }
+
+    #[test]
+    fn test_extract_multiple_groups() {
+        let result = extract("user=john, id=42", "user=(\\w+), id=(\\d+)", 2).unwrap();
+        assert_eq!(result, Some(Value::String("42".to_string())));
+    }
+
+    #[test]
+    fn test_extract_negative_group() {
+        let result = extract("test", "(\\w+)", -1);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_extract_invalid_regex() {
+        let result = extract("test", "([", 1);
+        assert!(result.is_err());
     }
 }

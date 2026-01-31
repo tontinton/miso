@@ -403,6 +403,34 @@ impl<'a> Val<'a> {
         Ok(Val::owned(casted_value))
     }
 
+    pub fn extract(&self, pattern: &Val, capture_group: &Val) -> Result<Val<'static>> {
+        let Some(source_cow) = &self.0 else {
+            return Ok(Val::not_exist());
+        };
+        let Some(pattern_cow) = &pattern.0 else {
+            return Ok(Val::not_exist());
+        };
+        let Some(group_cow) = &capture_group.0 else {
+            return Ok(Val::not_exist());
+        };
+
+        let source_val = source_cow.as_ref();
+        let pattern_val = pattern_cow.as_ref();
+        let group_val = group_cow.as_ref();
+
+        let Value::String(source) = source_val else {
+            bail!("source argument of 'extract' must be a string");
+        };
+        let Value::String(pattern_str) = pattern_val else {
+            bail!("regex argument of 'extract' must be a string");
+        };
+        let group = group_val
+            .as_i64()
+            .ok_or_else(|| eyre!("capture group argument of 'extract' must be an integer"))?;
+
+        Ok(string_ops::extract(source, pattern_str, group)?.into())
+    }
+
     pub fn bin(&self, by: &Val) -> Result<Option<Value>> {
         let self_val = val!(self);
         let by_val = val!(by);
