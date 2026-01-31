@@ -1,13 +1,28 @@
+//! Pushes aggregation steps into union branches to reduce data before merging.
+//!
+//! When a `limit 10` sits after a union, each branch might return thousands of
+//! rows - but we only need 10 total. By pushing `limit 10` into each branch,
+//! we allow for predicate pushdowns.
+//!
+//! Example:
+//!   scan | union (scan) | limit 10
+//! becomes:
+//!   limit 10 | scan | limit 10 | union (scan | limit 10) | mux_limit 10
+//!
+//! Same idea for `topN`, `count`, and `summarize`. For aggregations, we use
+//! partial/mux variants: each branch computes partial results, then a final
+//! "mux" step merges them. For example, `summarize count()` becomes
+//! `summarize count()` in each branch, then `mux_summarize sum()` to combine.
+//!
+//! The step also gets added *before* the first union (for the outer pipeline),
+//! so all branches including the implicit outer one benefit.
+
 use miso_workflow::WorkflowStep;
 
 use crate::pattern;
 
 use super::{Group, Optimization, OptimizationResult, Pattern};
 
-/// Some steps after unions, when inserted as a step into the union subquery, can allow for
-/// predicate pushdowns.
-/// Also insert these steps right before the union, for the same reasons, just for
-/// the outer query before the union step.
 pub struct MuxIntoUnion;
 
 impl Optimization for MuxIntoUnion {

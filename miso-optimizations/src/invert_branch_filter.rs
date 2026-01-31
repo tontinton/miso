@@ -1,16 +1,22 @@
+//! Converts filters on computed case expressions back to their original conditions.
+//!
+//! When you create a field via `case()` and then filter on it, we can "invert"
+//! the filter back to the original condition. This eliminates the intermediate
+//! field and enables further optimizations (like pushing the filter to the connector).
+//!
+//! Example:
+//!   extend x = case(id == 7, "no", "yes") | where x == "no"
+//! becomes:
+//!   where id == 7
+//!
+//! For multi-branch cases or filtering on the default value, we generate the
+//! appropriate AND/NOT combinations to match exactly the right rows.
+
 use miso_workflow::WorkflowStep;
 use miso_workflow_types::{expr::Expr, field::Field, project::ProjectField};
 
 use crate::{Group, Optimization, OptimizationResult, Pattern, pattern};
 
-/// Transforms patterns like:
-/// ```
-/// extend x = case(questionId == 7, "no", "yes") | where x == "no"
-/// ```
-/// into:
-/// ```
-/// where questionId == 7
-/// ```
 pub struct InvertBranchFilter;
 
 impl Optimization for InvertBranchFilter {

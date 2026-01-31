@@ -1,16 +1,23 @@
+//! Drops unused fields early by inserting a project right after the scan.
+//!
+//! If a pipeline ends with `count` or `summarize`, we know exactly which fields
+//! are needed - everything else is dead weight. By adding `project x, y` right
+//! after the scan, we tell the connector to only fetch those fields.
+//!
+//! Example:
+//!   scan | filter x > 0 | count
+//! becomes:
+//!   scan | project x | filter x > 0 | count
+//!
+//! Works backwards through the pipeline to figure out which fields are actually
+//! used, then inserts a minimal project. Pairs well with project propagation.
+
 use hashbrown::HashSet;
 use miso_workflow::WorkflowStep;
 use miso_workflow_types::{expr::Expr, field::Field, project::ProjectField};
 
 use crate::{Group, Optimization, OptimizationResult, Pattern, pattern};
 
-/// Insert project after scan to drop unused fields early.
-/// This optimization has great synergy with the project propagation optimization.
-///
-/// Example:
-///   scan | filter x > 0 | count
-///  ->
-///   scan | project x | filter x > 0 | count
 pub struct EliminateUnusedFields;
 
 impl Optimization for EliminateUnusedFields {

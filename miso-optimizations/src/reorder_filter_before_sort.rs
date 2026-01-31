@@ -1,13 +1,20 @@
+//! Moves filters before sorts to reduce work and enable further optimizations.
+//!
+//! Filtering after sorting wastes effort - we sort rows that get thrown away.
+//! By filtering first, we sort fewer items. This also enables filter pushdown
+//! to the connector, and lets sort-limit combinations become top-n.
+//!
+//! Example:
+//!   sort by ts | where status == "error"
+//! becomes:
+//!   where status == "error" | sort by ts
+
 use miso_workflow::WorkflowStep;
 
 use crate::pattern;
 
 use super::{Group, Optimization, OptimizationResult, Pattern};
 
-/// Allows for:
-///  * Sorting less items.
-///  * Filter predicate pushdown.
-///  * Sort to be converted to top-n.
 pub struct ReorderFilterBeforeSort;
 
 impl Optimization for ReorderFilterBeforeSort {

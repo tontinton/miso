@@ -1,13 +1,25 @@
+//! Pushes filter/project/extend into union branches for earlier reduction.
+//!
+//! A filter after a union applies to all branches, but runs *after* all data
+//! is merged. By copying the filter into each branch, we filter earlier and
+//! reduce data before merging. This also enables further pushdown optimizations
+//! (like pushing filters into the connector).
+//!
+//! Example:
+//!   scan | union (scan) | where x > 0
+//! becomes:
+//!   where x > 0 | scan | where x > 0 | union (scan | where x > 0)
+//!
+//! Same logic for project and extend - running them in each branch means less
+//! data flowing through the union. The step also gets added before the first
+//! union so the outer pipeline benefits too.
+
 use miso_workflow::WorkflowStep;
 
 use crate::pattern;
 
 use super::{Group, Optimization, OptimizationResult, Pattern};
 
-/// Some steps after unions, when inserted as a step into the union subquery, can allow for
-/// predicate pushdowns.
-/// Also insert these steps right before the union, for the same reasons, just for
-/// the outer query before the union step.
 pub struct PushStepsIntoUnion;
 
 impl Optimization for PushStepsIntoUnion {

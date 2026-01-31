@@ -1,3 +1,12 @@
+//! Merges two scans from the same connector into one when possible.
+//!
+//! When you have `scan A | union (scan B)` and both scans hit the same connector,
+//! some connectors can handle both queries in a single request. This avoids
+//! two separate roundtrips.
+//!
+//! The connector decides if it can merge via `apply_union()` - not all connectors
+//! support this, and not all query combinations are mergeable.
+
 use miso_workflow::WorkflowStep;
 
 use crate::pattern;

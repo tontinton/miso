@@ -1,3 +1,17 @@
+//! Splits a single scan into parallel scans for connectors that support sharding.
+//!
+//! Some connectors (like partitioned data sources) can provide multiple "splits" -
+//! independent chunks that can be read in parallel. This optimization converts
+//! a single scan into a union of scans, one per split. The union merges results
+//! as each split finishes, enabling parallel reads.
+//!
+//! Example (connector with 3 splits):
+//!   scan
+//! becomes:
+//!   scan[split=0] | union (scan[split=1]) | union (scan[split=2])
+//!
+//! If the connector returns no splits, we leave the scan unchanged.
+
 use miso_workflow::{Workflow, WorkflowStep};
 
 use crate::pattern;

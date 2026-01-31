@@ -1,3 +1,17 @@
+//! Pushes filter constraints into downstream summarize expressions.
+//!
+//! When you filter on `x == 5` and then summarize by a `case` expression that
+//! references `x`, we can substitute the literal `5` for `x` inside that case.
+//! This often simplifies the expression (e.g., `case(x == 7, ...)` becomes
+//! `case(5 == 7, ...)` which constant-folds to false).
+//!
+//! Example:
+//!   where x == 5 | summarize by case(x == 7, "yes", "no")
+//! becomes:
+//!   where x == 5 | summarize by case(5 == 7, "yes", "no")
+//!
+//! The const folding optimization will further simplify the query.
+
 use hashbrown::HashMap;
 use miso_workflow::WorkflowStep;
 use miso_workflow_types::{
