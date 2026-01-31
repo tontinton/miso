@@ -161,6 +161,8 @@ enum SplunkOp {
         pattern: String,
         output_field: String,
     },
+    /// `| fields - field1, field2, ...` - remove fields from output
+    FieldsRemove(Vec<String>),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -296,6 +298,9 @@ impl SplunkHandle {
                 } => {
                     spl.push_str(&format!(" | rex field={} \"{}\"", field, pattern));
                 }
+                SplunkOp::FieldsRemove(fields) => {
+                    spl.push_str(&format!(" | fields - {}", fields.join(", ")));
+                }
             }
         }
 
@@ -394,6 +399,9 @@ impl fmt::Display for SplunkHandle {
                     output_field,
                 } => {
                     items.push(format!("rex field={} \"{}\" -> {}", field, pattern, output_field));
+                }
+                SplunkOp::FieldsRemove(fields) => {
+                    items.push(format!("fields - {}", fields.join(", ")));
                 }
             }
         }
@@ -512,24 +520,43 @@ fn is_timestamp_field(field: &Field) -> bool {
 enum FilterResult {
     Search(String),
     Where(String),
+    /// Rex extraction followed by a where clause filter on the extracted field.
+    RexThenWhere {
+        rex: SplunkOp,
+        filter_field: String,
+        filter_value: String,
+    },
 }
 
 impl FilterResult {
-    fn into_spl_op(self) -> SplunkOp {
+    fn into_spl_ops(self) -> Vec<SplunkOp> {
         match self {
-            FilterResult::Search(s) => SplunkOp::Search(s),
-            FilterResult::Where(s) => SplunkOp::Where(s),
+            FilterResult::Search(s) => vec![SplunkOp::Search(s)],
+            FilterResult::Where(s) => vec![SplunkOp::Where(s)],
+            FilterResult::RexThenWhere {
+                rex,
+                filter_field,
+                filter_value,
+            } => vec![
+                rex,
+                SplunkOp::Where(format!("{filter_field}={filter_value}")),
+                // Remove the temporary extraction field from output
+                SplunkOp::FieldsRemove(vec![filter_field]),
+            ],
         }
     }
 
     fn unwrap_str(&self) -> &str {
         match self {
             FilterResult::Search(s) | FilterResult::Where(s) => s,
+            FilterResult::RexThenWhere { .. } => {
+                panic!("RexThenWhere cannot be used in compound expressions")
+            }
         }
     }
 
     fn is_where(&self) -> bool {
-        matches!(self, FilterResult::Where(_))
+        matches!(self, FilterResult::Where(_) | FilterResult::RexThenWhere { .. })
     }
 }
 
@@ -553,6 +580,40 @@ fn format_spl_value_for_search(value: &Value) -> String {
         }
         _ => format_spl_value(value),
     }
+}
+
+/// Compile a filter like `extract(regex, group, field) == value` to a Rex + Where.
+fn compile_extract_filter(
+    regex_expr: &Expr,
+    group_expr: &Expr,
+    source_expr: &Expr,
+    value: &Value,
+) -> Option<FilterResult> {
+    let Expr::Literal(Value::String(pattern)) = regex_expr else {
+        return None;
+    };
+    let Expr::Literal(group_val) = group_expr else {
+        return None;
+    };
+    let group = group_val.as_i64()?;
+    let Expr::Field(source_field) = source_expr else {
+        return None;
+    };
+
+    // Generate a unique field name for the extraction
+    let output_field = format!("_extract_{}", source_field.to_string().replace('.', "_"));
+
+    let splunk_pattern = convert_to_splunk_named_capture(pattern, group, &output_field)?;
+
+    Some(FilterResult::RexThenWhere {
+        rex: SplunkOp::Rex {
+            field: source_field.to_string(),
+            pattern: splunk_pattern,
+            output_field: output_field.clone(),
+        },
+        filter_field: output_field,
+        filter_value: format_spl_value(value),
+    })
 }
 
 fn compile_filter_to_spl(expr: &Expr) -> Option<FilterResult> {
@@ -600,13 +661,20 @@ fn compile_filter_to_spl(expr: &Expr) -> Option<FilterResult> {
         }
 
         Expr::Eq(lhs, rhs) => {
-            let (Expr::Field(field), Expr::Literal(value)) = (&**lhs, &**rhs) else {
-                return None;
-            };
-            if field.has_array_access() {
-                return None;
+            match (&**lhs, &**rhs) {
+                (Expr::Field(field), Expr::Literal(value))
+                | (Expr::Literal(value), Expr::Field(field)) => {
+                    if field.has_array_access() {
+                        return None;
+                    }
+                    FilterResult::Search(format!("{}={}", field, format_spl_value_for_search(value)))
+                }
+                (Expr::Extract(regex_expr, group_expr, source_expr), Expr::Literal(value))
+                | (Expr::Literal(value), Expr::Extract(regex_expr, group_expr, source_expr)) => {
+                    compile_extract_filter(regex_expr, group_expr, source_expr, value)?
+                }
+                _ => return None,
             }
-            FilterResult::Search(format!("{}={}", field, format_spl_value_for_search(value)))
         }
         Expr::Ne(lhs, rhs) => {
             let (Expr::Field(field), Expr::Literal(value)) = (&**lhs, &**rhs) else {
@@ -1029,7 +1097,9 @@ impl Connector for SplunkConnector {
 
         if let Some(ref expr) = remaining_expr {
             let filter_result = compile_filter_to_spl(expr)?;
-            new_handle = new_handle.push(filter_result.into_spl_op());
+            for op in filter_result.into_spl_ops() {
+                new_handle = new_handle.push(op);
+            }
         }
 
         Some(Box::new(new_handle))
@@ -1727,6 +1797,114 @@ mod tests {
             assert_eq!(
                 handle.build_spl("myindex"),
                 r#"search (index="myindex") | rex field=msg "status: (?<status>\w+)" | where status != "error""#
+            );
+        }
+
+        #[test]
+        fn fields_remove() {
+            let handle = SplunkHandle::default()
+                .push(SplunkOp::Rex {
+                    field: "msg".to_string(),
+                    pattern: r"(?<_tmp>\w+)".to_string(),
+                    output_field: "_tmp".to_string(),
+                })
+                .push(SplunkOp::Where(r#"_tmp="foo""#.into()))
+                .push(SplunkOp::FieldsRemove(vec!["_tmp".to_string()]));
+            assert_eq!(
+                handle.build_spl("myindex"),
+                r#"search (index="myindex") | rex field=msg "(?<_tmp>\w+)" | where _tmp="foo" | fields - _tmp"#
+            );
+        }
+    }
+
+    mod extract_filter_vs_extend_filter {
+        use super::*;
+        use miso_workflow_types::{expr::Expr, field::Field, value::Value};
+
+        fn field(name: &str) -> Field {
+            name.parse().unwrap()
+        }
+
+        fn string_lit(s: &str) -> Value {
+            Value::String(s.to_string())
+        }
+
+        /// Filter with inlined extract expression
+        /// Query: `where extract("^(Calculate)", 1, title) == "Calculate"`
+        ///
+        /// This happens when ProjectPropagation inlines an extend into a filter.
+        /// We need to:
+        /// 1. Create a temporary field via rex to extract the value
+        /// 2. Filter on that temporary field
+        /// 3. Remove the temporary field from output (user didn't ask for it)
+        ///
+        /// Generated SPL:
+        /// `| rex field=title "^(?<_extract_title>Calculate)" | where _extract_title="Calculate" | fields - _extract_title`
+        #[test]
+        fn filter_with_inlined_extract_creates_temporary_field_and_removes_it() {
+            // Simulate: where extract("^(Calculate)", 1, title) == "Calculate"
+            let filter_expr = Expr::Eq(
+                Box::new(Expr::Extract(
+                    Box::new(Expr::Literal(Value::String("^(Calculate)".to_string()))),
+                    Box::new(Expr::Literal(Value::Int(1))),
+                    Box::new(Expr::Field(field("title"))),
+                )),
+                Box::new(Expr::Literal(string_lit("Calculate"))),
+            );
+
+            let result = compile_filter_to_spl(&filter_expr);
+            assert!(result.is_some(), "Should compile successfully");
+
+            let ops = result.unwrap().into_spl_ops();
+
+            assert_eq!(ops.len(), 3, "Expected 3 operations: Rex, Where, FieldsRemove");
+            assert!(
+                matches!(&ops[0], SplunkOp::Rex { field, pattern, output_field }
+                    if field == "title"
+                    && pattern == "^(?<_extract_title>Calculate)"
+                    && output_field == "_extract_title"),
+                "First op should be Rex with temporary field name"
+            );
+            assert!(
+                matches!(&ops[1], SplunkOp::Where(w) if w == r#"_extract_title="Calculate""#),
+                "Second op should be Where filtering on temporary field"
+            );
+            assert!(
+                matches!(&ops[2], SplunkOp::FieldsRemove(fields) if fields == &vec!["_extract_title".to_string()]),
+                "Third op should remove the temporary field"
+            );
+        }
+
+        /// Extend creates field, then filter references it
+        /// Query: `extend calc = extract("^(Calculate)", 1, title) | where calc == "Calculate"`
+        ///
+        /// Here the user explicitly creates a field `calc`. The extend is pushed down via
+        /// apply_extend(), and the filter is pushed down via apply_filter().
+        ///
+        /// The filter sees `calc == "Calculate"` (a simple field comparison), NOT the
+        /// inlined extract expression. So it generates a simple search/where.
+        ///
+        /// Generated SPL:
+        /// `| rex field=title "^(?<calc>Calculate)" | search calc=CASE("Calculate")`
+        ///
+        /// Note: No FieldsRemove because `calc` is the user's field that should be in output.
+        #[test]
+        fn extend_then_filter_keeps_user_field() {
+            let filter_expr = Expr::Eq(
+                Box::new(Expr::Field(field("calc"))),
+                Box::new(Expr::Literal(string_lit("Calculate"))),
+            );
+
+            let result = compile_filter_to_spl(&filter_expr);
+            assert!(result.is_some(), "Should compile successfully");
+
+            let ops = result.unwrap().into_spl_ops();
+
+            assert_eq!(ops.len(), 1, "Expected 1 operation: Search");
+            assert!(
+                matches!(&ops[0], SplunkOp::Search(s) if s == r#"calc=CASE("Calculate")"#),
+                "Should be a simple Search on the user's field, got: {:?}",
+                ops[0]
             );
         }
     }
