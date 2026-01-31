@@ -1,3 +1,26 @@
+use color_eyre::eyre::{Result, bail};
+use miso_workflow_types::value::Value;
+use regex::Regex;
+
+pub(crate) fn extract(source: &str, pattern: &str, capture_group: i64) -> Result<Option<Value>> {
+    if capture_group < 0 {
+        bail!("capture group index must be non-negative");
+    }
+
+    let re = Regex::new(pattern)
+        .map_err(|e| color_eyre::eyre::eyre!("invalid regex pattern: {}", e))?;
+
+    let Some(caps) = re.captures(source) else {
+        return Ok(Some(Value::Null));
+    };
+
+    let group_idx = capture_group as usize;
+    match caps.get(group_idx) {
+        Some(m) => Ok(Some(Value::String(m.as_str().to_string()))),
+        None => Ok(Some(Value::Null)),
+    }
+}
+
 /// Generic function to find a phrase in text using configurable search and comparison callbacks.
 fn find_phrase_with_boundaries<F, G>(
     text: &str,

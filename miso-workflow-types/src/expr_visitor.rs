@@ -56,6 +56,11 @@ pub trait ExprTransformer {
             Expr::Cast(ty, e) => Expr::Cast(ty, Box::new(self.transform(*e))),
 
             Expr::Bin(l, r) => transform_binop!(Expr::Bin, self, l, r),
+            Expr::Extract(regex, group, source) => Expr::Extract(
+                Box::new(self.transform(*regex)),
+                Box::new(self.transform(*group)),
+                Box::new(self.transform(*source)),
+            ),
             Expr::Or(l, r) => transform_binop!(Expr::Or, self, l, r),
             Expr::And(l, r) => transform_binop!(Expr::And, self, l, r),
             Expr::Contains(l, r) => transform_binop!(Expr::Contains, self, l, r),

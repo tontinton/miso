@@ -190,6 +190,11 @@ pub fn partial_eval(expr: &Expr) -> Result<Expr> {
         Expr::Has(l, r) => partial_eval_lr!(Has, l, r),
         Expr::HasCs(l, r) => partial_eval_lr!(HasCs, l, r),
         Expr::Bin(l, r) => partial_eval_lr!(Bin, l, r),
+        Expr::Extract(regex, group, source) => Expr::Extract(
+            Box::new(partial_eval(regex)?),
+            Box::new(partial_eval(group)?),
+            Box::new(partial_eval(source)?),
+        ),
     })
 }
 

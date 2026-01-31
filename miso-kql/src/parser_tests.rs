@@ -1231,3 +1231,62 @@ fn test_error_recovery_collects_multiple_errors(query: &str, expected_num_errors
         errors
     );
 }
+
+#[test]
+fn test_parse_extract_basic() {
+    let query = r#"connector.table | extend code = extract("error: (\\d+)", 1, message)"#;
+    let result = parse_unwrap!(query);
+
+    assert_eq!(result.len(), 2);
+    match &result[1] {
+        QueryStep::Extend(fields) => {
+            assert_eq!(fields.len(), 1);
+            assert_eq!(fields[0].to, field_unwrap!("code"));
+            match &fields[0].from {
+                Expr::Extract(regex, group, source) => {
+                    assert!(matches!(**regex, Expr::Literal(Value::String(_))));
+                    assert!(matches!(**group, Expr::Literal(Value::Int(1))));
+                    assert!(matches!(**source, Expr::Field(_)));
+                }
+                _ => panic!("Expected Extract expression"),
+            }
+        }
+        _ => panic!("Expected Extend step"),
+    }
+}
+
+#[test]
+fn test_parse_extract_with_field_arguments() {
+    let query = "connector.table | extend result = extract(pattern_field, group_field, source_field)";
+    let result = parse_unwrap!(query);
+
+    match &result[1] {
+        QueryStep::Extend(fields) => {
+            match &fields[0].from {
+                Expr::Extract(regex, group, source) => {
+                    assert!(matches!(**regex, Expr::Field(_)));
+                    assert!(matches!(**group, Expr::Field(_)));
+                    assert!(matches!(**source, Expr::Field(_)));
+                }
+                _ => panic!("Expected Extract expression"),
+            }
+        }
+        _ => panic!("Expected Extend step"),
+    }
+}
+
+#[test]
+fn test_parse_extract_in_filter() {
+    let query = r#"connector.table | where extract("(\\d+)", 1, message) == "123""#;
+    let result = parse_unwrap!(query);
+
+    match &result[1] {
+        QueryStep::Filter(expr) => match expr {
+            Expr::Eq(left, _) => {
+                assert!(matches!(**left, Expr::Extract(_, _, _)));
+            }
+            _ => panic!("Expected Eq expression"),
+        },
+        _ => panic!("Expected Filter step"),
+    }
+}

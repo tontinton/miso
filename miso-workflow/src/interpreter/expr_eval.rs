@@ -41,6 +41,10 @@ pub trait ExprEvaluator<'a> {
             }
             Expr::Not(inner) => Val::bool(!eval_to_bool!(self, inner)),
             Expr::Bin(expr, by) => self.eval(expr)?.bin(&self.eval(by)?)?.into(),
+            Expr::Extract(regex, group, source) => {
+                self.eval(source)?
+                    .extract(&self.eval(regex)?, &self.eval(group)?)?
+            }
             Expr::Case(predicates, default) => {
                 for (predicate, then) in predicates {
                     if eval_to_bool!(self, predicate) {
