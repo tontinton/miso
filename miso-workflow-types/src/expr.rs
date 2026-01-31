@@ -26,6 +26,7 @@ pub enum Expr {
     In(Box<Expr>, Vec<Expr>), // like python's in
     Bin(Box<Expr>, Box<Expr>),
     Case(Vec<(Expr, Expr)>, Box<Expr>), // switch case default
+    Extract(Box<Expr>, Box<Expr>, Box<Expr>), // extract(regex, captureGroup, source)
 
     Contains(Box<Expr>, Box<Expr>),   // string - left.contains(right)
     StartsWith(Box<Expr>, Box<Expr>), // string - left.starts_with(right)
@@ -104,6 +105,9 @@ impl fmt::Display for Expr {
                     write!(f, "{predicate}, {then}")?;
                 }
                 write!(f, ", {default})")
+            }
+            Expr::Extract(regex, group, source) => {
+                write!(f, "extract({regex}, {group}, {source})")
             }
 
             Expr::Contains(lhs, rhs) => write!(f, "{lhs} contains {rhs}"),
@@ -236,6 +240,11 @@ impl Expr {
             }
 
             Expr::Bin(l, r) => fields_binop!(l, r, out),
+            Expr::Extract(a, b, c) => {
+                a._fields(out);
+                b._fields(out);
+                c._fields(out);
+            }
             Expr::Or(l, r) => fields_binop!(l, r, out),
             Expr::And(l, r) => fields_binop!(l, r, out),
             Expr::Contains(l, r) => fields_binop!(l, r, out),

@@ -176,6 +176,8 @@ pub enum Token {
     NotBetween,
     #[token("case")]
     Case,
+    #[token("extract")]
+    Extract,
 
     #[token(",")]
     Comma,

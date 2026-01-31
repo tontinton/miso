@@ -20,6 +20,7 @@ miso-connectors.workspace = true
 miso-workflow-types.workspace = true
 parking_lot.workspace = true
 rayon.workspace = true
+regex.workspace = true
 scoped_thread_local.workspace = true
 scopeguard.workspace = true
 serde.workspace = true
