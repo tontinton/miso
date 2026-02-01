@@ -21,7 +21,13 @@ macro_rules! eval_to_bool {
 
 pub trait ExprEvaluator<'a> {
     fn eval_field(&self, field: &'a Field) -> Result<Val<'a>>;
-    fn eval_exists(&self, field: &'a Field) -> Result<Val<'a>>;
+    /// Check if a field exists. Returns Some(true/false) for runtime evaluation,
+    /// or None for compile-time evaluation where field existence can't be determined.
+    fn field_exists(&self, field: &'a Field) -> Option<bool>;
+    /// Returns true for runtime evaluation (with log data), false for compile-time.
+    fn is_runtime(&self) -> bool {
+        false
+    }
 
     fn eval_to_bool(&self, expr: &'a Expr) -> Result<Option<bool>> {
         Ok(Some(self.eval(expr)?.to_bool()))
@@ -30,7 +36,23 @@ pub trait ExprEvaluator<'a> {
     fn eval(&self, expr: &'a Expr) -> Result<Val<'a>> {
         Ok(match expr {
             Expr::Field(field) => self.eval_field(field)?,
-            Expr::Exists(field) => self.eval_exists(field)?,
+            Expr::Exists(inner) => match inner.as_ref() {
+                Expr::Field(f) => {
+                    if let Some(exists) = self.field_exists(f) {
+                        Val::bool(exists)
+                    } else {
+                        Val::not_exist()
+                    }
+                }
+                other => {
+                    let val = self.eval(other)?;
+                    if !self.is_runtime() && !val.is_exist() {
+                        Val::not_exist()
+                    } else {
+                        Val::bool(val.is_exist())
+                    }
+                }
+            },
             Expr::Literal(value) => Val::borrowed(value),
             Expr::Cast(ty, inner) => self.eval(inner)?.cast(*ty)?,
             Expr::Or(left, right) => {

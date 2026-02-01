@@ -410,10 +410,10 @@ fn format_datetime(dt: &OffsetDateTime) -> String {
 }
 
 fn format_value(value: &Value) -> String {
-    if let Value::Timestamp(dt) = value {
-        format_datetime(dt)
-    } else {
-        value.to_string()
+    match value {
+        Value::Timestamp(dt) => format_datetime(dt),
+        Value::String(s) => s.clone(),
+        _ => value.to_string(),
     }
 }
 
@@ -446,7 +446,8 @@ fn compile_filter_ast(expr: &Expr) -> Option<Value> {
                 }
             })
         }
-        Expr::Exists(field) if !field.has_array_access() => {
+        Expr::Exists(_) => {
+            let field = expr.as_pushable_exists_field()?;
             json!({
                 "exists": {
                     "field": field,
@@ -1380,7 +1381,8 @@ impl Connector for QuickwitConnector {
                 Aggregation::Max(agg_field) => agg_json("max", agg_field, &handle.timestamp_field),
                 Aggregation::Sum(agg_field) => agg_json("sum", agg_field, &handle.timestamp_field),
                 Aggregation::Avg(agg_field) => agg_json("avg", agg_field, &handle.timestamp_field),
-                Aggregation::Countif(Expr::Exists(agg_field)) => {
+                Aggregation::Countif(expr @ Expr::Exists(_)) => {
+                    let agg_field = expr.as_pushable_exists_field()?;
                     agg_json("value_count", agg_field, &handle.timestamp_field)
                 }
                 Aggregation::Count => {

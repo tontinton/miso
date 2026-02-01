@@ -12,8 +12,8 @@ pub trait ExprTransformer {
         Expr::Field(field)
     }
 
-    fn transform_exists(&self, field: Field) -> Expr {
-        Expr::Exists(field)
+    fn transform_exists(&self, expr: Expr) -> Expr {
+        Expr::Exists(Box::new(self.transform(expr)))
     }
 
     fn transform_literal(&self, value: Value) -> Expr {
@@ -48,7 +48,7 @@ pub trait ExprTransformer {
         match expr {
             Expr::Field(f) => self.transform_field(f),
             Expr::Literal(v) => self.transform_literal(v),
-            Expr::Exists(f) => self.transform_exists(f),
+            Expr::Exists(e) => self.transform_exists(*e),
             Expr::In(e, arr) => self.transform_in(*e, arr),
             Expr::Case(predicates, default) => self.transform_case(predicates, *default),
 

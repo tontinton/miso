@@ -20,7 +20,11 @@ impl<'a> ExprEvaluator<'a> for LogInterpreter<'a> {
         Ok(ident(self.log, field))
     }
 
-    fn eval_exists(&self, field: &'a Field) -> Result<Val<'a>> {
-        Ok(Val::bool(get_field_value(self.log, field).is_some()))
+    fn field_exists(&self, field: &'a Field) -> Option<bool> {
+        Some(get_field_value(self.log, field).is_some())
+    }
+
+    fn is_runtime(&self) -> bool {
+        true
     }
 }

@@ -116,7 +116,7 @@ impl Summarize {
                     );
                     aggs.insert(
                         field.with_suffix(MUX_AVG_COUNT_SUFFIX),
-                        Aggregation::Countif(Expr::Exists(input_field)),
+                        Aggregation::Countif(Expr::Exists(Box::new(Expr::Field(input_field)))),
                     );
                 }
             }

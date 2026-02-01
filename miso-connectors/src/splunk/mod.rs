@@ -650,7 +650,8 @@ fn compile_filter_to_spl(expr: &Expr) -> Option<FilterResult> {
             }
         }
 
-        Expr::Exists(field) if !field.has_array_access() => {
+        Expr::Exists(_) => {
+            let field = expr.as_pushable_exists_field()?;
             FilterResult::Where(format!("isnotnull({})", field))
         }
 
@@ -1224,7 +1225,8 @@ impl Connector for SplunkConnector {
                     numeric_agg_fields.insert(output_field.to_string());
                     format!("dc({}) as {}", agg_field, output_field)
                 }
-                Aggregation::Countif(Expr::Exists(agg_field)) => {
+                Aggregation::Countif(expr @ Expr::Exists(_)) => {
+                    let agg_field = expr.as_pushable_exists_field()?;
                     numeric_agg_fields.insert(output_field.to_string());
                     format!("count(eval(isnotnull({}))) as {}", agg_field, output_field)
                 }
@@ -1555,7 +1557,7 @@ mod tests {
         #[test]
         fn function_filters_use_where() {
             // exists -> isnotnull()
-            let exists_expr = Expr::Exists(field("optional_field"));
+            let exists_expr = Expr::Exists(Box::new(Expr::Field(field("optional_field"))));
             let exists_result = compile_filter_to_spl(&exists_expr).unwrap();
             assert!(matches!(exists_result, FilterResult::Where(_)));
             assert_eq!(exists_result.as_str().unwrap(), "isnotnull(optional_field)");
@@ -1580,7 +1582,7 @@ mod tests {
                     Box::new(Expr::Field(field("a"))),
                     Box::new(Expr::Literal(Value::Int(1))),
                 )),
-                Box::new(Expr::Exists(field("b"))),
+                Box::new(Expr::Exists(Box::new(Expr::Field(field("b"))))),
             );
             let result = compile_filter_to_spl(&expr).unwrap();
             assert!(matches!(result, FilterResult::Where(_)));

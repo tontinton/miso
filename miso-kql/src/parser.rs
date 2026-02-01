@@ -403,17 +403,16 @@ where
 
         let exists = just(Token::Exists)
             .ignore_then(
-                field
-                    .clone()
+                expr.clone()
                     .delimited_by(just(Token::LParen), just(Token::RParen))
                     .recover_with(via_parser(nested_delimiters(
                         Token::LParen,
                         Token::RParen,
                         [(Token::LBracket, Token::RBracket)],
-                        |_| Field::from_str(ERROR_FIELD_NAME).expect("error field"),
+                        |_| Expr::Field(Field::from_str(ERROR_FIELD_NAME).expect("error field")),
                     ))),
             )
-            .map(Expr::Exists)
+            .map(|e| Expr::Exists(Box::new(e)))
             .labelled("exists")
             .boxed();
 
