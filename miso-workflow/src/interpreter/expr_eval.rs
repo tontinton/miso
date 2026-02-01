@@ -30,7 +30,12 @@ pub trait ExprEvaluator<'a> {
     }
 
     fn eval_to_bool(&self, expr: &'a Expr) -> Result<Option<bool>> {
-        Ok(Some(self.eval(expr)?.to_bool()))
+        let val = self.eval(expr)?;
+        if val.is_exist() {
+            Ok(Some(val.to_bool()))
+        } else {
+            Ok(None)
+        }
     }
 
     fn eval(&self, expr: &'a Expr) -> Result<Val<'a>> {

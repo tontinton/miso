@@ -146,6 +146,8 @@ pub fn partial_eval(expr: &Expr) -> Result<Expr> {
             let inner_eval = partial_eval(inner)?;
             match inner_eval {
                 Expr::Not(inner_inner) => return Ok(*inner_inner),
+                Expr::Eq(l, r) => return Ok(Expr::Ne(l, r)),
+                Expr::Ne(l, r) => return Ok(Expr::Eq(l, r)),
                 Expr::Gt(l, r) => return Ok(Expr::Lte(l, r)),
                 Expr::Gte(l, r) => return Ok(Expr::Lt(l, r)),
                 Expr::Lt(l, r) => return Ok(Expr::Gte(l, r)),

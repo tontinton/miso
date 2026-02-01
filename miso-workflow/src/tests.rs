@@ -560,7 +560,7 @@ async fn filter_not_eq_fields() -> Result<()> {
     check(
         r#"test.c | where not(w == w2)"#,
         r#"[{"hello": "world"}, {"w": 100, "w2": 0}, {"w": "abc", "w2": "a"}, {"w": 100.3, "w2": 100.3}]"#,
-        r#"[{"hello": "world"}, {"w": 100, "w2": 0}, {"w": "abc", "w2": "a"}]"#,
+        r#"[{"w": 100, "w2": 0}, {"w": "abc", "w2": "a"}]"#,
     )
     .await
 }
