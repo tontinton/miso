@@ -385,4 +385,33 @@ pub const BASE_PREDICATE_PUSHDOWN_TESTS: &[TestCase] = &[
         count: 2,
         name: "extract_with_preceding_filter",
     },
+    TestCase {
+        query: r#"test.stack | where questionId > 4 | take 3"#,
+        expected: expected!("test.stack"),
+        count: 3,
+        name: "filter_then_limit",
+    },
+    TestCase {
+        query: r#"test.stack | summarize total=count(), avgQ=avg(questionId)"#,
+        expected: expected!("test.stack"),
+        count: 1,
+        name: "summarize_global_no_by",
+    },
+    // Project then filter - both pushed to connector (Elastic/Quickwit), filter pushed for Splunk
+    TestCase {
+        query: r#"test.stack | project questionId, user | where questionId > 10"#,
+        expected: expected!(
+            "test.stack",
+            Splunk => "test.stack | project questionId, user",
+        ),
+        count: 6,
+        name: "project_then_filter",
+    },
+    // summarize pushed, project remains
+    TestCase {
+        query: r#"test.stack | summarize c=count() by user | project user"#,
+        expected: expected!("test.stack | project user"),
+        count: 5,
+        name: "summarize_then_project",
+    },
 ];
