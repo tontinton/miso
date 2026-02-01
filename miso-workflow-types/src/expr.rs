@@ -16,7 +16,7 @@ macro_rules! fields_binop {
 pub enum Expr {
     Field(Field),
     Literal(Value),
-    Exists(Field),
+    Exists(Box<Expr>),
     Cast(CastType, Box<Expr>),
 
     Or(Box<Expr>, Box<Expr>),
@@ -72,7 +72,7 @@ impl fmt::Display for Expr {
         match self {
             Expr::Field(field) => write!(f, "{field}"),
             Expr::Literal(val) => write!(f, "{val}"),
-            Expr::Exists(field) => write!(f, "exists({field})"),
+            Expr::Exists(expr) => write!(f, "exists({expr})"),
             Expr::Cast(ty, expr) => write!(f, "cast({expr}, {ty})"),
 
             Expr::Or(lhs, rhs) => write!(f, "({lhs} or {rhs})"),
@@ -217,13 +217,11 @@ impl Expr {
 
     pub(crate) fn _fields(&self, out: &mut HashSet<Field>) {
         match self {
-            Expr::Field(f) | Expr::Exists(f) => {
+            Expr::Field(f) => {
                 out.insert(f.clone());
             }
-
             Expr::Literal(_) => {}
-
-            Expr::Not(e) | Expr::Cast(_, e) => e._fields(out),
+            Expr::Exists(e) | Expr::Not(e) | Expr::Cast(_, e) => e._fields(out),
 
             Expr::In(e, arr) => {
                 e._fields(out);
@@ -269,6 +267,18 @@ impl Expr {
         let mut out = HashSet::new();
         self._fields(&mut out);
         out
+    }
+
+    /// Extract a simple field from an `Exists` expression.
+    /// Returns `Some(&Field)` only if this is `Exists(Field(f))` where f has no array access.
+    pub fn as_pushable_exists_field(&self) -> Option<&Field> {
+        match self {
+            Expr::Exists(inner) => match inner.as_ref() {
+                Expr::Field(f) if !f.has_array_access() => Some(f),
+                _ => None,
+            },
+            _ => None,
+        }
     }
 
     /// Try to invert a branch expression (like `case`) given a target value.

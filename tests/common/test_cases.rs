@@ -345,7 +345,7 @@ pub const BASE_PREDICATE_PUSHDOWN_TESTS: &[TestCase] = &[
         query: r#"test.stack | extend first_word = extract("^(\\w+)", 1, title) | where exists(first_word)"#,
         expected: expected!(
             "test.stack",
-            Elastic | Quickwit => r#"test.stack | extend first_word = extract("^(\\w+)", 1, title)"#,
+            Elastic | Quickwit => r#"test.stack | where exists(extract("^(\\w+)", 1, title)) | extend first_word = extract("^(\\w+)", 1, title)"#,
         ),
         count: 8,
         name: "extract_first_word_from_title",
@@ -371,7 +371,6 @@ pub const BASE_PREDICATE_PUSHDOWN_TESTS: &[TestCase] = &[
     TestCase {
         query: r#"test.stack | extend first_word = extract("^(\\w+)", 1, title) | summarize c = count() by first_word | where exists(first_word)"#,
         expected: expected!(
-            // The extend is propagated into the summarize by clause
             r#"test.stack | summarize c = count() by first_word = extract("^(\\w+)", 1, title) | where exists(first_word)"#,
         ),
         count: 7,

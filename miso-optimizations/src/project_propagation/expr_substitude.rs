@@ -81,21 +81,30 @@ impl<'a> ExprTransformer for ExprSubstitute<'a> {
         }
     }
 
-    fn transform_exists(&self, field: Field) -> Expr {
-        if self.literals.contains_key(&field) {
-            // exists(literal) is always true.
-            let v = Value::Bool(true);
-            if let Some(ref hook) = self.literal_hook {
-                hook.borrow_mut()(field, &v);
+    fn transform_exists(&self, expr: Expr) -> Expr {
+        match expr {
+            Expr::Field(ref field) => {
+                if self.literals.contains_key(field) {
+                    // exists(literal) is always true.
+                    let v = Value::Bool(true);
+                    if let Some(ref hook) = self.literal_hook {
+                        hook.borrow_mut()(field.clone(), &v);
+                    }
+                    Expr::Literal(v)
+                } else if let Some(to) = self.renames.get(field) {
+                    if let Some(ref hook) = self.rename_hook {
+                        hook.borrow_mut()(field.clone(), to);
+                    }
+                    Expr::Exists(Box::new(Expr::Field(to.clone())))
+                } else if let Some(computed_expr) = self.exprs.get(field) {
+                    // Inline the computed expression into exists
+                    Expr::Exists(Box::new(self.transform(computed_expr.clone())))
+                } else {
+                    Expr::Exists(Box::new(Expr::Field(field.clone())))
+                }
             }
-            Expr::Literal(v)
-        } else if let Some(to) = self.renames.get(&field) {
-            if let Some(ref hook) = self.rename_hook {
-                hook.borrow_mut()(field, to);
-            }
-            Expr::Exists(to.clone())
-        } else {
-            Expr::Exists(field)
+            // For non-field expressions, just transform the inner expression
+            other => Expr::Exists(Box::new(self.transform(other))),
         }
     }
 }

@@ -1190,12 +1190,12 @@ fn test_project_propagation_exists_with_complex_expr() {
 
     let input = vec![
         S::Extend(vec![project_field("code", case_expr.clone())]),
-        S::Filter(Expr::Exists(field("code"))),
+        S::Filter(Expr::Exists(Box::new(Expr::Field(field("code"))))),
     ];
 
-    // exists(code) should NOT be converted to true - it must be preserved
+    // exists(code) is inlined to exists(case(...)) and moved before extend
     let expected = vec![
-        S::Filter(Expr::Exists(field("code"))),
+        S::Filter(Expr::Exists(Box::new(case_expr.clone()))),
         S::Extend(vec![project_field("code", case_expr)]),
     ];
 

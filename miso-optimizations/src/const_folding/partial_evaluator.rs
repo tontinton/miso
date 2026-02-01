@@ -113,8 +113,8 @@ impl<'a> ExprEvaluator<'a> for ConstEvaluator {
         Ok(Val::not_exist())
     }
 
-    fn eval_exists(&self, _field: &'a Field) -> Result<Val<'a>> {
-        Ok(Val::not_exist())
+    fn field_exists(&self, _field: &'a Field) -> Option<bool> {
+        None
     }
 
     fn eval_to_bool(&self, expr: &'a Expr) -> Result<Option<bool>> {
@@ -138,7 +138,8 @@ pub fn partial_eval(expr: &Expr) -> Result<Expr> {
     }
 
     Ok(match expr {
-        Expr::Literal(_) | Expr::Field(_) | Expr::Exists(_) => expr.clone(),
+        Expr::Literal(_) | Expr::Field(_) => expr.clone(),
+        Expr::Exists(inner) => Expr::Exists(Box::new(partial_eval(inner)?)),
 
         Expr::Cast(ty, inner) => Expr::Cast(*ty, Box::new(partial_eval(inner)?)),
         Expr::Not(inner) => {

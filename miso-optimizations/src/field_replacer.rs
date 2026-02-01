@@ -27,10 +27,6 @@ impl<'a> ExprTransformer for FieldReplacer<'a> {
     fn transform_field(&self, field: Field) -> Expr {
         Expr::Field(self.replace(field))
     }
-
-    fn transform_exists(&self, field: Field) -> Expr {
-        Expr::Exists(self.replace(field))
-    }
 }
 
 impl FieldReplacer<'_> {
