@@ -5,7 +5,7 @@ use miso_server::http_server::{create_app, OptimizationConfig};
 use opentelemetry::{trace::TracerProvider as _, KeyValue};
 use opentelemetry_otlp::WithExportConfig;
 use opentelemetry_sdk::{
-    trace::{Sampler, TracerProvider},
+    trace::{Sampler, SdkTracerProvider},
     Resource,
 };
 use tokio::{net::TcpListener, signal};
@@ -46,17 +46,19 @@ async fn shutdown_signal() {
     }
 }
 
-fn init_otlp_tracer(endpoint: &str) -> Result<TracerProvider> {
+fn init_otlp_tracer(endpoint: &str) -> Result<SdkTracerProvider> {
     let exporter = opentelemetry_otlp::SpanExporter::builder()
         .with_tonic()
         .with_endpoint(endpoint)
         .build()
         .context("failed to create OTLP exporter")?;
 
-    let resource = Resource::new([KeyValue::new("service.name", "miso")]);
+    let resource = Resource::builder_empty()
+        .with_attributes([KeyValue::new("service.name", "miso")])
+        .build();
 
-    let provider = TracerProvider::builder()
-        .with_batch_exporter(exporter, opentelemetry_sdk::runtime::Tokio)
+    let provider = SdkTracerProvider::builder()
+        .with_batch_exporter(exporter)
         .with_sampler(Sampler::AlwaysOn)
         .with_resource(resource)
         .build();
