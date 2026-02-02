@@ -1,3 +1,27 @@
+//! Moves project/extend/rename steps later by inlining their definitions.
+//!
+//! A project early in the pipeline forces field computation on every log, even
+//! if later steps filter most of them out. By pushing the project after filters
+//! and sorts, we compute fields only for logs that survive - sometimes a huge win.
+//!
+//! The trick: substitute the projected expressions directly into later steps.
+//! If `project a = b, c = 50`, then `where a > c` becomes `where b > 50`. The
+//! project moves after the filter, running on fewer logs.
+//!
+//! When the pipeline ends with summarize, we can often eliminate the project
+//! entirely - just rewrite the summarize to use the original fields and add a
+//! small post-project to restore the expected output names.
+//!
+//! Example without summarize:
+//!   project a = b, c = 50 | where a > c | sort by a
+//! becomes:
+//!   where b > 50 | sort by b | project a = b, c = 50
+//!
+//! Example with summarize:
+//!   project a = b, c = 50 | summarize d = sum(a) by c
+//! becomes:
+//!   summarize d = sum(b) | extend c = 50
+
 pub mod expr_substitude;
 
 use hashbrown::{HashMap, HashSet};
@@ -13,23 +37,12 @@ use miso_workflow_types::{
 };
 
 use crate::{
-    Group, Optimization, OptimizationResult, Pattern, pattern,
-    project_propagation::expr_substitude::ExprSubstitute,
+    pattern, project_propagation::expr_substitude::ExprSubstitute, Group, Optimization,
+    OptimizationResult, Pattern,
 };
 
-/// Propagate renames and literal assignments into later steps, to move the project step
-/// later if possible (and make it run on less logs).
-///
-/// Example with filter:
-///   project a = b, c = 50 | where a == c
-///  ->
-///   where b == 50 | project a = b, c = 50
 pub struct ProjectPropagationWithoutEnd;
 
-/// Example with summarize:
-///   project a = b, c = 50 | summarize d = sum(a) by c
-///  ->
-///   summarize d = sum(b) | extend c = 50
 pub struct ProjectPropagationWithEnd;
 
 impl Optimization for ProjectPropagationWithoutEnd {
