@@ -37,8 +37,8 @@ use miso_workflow_types::{
 };
 
 use crate::{
-    pattern, project_propagation::expr_substitude::ExprSubstitute, Group, Optimization,
-    OptimizationResult, Pattern,
+    Group, Optimization, OptimizationResult, Pattern, pattern,
+    project_propagation::expr_substitude::ExprSubstitute,
 };
 
 pub struct ProjectPropagationWithoutEnd;

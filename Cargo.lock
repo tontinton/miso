@@ -2432,7 +2432,6 @@ version = "0.1.0"
 dependencies = [
  "async-stream",
  "axum",
- "bytesize",
  "color-eyre",
  "futures-util",
  "hashbrown 0.15.5",

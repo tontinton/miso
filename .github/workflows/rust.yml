@@ -67,6 +67,22 @@ jobs:
       - name: Run
         run: cargo nextest run --workspace
 
+  machete:
+    name: Check unused crates
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install cargo-machete
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-machete
+
+      - name: Check for unused dependencies
+        run: cargo machete
+
   lint:
     name: rustfmt + clippy
     runs-on: ubuntu-latest
