@@ -9,8 +9,22 @@ pub enum TestConnector {
 pub struct TestCase {
     pub query: &'static str,
     pub expected: Expected,
-    pub count: usize,
+    pub results: ExpectedResults,
     pub name: &'static str,
+}
+
+#[derive(Clone)]
+pub enum ExpectedResults {
+    /// Just check the count of results
+    Count(usize),
+    /// Parse JSON and compare actual output (sorted) to expected
+    Logs(&'static str),
+}
+
+impl From<usize> for ExpectedResults {
+    fn from(count: usize) -> Self {
+        ExpectedResults::Count(count)
+    }
 }
 
 #[derive(Clone)]
@@ -67,62 +81,62 @@ pub const BASE_PREDICATE_PUSHDOWN_TESTS: &[TestCase] = &[
     TestCase {
         query: r#"test.stack | where acceptedAnswerId == 12446"#,
         expected: expected!("test.stack"),
-        count: 1,
+        results: ExpectedResults::Count(1),
         name: "filter_eq",
     },
     TestCase {
         query: r#"test.stack | where questionId != 4"#,
         expected: expected!("test.stack"),
-        count: 8,
+        results: ExpectedResults::Count(8),
         name: "filter_ne",
     },
     TestCase {
         query: r#"test.stack | where acceptedAnswerId in (12446, 31)"#,
         expected: expected!("test.stack"),
-        count: 2,
+        results: ExpectedResults::Count(2),
         name: "filter_in",
     },
     TestCase {
         query: r#"test.stack | where questionId >= 4 and questionId < 15"#,
         expected: expected!("test.stack"),
-        count: 8,
+        results: ExpectedResults::Count(8),
         name: "filter_range",
     },
     TestCase {
         query: r#"test.stack | where questionId == 4 or questionId == 6 or questionId == 11"#,
         expected: expected!("test.stack"),
-        count: 5,
+        results: ExpectedResults::Count(5),
         name: "filter_multiple_or",
     },
     TestCase {
         query: r#"test.stack | where exists(answerId)"#,
         expected: expected!("test.stack"),
-        count: 2,
+        results: ExpectedResults::Count(2),
         name: "filter_exists",
     },
     TestCase {
         query: r#"test.stack | where not(exists(answerId))"#,
         expected: expected!("test.stack"),
-        count: 8,
+        results: ExpectedResults::Count(8),
         name: "filter_not_exists",
     },
     TestCase {
         query: r#"test.stack | where not(questionId == 4)"#,
         expected: expected!("test.stack"),
-        count: 8,
+        results: ExpectedResults::Count(8),
         name: "filter_not",
     },
     TestCase {
         query: r#"test.stack | where (questionId > 10 and questionId < 15) or questionId == 4"#,
         expected: expected!("test.stack"),
-        count: 6,
+        results: ExpectedResults::Count(6),
         name: "filter_nested_and_or",
     },
     // True negative test
     TestCase {
         query: r#"test.stack | where questionId == 99999"#,
         expected: expected!("test.stack"),
-        count: 0,
+        results: ExpectedResults::Count(0),
         name: "filter_no_match",
     },
     // String predicates - has/has_cs
@@ -132,7 +146,7 @@ pub const BASE_PREDICATE_PUSHDOWN_TESTS: &[TestCase] = &[
             "test.stack",
             Elastic => r#"test.stack | where body has_cs "This""#,
         ),
-        count: 1,
+        results: ExpectedResults::Count(1),
         name: "filter_has_cs_uppercase",
     },
     TestCase {
@@ -141,7 +155,7 @@ pub const BASE_PREDICATE_PUSHDOWN_TESTS: &[TestCase] = &[
             "test.stack",
             Elastic => r#"test.stack | where body has_cs "this""#,
         ),
-        count: 4,
+        results: ExpectedResults::Count(4),
         name: "filter_has_cs_lowercase",
     },
     TestCase {
@@ -150,7 +164,7 @@ pub const BASE_PREDICATE_PUSHDOWN_TESTS: &[TestCase] = &[
             "test.stack",
             Quickwit => r#"test.stack | where body has "This""#,
         ),
-        count: 4,
+        results: ExpectedResults::Count(4),
         name: "filter_has_uppercase",
     },
     TestCase {
@@ -159,7 +173,7 @@ pub const BASE_PREDICATE_PUSHDOWN_TESTS: &[TestCase] = &[
             "test.stack",
             Quickwit => r#"test.stack | where body has "this""#,
         ),
-        count: 4,
+        results: ExpectedResults::Count(4),
         name: "filter_has_lowercase",
     },
     TestCase {
@@ -168,27 +182,27 @@ pub const BASE_PREDICATE_PUSHDOWN_TESTS: &[TestCase] = &[
             "test.stack",
             Quickwit => r#"test.stack | where body has "code""#,
         ),
-        count: 1,
+        results: ExpectedResults::Count(1),
         name: "filter_has_word_boundary",
     },
     // String predicates - startswith and contains
     TestCase {
         query: r#"test.stack | where title startswith "Calculate""#,
         expected: expected!("test.stack"),
-        count: 2,
+        results: ExpectedResults::Count(2),
         name: "filter_startswith",
     },
     TestCase {
         query: r#"test.stack | where body contains "DateTime""#,
         expected: expected!(r#"test.stack | where body contains "DateTime""#),
-        count: 3,
+        results: ExpectedResults::Count(3),
         name: "filter_contains",
     },
     // Chained filters
     TestCase {
         query: r#"test.stack | where questionId > 4 | where exists(acceptedAnswerId)"#,
         expected: expected!("test.stack"),
-        count: 5,
+        results: ExpectedResults::Count(5),
         name: "filter_chained_with_exists",
     },
     // Projections
@@ -198,14 +212,16 @@ pub const BASE_PREDICATE_PUSHDOWN_TESTS: &[TestCase] = &[
             "test.stack",
             Splunk => "test.stack | project acceptedAnswerId",
         ),
-        count: 10,
+        results: ExpectedResults::Logs(
+            r#"[{"acceptedAnswerId": 7}, {"acceptedAnswerId": 26}, {"acceptedAnswerId": 31}, {"acceptedAnswerId": 1248}, {"acceptedAnswerId": 1404}, {"acceptedAnswerId": 12446}, {}, {}, {}, {}]"#,
+        ),
         name: "project",
     },
     // Basic aggregations and counts
     TestCase {
         query: r#"test.stack | count"#,
         expected: expected!("test.stack"),
-        count: 1,
+        results: ExpectedResults::Logs(r#"[{"Count": 10}]"#),
         name: "count",
     },
     TestCase {
@@ -214,7 +230,9 @@ pub const BASE_PREDICATE_PUSHDOWN_TESTS: &[TestCase] = &[
             "test.stack",
             Splunk => "test.stack | distinct user",
         ),
-        count: 5,
+        results: ExpectedResults::Logs(
+            r#"[{"user": "1"}, {"user": "11"}, {"user": "2"}, {"user": "8"}, {"user": "9"}]"#,
+        ),
         name: "distinct",
     },
     // Complex aggregations
@@ -249,7 +267,7 @@ pub const BASE_PREDICATE_PUSHDOWN_TESTS: &[TestCase] = &[
       by bin(answerId, 5)
     "#,
         ),
-        count: 2,
+        results: ExpectedResults::Count(2),
         name: "summarize_all_agg_types_with_binning",
     },
     TestCase {
@@ -259,13 +277,15 @@ pub const BASE_PREDICATE_PUSHDOWN_TESTS: &[TestCase] = &[
             // Splunk doesn't support binning in stats pushdown
             Splunk => "test.stack | summarize c=count() by bin(questionId, 2), user",
         ),
-        count: 8,
+        results: ExpectedResults::Count(8),
         name: "summarize_multiple_groupby",
     },
     TestCase {
         query: r#"test.stack | summarize c=count() by u=user"#,
         expected: expected!("test.stack"),
-        count: 5,
+        results: ExpectedResults::Logs(
+            r#"[{"u": "1", "c": 3}, {"u": "11", "c": 1}, {"u": "2", "c": 2}, {"u": "8", "c": 1}, {"u": "9", "c": 3}]"#,
+        ),
         name: "summarize_with_aliased_by_field",
     },
     // Top-N and sorting
@@ -275,7 +295,7 @@ pub const BASE_PREDICATE_PUSHDOWN_TESTS: &[TestCase] = &[
             "test.stack",
             Elastic | Quickwit => "test.stack | top 3 by minQuestionId",
         ),
-        count: 3,
+        results: ExpectedResults::Count(3),
         name: "summarize_then_topn",
     },
     TestCase {
@@ -284,7 +304,7 @@ pub const BASE_PREDICATE_PUSHDOWN_TESTS: &[TestCase] = &[
             "test.stack",
             Elastic | Quickwit => "test.stack | summarize minQuestionId=min(questionId) by user",
         ),
-        count: 3,
+        results: ExpectedResults::Count(3),
         name: "topn_then_summarize",
     },
     TestCase {
@@ -293,32 +313,34 @@ pub const BASE_PREDICATE_PUSHDOWN_TESTS: &[TestCase] = &[
             "test.stack",
             Elastic | Quickwit => "test.stack | top 3 by c",
         ),
-        count: 3,
+        results: ExpectedResults::Logs(
+            r#"[{"c": 1, "user": "11"}, {"c": 1, "user": "8"}, {"c": 2, "user": "2"}]"#,
+        ),
         name: "summarize_count_then_topn",
     },
     TestCase {
         query: r#"test.stack | sort by @time desc | take 3"#,
         expected: expected!("test.stack"),
-        count: 3,
+        results: ExpectedResults::Count(3),
         name: "topn_desc",
     },
     TestCase {
         query: r#"test.stack | sort by @time asc | take 3"#,
         expected: expected!("test.stack"),
-        count: 3,
+        results: ExpectedResults::Count(3),
         name: "topn_asc",
     },
     TestCase {
         query: r#"test.stack | top 5 by questionId | top 3 by questionId"#,
         expected: expected!("test.stack"),
-        count: 3,
+        results: ExpectedResults::Count(3),
         name: "topn_after_topn",
     },
     // Union operations
     TestCase {
         query: r#"test.stack | union (test.stack_mirror)"#,
         expected: expected!("test.stack"),
-        count: 20,
+        results: ExpectedResults::Count(20),
         name: "union_same_schema",
     },
     TestCase {
@@ -327,7 +349,7 @@ pub const BASE_PREDICATE_PUSHDOWN_TESTS: &[TestCase] = &[
             "test.stack",
             Elastic | Quickwit => "test.stack | union (test.hdfs)",
         ),
-        count: 20,
+        results: ExpectedResults::Count(20),
         name: "union_different_timestamp_field",
     },
     TestCase {
@@ -338,7 +360,7 @@ pub const BASE_PREDICATE_PUSHDOWN_TESTS: &[TestCase] = &[
     | top 2 by acceptedAnswerId
     "#,
         expected: expected!("test.stack"),
-        count: 2,
+        results: ExpectedResults::Count(2),
         name: "union_with_filter_and_topn",
     },
     TestCase {
@@ -347,7 +369,7 @@ pub const BASE_PREDICATE_PUSHDOWN_TESTS: &[TestCase] = &[
             "test.stack",
             Elastic | Quickwit => r#"test.stack | where exists(extract("^(\\w+)", 1, title)) | extend first_word = extract("^(\\w+)", 1, title)"#,
         ),
-        count: 8,
+        results: ExpectedResults::Count(8),
         name: "extract_first_word_from_title",
     },
     TestCase {
@@ -356,7 +378,7 @@ pub const BASE_PREDICATE_PUSHDOWN_TESTS: &[TestCase] = &[
             "test.stack",
             Elastic | Quickwit => r#"test.stack | where extract("(DateTime)", 1, body) == "DateTime" | extend has_datetime = extract("(DateTime)", 1, body) "#,
         ),
-        count: 3,
+        results: ExpectedResults::Count(3),
         name: "extract_and_filter_on_result",
     },
     TestCase {
@@ -365,7 +387,7 @@ pub const BASE_PREDICATE_PUSHDOWN_TESTS: &[TestCase] = &[
             "test.stack",
             Elastic | Quickwit => r#"test.stack | where extract("(question|answer)", 1, type) == "question" | extend user_type = extract("(question|answer)", 1, type)"#,
         ),
-        count: 8,
+        results: ExpectedResults::Count(8),
         name: "extract_from_type_field",
     },
     TestCase {
@@ -373,7 +395,7 @@ pub const BASE_PREDICATE_PUSHDOWN_TESTS: &[TestCase] = &[
         expected: expected!(
             r#"test.stack | summarize c = count() by first_word = extract("^(\\w+)", 1, title) | where exists(first_word)"#,
         ),
-        count: 7,
+        results: ExpectedResults::Count(7),
         name: "extract_then_summarize",
     },
     TestCase {
@@ -382,19 +404,19 @@ pub const BASE_PREDICATE_PUSHDOWN_TESTS: &[TestCase] = &[
             "test.stack",
             Elastic | Quickwit => r#"test.stack | where extract("^(Calculate)", 1, title) == "Calculate" | extend calc = extract("^(Calculate)", 1, title)"#,
         ),
-        count: 2,
+        results: ExpectedResults::Count(2),
         name: "extract_with_preceding_filter",
     },
     TestCase {
         query: r#"test.stack | where questionId > 4 | take 3"#,
         expected: expected!("test.stack"),
-        count: 3,
+        results: ExpectedResults::Count(3),
         name: "filter_then_limit",
     },
     TestCase {
         query: r#"test.stack | summarize total=count(), avgQ=avg(questionId)"#,
         expected: expected!("test.stack"),
-        count: 1,
+        results: ExpectedResults::Logs(r#"[{"total": 10, "avgQ": 10.5}]"#),
         name: "summarize_global_no_by",
     },
     // Project then filter - both pushed to connector (Elastic/Quickwit), filter pushed for Splunk
@@ -404,14 +426,16 @@ pub const BASE_PREDICATE_PUSHDOWN_TESTS: &[TestCase] = &[
             "test.stack",
             Splunk => "test.stack | project questionId, user",
         ),
-        count: 6,
+        results: ExpectedResults::Count(6),
         name: "project_then_filter",
     },
     // summarize pushed, project remains
     TestCase {
         query: r#"test.stack | summarize c=count() by user | project user"#,
         expected: expected!("test.stack | project user"),
-        count: 5,
+        results: ExpectedResults::Logs(
+            r#"[{"user": "1"}, {"user": "11"}, {"user": "2"}, {"user": "8"}, {"user": "9"}]"#,
+        ),
         name: "summarize_then_project",
     },
 ];

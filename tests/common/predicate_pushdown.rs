@@ -18,7 +18,7 @@ use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, Instrument};
 
-use super::test_cases::TestCase;
+use super::test_cases::{ExpectedResults, TestCase};
 use super::TEST_LAYER;
 
 pub use super::test_cases::{TestConnector, BASE_PREDICATE_PUSHDOWN_TESTS as TESTS};
@@ -41,7 +41,7 @@ async fn same_results(
     connectors: &ConnectorsMap,
     query: &str,
     query_after_optimizations: &str,
-    count: usize,
+    expected_results: &ExpectedResults,
     test_name: &str,
 ) -> Result<()> {
     let steps = to_workflow_steps(
@@ -91,8 +91,8 @@ async fn same_results(
         .execute(WorkflowLimits::default(), cancel2)
         .context("execute no predicate pushdown workflow")?;
 
-    let mut pushdown_results = Vec::with_capacity(count);
-    let mut no_pushdown_results = Vec::with_capacity(count);
+    let mut pushdown_results = Vec::new();
+    let mut no_pushdown_results = Vec::new();
 
     let mut pushdown_done = false;
     let mut no_pushdown_done = false;
@@ -109,12 +109,6 @@ async fn same_results(
                         pushdown_results.push(Value::Object(log));
                     }
                     None => {
-                        assert_eq!(
-                            count,
-                            pushdown_results.len(),
-                            "[{}] number of logs returned in pushdown query is wrong",
-                            test_name
-                        );
                         pushdown_done = true;
                     }
                 }
@@ -125,12 +119,6 @@ async fn same_results(
                         no_pushdown_results.push(Value::Object(log));
                     }
                     None => {
-                        assert_eq!(
-                            count,
-                            no_pushdown_results.len(),
-                            "[{}] number of logs returned in non pushdown query is wrong",
-                            test_name
-                        );
                         no_pushdown_done = true;
                     }
                 }
@@ -146,6 +134,32 @@ async fn same_results(
         "[{}] results of pushdown query should equal results of non pushdown query, after sorting",
         test_name
     );
+
+    match expected_results {
+        ExpectedResults::Count(expected_count) => {
+            assert_eq!(
+                *expected_count,
+                pushdown_results.len(),
+                "[{}] number of logs returned is wrong",
+                test_name
+            );
+        }
+        ExpectedResults::Logs(expected_json) => {
+            let mut expected_logs: Vec<Value> =
+                serde_json::from_str::<Vec<serde_json::Value>>(expected_json)
+                    .expect("parse expected logs JSON")
+                    .into_iter()
+                    .map(Value::from)
+                    .collect();
+            expected_logs.sort();
+
+            assert_eq!(
+                expected_logs, pushdown_results,
+                "[{}] actual logs do not match expected (left=expected, right=actual)",
+                test_name
+            );
+        }
+    }
 
     Ok(())
 }
@@ -200,7 +214,7 @@ pub async fn run_tests(
                         &connectors,
                         tc.query,
                         tc.expected.for_connector(test_connector),
-                        tc.count,
+                        &tc.results,
                         tc.name,
                     ))
                     .catch_unwind()
