@@ -19,7 +19,7 @@ macro_rules! json_internal {
 
     // Done with trailing comma.
     (@array [$($elems:expr,)*]) => {
-        $crate::__private::vec![$($elems,)*]
+        vec![$($elems,)*]
     };
 
     // Done without trailing comma.
@@ -196,7 +196,7 @@ macro_rules! json_internal {
     };
 
     ([]) => {
-        $crate::value::Value::Array($crate::__private::vec![])
+        $crate::value::Value::Array(vec![])
     };
 
     ([ $($tt:tt)+ ]) => {

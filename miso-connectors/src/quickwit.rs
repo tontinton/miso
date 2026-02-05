@@ -1526,3 +1526,234 @@ impl Connector for QuickwitConnector {
         self.interval_task.shutdown().await;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use miso_workflow_types::field::Field;
+
+    fn field(name: &str) -> Field {
+        name.parse().unwrap()
+    }
+
+    fn field_expr(name: &str) -> Box<Expr> {
+        Box::new(Expr::Field(field(name)))
+    }
+
+    fn lit_str(s: &str) -> Box<Expr> {
+        Box::new(Expr::Literal(Value::String(s.into())))
+    }
+
+    fn lit_int(v: i64) -> Box<Expr> {
+        Box::new(Expr::Literal(Value::Int(v)))
+    }
+
+    fn eq_field(name: &str, val: Box<Expr>) -> Box<Expr> {
+        Box::new(Expr::Eq(field_expr(name), val))
+    }
+
+    mod compile_filter {
+        use super::*;
+        use test_case::test_case;
+
+        #[test]
+        fn eq_string() {
+            let expr = Expr::Eq(field_expr("status"), lit_str("active"));
+            assert_eq!(
+                compile_filter_ast(&expr).unwrap(),
+                json!({"term": {"status": {"value": "active"}}})
+            );
+        }
+
+        #[test]
+        fn eq_int() {
+            let expr = Expr::Eq(field_expr("count"), lit_int(42));
+            assert_eq!(
+                compile_filter_ast(&expr).unwrap(),
+                json!({"term": {"count": {"value": "42"}}})
+            );
+        }
+
+        #[test]
+        fn ne() {
+            let expr = Expr::Ne(field_expr("status"), lit_str("error"));
+            assert_eq!(
+                compile_filter_ast(&expr).unwrap(),
+                json!({"bool": {"must_not": {"term": {"status": "error"}}}})
+            );
+        }
+
+        #[test_case(Expr::Gt(field_expr("val"), lit_int(100)),  "gt"  ; "gt")]
+        #[test_case(Expr::Gte(field_expr("val"), lit_int(100)), "gte" ; "gte")]
+        #[test_case(Expr::Lt(field_expr("val"), lit_int(100)),  "lt"  ; "lt")]
+        #[test_case(Expr::Lte(field_expr("val"), lit_int(100)), "lte" ; "lte")]
+        fn comparison(expr: Expr, op: &str) {
+            assert_eq!(
+                compile_filter_ast(&expr).unwrap(),
+                json!({"range": {"val": {(op): "100"}}})
+            );
+        }
+
+        #[test]
+        fn and_or_not() {
+            let eq_a = eq_field("a", lit_int(1));
+            let eq_b = eq_field("b", lit_int(2));
+
+            assert_eq!(
+                compile_filter_ast(&Expr::And(eq_a.clone(), eq_b.clone())).unwrap(),
+                json!({"bool": {"must": [
+                    {"term": {"a": {"value": "1"}}},
+                    {"term": {"b": {"value": "2"}}},
+                ]}})
+            );
+
+            assert_eq!(
+                compile_filter_ast(&Expr::Or(eq_a.clone(), eq_b)).unwrap(),
+                json!({"bool": {"should": [
+                    {"term": {"a": {"value": "1"}}},
+                    {"term": {"b": {"value": "2"}}},
+                ]}})
+            );
+
+            assert_eq!(
+                compile_filter_ast(&Expr::Not(eq_a)).unwrap(),
+                json!({"bool": {"must_not": {"term": {"a": {"value": "1"}}}}})
+            );
+        }
+
+        #[test]
+        fn exists() {
+            let expr = Expr::Exists(field_expr("optional"));
+            assert_eq!(
+                compile_filter_ast(&expr).unwrap(),
+                json!({"exists": {"field": "optional"}})
+            );
+        }
+
+        #[test]
+        fn in_clause() {
+            let expr = Expr::In(
+                field_expr("status"),
+                vec![
+                    Expr::Literal(Value::String("a".into())),
+                    Expr::Literal(Value::String("b".into())),
+                ],
+            );
+            assert_eq!(
+                compile_filter_ast(&expr).unwrap(),
+                json!({"terms": {"status": ["a", "b"]}})
+            );
+        }
+
+        #[test]
+        fn starts_with() {
+            let expr = Expr::StartsWith(field_expr("path"), lit_str("/api/"));
+            assert_eq!(
+                compile_filter_ast(&expr).unwrap(),
+                json!({"match_phrase_prefix": {"path": {"query": "/api/"}}})
+            );
+        }
+
+        #[test]
+        fn has_cs() {
+            let expr = Expr::HasCs(field_expr("msg"), lit_str("error"));
+            assert_eq!(
+                compile_filter_ast(&expr).unwrap(),
+                json!({"match_phrase": {"msg": "error"}})
+            );
+        }
+
+        #[test_case(
+            Expr::Contains(field_expr("a"), lit_str("b"))
+            ; "unsupported_contains"
+        )]
+        #[test_case(
+            Expr::Eq(Box::new(Expr::Field("items[0]".parse().unwrap())), lit_int(1))
+            ; "array_access_field"
+        )]
+        #[test_case(Expr::Eq(lit_int(1), lit_int(2)) ; "non_field_lhs")]
+        fn returns_none(expr: Expr) {
+            assert!(compile_filter_ast(&expr).is_none());
+        }
+
+        #[test]
+        fn nested_and_or() {
+            let expr = Expr::And(
+                Box::new(Expr::Or(
+                    eq_field("a", lit_int(1)),
+                    eq_field("b", lit_int(2)),
+                )),
+                Box::new(Expr::Exists(field_expr("c"))),
+            );
+            assert_eq!(
+                compile_filter_ast(&expr).unwrap(),
+                json!({"bool": {"must": [
+                    {"bool": {"should": [
+                        {"term": {"a": {"value": "1"}}},
+                        {"term": {"b": {"value": "2"}}},
+                    ]}},
+                    {"exists": {"field": "c"}},
+                ]}})
+            );
+        }
+    }
+
+    mod format_value {
+        use super::*;
+        use test_case::test_case;
+
+        #[test_case(Value::String("hello".into()), "hello" ; "string")]
+        #[test_case(Value::Int(42), "42" ; "int")]
+        #[test_case(Value::Float(2.5), "2.5" ; "float")]
+        #[test_case(Value::Bool(true), "true" ; "bool")]
+        fn converts(input: Value, expected: &str) {
+            assert_eq!(format_value(&input), expected);
+        }
+
+        #[test]
+        fn timestamp() {
+            let dt = time::OffsetDateTime::from_unix_timestamp(0).unwrap();
+            let result = format_value(&Value::Timestamp(dt));
+            assert_eq!(result, "1970-01-01 00:00:00.000");
+        }
+    }
+
+    mod handle {
+        use super::*;
+
+        #[test]
+        fn with_filter_accumulates() {
+            let h = QuickwitHandle::new(None)
+                .with_filter(json!({"term": {"a": "1"}}))
+                .with_filter(json!({"term": {"b": "2"}}));
+            assert_eq!(h.queries.len(), 2);
+        }
+
+        #[test]
+        fn with_count_clears_source_includes() {
+            let h = QuickwitHandle::new(None)
+                .with_source_includes(vec!["a".into(), "b".into()])
+                .with_count();
+            assert!(h.source_includes.is_empty());
+            assert!(h.count);
+        }
+
+        #[test]
+        fn with_limit_preserves_other_state() {
+            let h = QuickwitHandle::new(Some("ts".into()))
+                .with_filter(json!({"term": {"a": "1"}}))
+                .with_limit(10);
+            assert_eq!(h.limit, Some(10));
+            assert_eq!(h.queries.len(), 1);
+            assert_eq!(h.timestamp_field, Some("ts".into()));
+        }
+
+        #[test]
+        fn with_union_accumulates() {
+            let h = QuickwitHandle::new(None)
+                .with_union("idx_a")
+                .with_union("idx_b");
+            assert_eq!(h.collections, vec!["idx_a", "idx_b"]);
+        }
+    }
+}

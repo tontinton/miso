@@ -25,3 +25,6 @@ time.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 typetag.workspace = true
+
+[dev-dependencies]
+test-case.workspace = true
