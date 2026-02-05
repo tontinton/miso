@@ -1335,6 +1335,22 @@ mod tests {
         name.parse().unwrap()
     }
 
+    fn field_expr(name: &str) -> Box<Expr> {
+        Box::new(Expr::Field(field(name)))
+    }
+
+    fn lit_str(s: &str) -> Box<Expr> {
+        Box::new(Expr::Literal(Value::String(s.into())))
+    }
+
+    fn lit_int(v: i64) -> Box<Expr> {
+        Box::new(Expr::Literal(Value::Int(v)))
+    }
+
+    fn eq_field(name: &str, val: Box<Expr>) -> Box<Expr> {
+        Box::new(Expr::Eq(field_expr(name), val))
+    }
+
     mod build_spl {
         use super::*;
 
@@ -1456,13 +1472,11 @@ mod tests {
 
     mod compile_filter {
         use super::*;
+        use test_case::test_case;
 
         #[test]
         fn eq_string() {
-            let expr = Expr::Eq(
-                Box::new(Expr::Field(field("foo"))),
-                Box::new(Expr::Literal(Value::String("bar".into()))),
-            );
+            let expr = Expr::Eq(field_expr("foo"), lit_str("bar"));
             let result = compile_filter_to_spl(&expr).unwrap();
             assert!(matches!(result, FilterResult::Search(_)));
             assert_eq!(result.as_str().unwrap(), "foo=CASE(\"bar\")");
@@ -1470,10 +1484,7 @@ mod tests {
 
         #[test]
         fn eq_int() {
-            let expr = Expr::Eq(
-                Box::new(Expr::Field(field("count"))),
-                Box::new(Expr::Literal(Value::Int(42))),
-            );
+            let expr = Expr::Eq(field_expr("count"), lit_int(42));
             let result = compile_filter_to_spl(&expr).unwrap();
             assert!(matches!(result, FilterResult::Search(_)));
             assert_eq!(result.as_str().unwrap(), "count=42");
@@ -1481,59 +1492,24 @@ mod tests {
 
         #[test]
         fn ne() {
-            let expr = Expr::Ne(
-                Box::new(Expr::Field(field("status"))),
-                Box::new(Expr::Literal(Value::String("error".into()))),
-            );
+            let expr = Expr::Ne(field_expr("status"), lit_str("error"));
             let result = compile_filter_to_spl(&expr).unwrap();
             assert_eq!(result.as_str().unwrap(), "status!=CASE(\"error\")");
         }
 
-        #[test]
-        fn comparison_operators() {
-            let field_box = || Box::new(Expr::Field(field("value")));
-            let value_box = || Box::new(Expr::Literal(Value::Int(100)));
-
-            assert_eq!(
-                compile_filter_to_spl(&Expr::Gt(field_box(), value_box()))
-                    .unwrap()
-                    .as_str()
-                    .unwrap(),
-                "value>100"
-            );
-            assert_eq!(
-                compile_filter_to_spl(&Expr::Gte(field_box(), value_box()))
-                    .unwrap()
-                    .as_str()
-                    .unwrap(),
-                "value>=100"
-            );
-            assert_eq!(
-                compile_filter_to_spl(&Expr::Lt(field_box(), value_box()))
-                    .unwrap()
-                    .as_str()
-                    .unwrap(),
-                "value<100"
-            );
-            assert_eq!(
-                compile_filter_to_spl(&Expr::Lte(field_box(), value_box()))
-                    .unwrap()
-                    .as_str()
-                    .unwrap(),
-                "value<=100"
-            );
+        #[test_case(Expr::Gt(field_expr("value"), lit_int(100)),  ">"  ; "gt")]
+        #[test_case(Expr::Gte(field_expr("value"), lit_int(100)), ">=" ; "gte")]
+        #[test_case(Expr::Lt(field_expr("value"), lit_int(100)),  "<"  ; "lt")]
+        #[test_case(Expr::Lte(field_expr("value"), lit_int(100)), "<=" ; "lte")]
+        fn comparison(expr: Expr, op: &str) {
+            let result = compile_filter_to_spl(&expr).unwrap();
+            assert_eq!(result.as_str().unwrap(), format!("value{op}100"));
         }
 
         #[test]
         fn logical_operators_use_search_when_possible() {
-            let eq_a = Box::new(Expr::Eq(
-                Box::new(Expr::Field(field("a"))),
-                Box::new(Expr::Literal(Value::Int(1))),
-            ));
-            let eq_b = Box::new(Expr::Eq(
-                Box::new(Expr::Field(field("b"))),
-                Box::new(Expr::Literal(Value::Int(2))),
-            ));
+            let eq_a = eq_field("a", lit_int(1));
+            let eq_b = eq_field("b", lit_int(2));
 
             let and_result = compile_filter_to_spl(&Expr::And(eq_a.clone(), eq_b.clone())).unwrap();
             assert!(matches!(and_result, FilterResult::Search(_)));
@@ -1546,31 +1522,26 @@ mod tests {
 
         #[test]
         fn not() {
-            let expr = Expr::Not(Box::new(Expr::Eq(
-                Box::new(Expr::Field(field("a"))),
-                Box::new(Expr::Literal(Value::Int(1))),
-            )));
+            let expr = Expr::Not(eq_field("a", lit_int(1)));
             let result = compile_filter_to_spl(&expr).unwrap();
             assert_eq!(result.as_str().unwrap(), "NOT a=1");
         }
 
         #[test]
-        fn function_filters_use_where() {
-            // exists -> isnotnull()
-            let exists_expr = Expr::Exists(Box::new(Expr::Field(field("optional_field"))));
-            let exists_result = compile_filter_to_spl(&exists_expr).unwrap();
-            assert!(matches!(exists_result, FilterResult::Where(_)));
-            assert_eq!(exists_result.as_str().unwrap(), "isnotnull(optional_field)");
+        fn exists_uses_where() {
+            let expr = Expr::Exists(field_expr("optional_field"));
+            let result = compile_filter_to_spl(&expr).unwrap();
+            assert!(matches!(result, FilterResult::Where(_)));
+            assert_eq!(result.as_str().unwrap(), "isnotnull(optional_field)");
+        }
 
-            // has -> like(lower(), ...)
-            let has_expr = Expr::Has(
-                Box::new(Expr::Field(field("message"))),
-                Box::new(Expr::Literal(Value::String("error".into()))),
-            );
-            let has_result = compile_filter_to_spl(&has_expr).unwrap();
-            assert!(matches!(has_result, FilterResult::Where(_)));
+        #[test]
+        fn has_uses_where() {
+            let expr = Expr::Has(field_expr("message"), lit_str("error"));
+            let result = compile_filter_to_spl(&expr).unwrap();
+            assert!(matches!(result, FilterResult::Where(_)));
             assert_eq!(
-                has_result.as_str().unwrap(),
+                result.as_str().unwrap(),
                 "like(lower(message), \"%error%\")"
             );
         }
@@ -1578,11 +1549,8 @@ mod tests {
         #[test]
         fn and_with_exists_uses_where() {
             let expr = Expr::And(
-                Box::new(Expr::Eq(
-                    Box::new(Expr::Field(field("a"))),
-                    Box::new(Expr::Literal(Value::Int(1))),
-                )),
-                Box::new(Expr::Exists(Box::new(Expr::Field(field("b"))))),
+                eq_field("a", lit_int(1)),
+                Box::new(Expr::Exists(field_expr("b"))),
             );
             let result = compile_filter_to_spl(&expr).unwrap();
             assert!(matches!(result, FilterResult::Where(_)));
@@ -1592,7 +1560,7 @@ mod tests {
         #[test]
         fn in_clause() {
             let expr = Expr::In(
-                Box::new(Expr::Field(field("status"))),
+                field_expr("status"),
                 vec![
                     Expr::Literal(Value::String("a".into())),
                     Expr::Literal(Value::String("b".into())),
@@ -1607,10 +1575,7 @@ mod tests {
 
         #[test]
         fn starts_with() {
-            let expr = Expr::StartsWith(
-                Box::new(Expr::Field(field("path"))),
-                Box::new(Expr::Literal(Value::String("/api/".into()))),
-            );
+            let expr = Expr::StartsWith(field_expr("path"), lit_str("/api/"));
             let result = compile_filter_to_spl(&expr).unwrap();
             assert_eq!(result.as_str().unwrap(), "path=/api/*");
         }
@@ -1618,39 +1583,43 @@ mod tests {
 
     mod format_value {
         use super::*;
+        use test_case::test_case;
 
         #[test]
-        fn string_formatting() {
-            // Escaping quotes
+        fn string_escaping() {
             assert_eq!(
                 format_spl_value(&Value::String("hello \"world\"".into())),
                 "\"hello \\\"world\\\"\""
             );
-            // CASE() wrapper for search
+        }
+
+        #[test]
+        fn string_case_wrapper_for_search() {
             assert_eq!(
                 format_spl_value_for_search(&Value::String("hello".into())),
                 "CASE(\"hello\")"
             );
         }
 
-        #[test]
-        fn numeric_and_bool_formatting() {
-            assert_eq!(format_spl_value(&Value::Int(42)), "42");
-            assert_eq!(format_spl_value(&Value::Float(2.5)), "2.5");
-            assert_eq!(format_spl_value(&Value::Bool(true)), "true");
-            assert_eq!(format_spl_value(&Value::Bool(false)), "false");
+        #[test_case(Value::Int(42), "42" ; "int")]
+        #[test_case(Value::Float(2.5), "2.5" ; "float")]
+        #[test_case(Value::Bool(true), "true" ; "bool_true")]
+        #[test_case(Value::Bool(false), "false" ; "bool_false")]
+        fn numeric_and_bool(input: Value, expected: &str) {
+            assert_eq!(format_spl_value(&input), expected);
         }
     }
 
     mod is_timestamp {
         use super::*;
+        use test_case::test_case;
 
-        #[test]
-        fn recognizes_time_fields() {
-            assert!(is_timestamp_field(&field("_time")));
-            assert!(is_timestamp_field(&field("@time")));
-            assert!(!is_timestamp_field(&field("created_at")));
-            assert!(!is_timestamp_field(&field("timestamp")));
+        #[test_case("_time",      true  ; "underscore_time")]
+        #[test_case("@time",      true  ; "at_time")]
+        #[test_case("created_at", false ; "created_at")]
+        #[test_case("timestamp",  false ; "timestamp")]
+        fn recognizes_time_fields(name: &str, expected: bool) {
+            assert_eq!(is_timestamp_field(&field(name)), expected);
         }
     }
 
@@ -1659,7 +1628,6 @@ mod tests {
 
         #[test]
         fn only_for_simple_count() {
-            // Only count -> can use tstats
             assert!(
                 SplunkHandle::default()
                     .push(SplunkOp::Count)
@@ -1674,7 +1642,6 @@ mod tests {
                     .can_use_tstats()
             );
 
-            // Empty pipeline -> cannot use tstats
             assert!(!SplunkHandle::default().can_use_tstats());
 
             // Stats (not count) -> cannot use tstats
@@ -1695,8 +1662,7 @@ mod tests {
         use super::*;
 
         #[test]
-        fn merge_behavior() {
-            // Merge takes more restrictive values
+        fn merge_takes_more_restrictive_values() {
             let handle = SplunkHandle {
                 earliest: Some(1000),
                 latest: Some(3000),
@@ -1705,8 +1671,10 @@ mod tests {
             let updated = handle.with_time_constraints(Some(1500), Some(2500));
             assert_eq!(updated.earliest, Some(1500));
             assert_eq!(updated.latest, Some(2500));
+        }
 
-            // Sets values when None
+        #[test]
+        fn sets_values_when_none() {
             let handle = SplunkHandle::default();
             let updated = handle.with_time_constraints(Some(1000), Some(2000));
             assert_eq!(updated.earliest, Some(1000));
@@ -1716,90 +1684,48 @@ mod tests {
 
     mod convert_named_capture {
         use super::*;
+        use test_case::test_case;
 
-        #[test]
-        fn simple_capture_group() {
-            // Pattern: error: (\d+) with group 1 -> error: (?<code>\d+)
-            let result = convert_to_splunk_named_capture(r"error: (\d+)", 1, "code");
-            assert_eq!(result, Some(r"error: (?<code>\d+)".to_string()));
+        #[test_case(r"error: (\d+)", 1, "code", r"error: (?<code>\d+)" ; "simple_capture_group")]
+        #[test_case(r"(\w+): (\d+)", 2, "num", r"(\w+): (?<num>\d+)" ; "second_capture_group")]
+        #[test_case(r"\(test\) (\d+)", 1, "num", r"\(test\) (?<num>\d+)" ; "preserves_escaped_parens")]
+        #[test_case(r"(?:prefix)(\d+)", 1, "num", r"(?:prefix)(?<num>\d+)" ; "skips_non_capturing_groups")]
+        #[test_case(r"(?<existing>\w+)(\d+)", 1, "word", r"(?<word>\w+)(\d+)" ; "named_group_first")]
+        #[test_case(r"(?<existing>\w+)(\d+)", 2, "num", r"(?<existing>\w+)(?<num>\d+)" ; "named_group_second")]
+        #[test_case(r"(?P<existing>\w+)(\d+)", 1, "word", r"(?<word>\w+)(\d+)" ; "python_style_named_group")]
+        #[test_case(r"(?=prefix)(\d+)", 1, "num", r"(?=prefix)(?<num>\d+)" ; "skips_lookahead")]
+        #[test_case(r"(?!bad)(\d+)", 1, "num", r"(?!bad)(?<num>\d+)" ; "skips_negative_lookahead")]
+        #[test_case(r"(?<=pre)(\d+)", 1, "num", r"(?<=pre)(?<num>\d+)" ; "skips_lookbehind")]
+        #[test_case(r"(?<!bad)(\d+)", 1, "num", r"(?<!bad)(?<num>\d+)" ; "skips_negative_lookbehind")]
+        fn converts(pattern: &str, group: i64, name: &str, expected: &str) {
+            assert_eq!(
+                convert_to_splunk_named_capture(pattern, group, name),
+                Some(expected.to_string())
+            );
         }
 
-        #[test]
-        fn second_capture_group() {
-            // Pattern: (\w+): (\d+) with group 2 -> (\w+): (?<num>\d+)
-            let result = convert_to_splunk_named_capture(r"(\w+): (\d+)", 2, "num");
-            assert_eq!(result, Some(r"(\w+): (?<num>\d+)".to_string()));
-        }
-
-        #[test]
-        fn group_zero_returns_none() {
-            // Group 0 is entire match, can't be named
-            let result = convert_to_splunk_named_capture(r"(\d+)", 0, "code");
-            assert_eq!(result, None);
-        }
-
-        #[test]
-        fn invalid_group_number_returns_none() {
-            // Group 5 doesn't exist in pattern with only 1 group
-            let result = convert_to_splunk_named_capture(r"(\d+)", 5, "code");
-            assert_eq!(result, None);
-        }
-
-        #[test]
-        fn preserves_escaped_parens() {
-            // Escaped parens should not be counted as groups
-            let result = convert_to_splunk_named_capture(r"\(test\) (\d+)", 1, "num");
-            assert_eq!(result, Some(r"\(test\) (?<num>\d+)".to_string()));
-        }
-
-        #[test]
-        fn skips_non_capturing_groups() {
-            // (?:...) should not be counted as a capture group
-            let result = convert_to_splunk_named_capture(r"(?:prefix)(\d+)", 1, "num");
-            assert_eq!(result, Some(r"(?:prefix)(?<num>\d+)".to_string()));
-        }
-
-        #[test]
-        fn counts_named_groups_as_capturing() {
-            let result = convert_to_splunk_named_capture(r"(?<existing>\w+)(\d+)", 1, "word");
-            assert_eq!(result, Some(r"(?<word>\w+)(\d+)".to_string()));
-
-            let result = convert_to_splunk_named_capture(r"(?<existing>\w+)(\d+)", 2, "num");
-            assert_eq!(result, Some(r"(?<existing>\w+)(?<num>\d+)".to_string()));
-        }
-
-        #[test]
-        fn handles_python_style_named_groups() {
-            let result = convert_to_splunk_named_capture(r"(?P<existing>\w+)(\d+)", 1, "word");
-            assert_eq!(result, Some(r"(?<word>\w+)(\d+)".to_string()));
-        }
-
-        #[test]
-        fn skips_lookahead_and_lookbehind() {
-            let result = convert_to_splunk_named_capture(r"(?=prefix)(\d+)", 1, "num");
-            assert_eq!(result, Some(r"(?=prefix)(?<num>\d+)".to_string()));
-
-            let result = convert_to_splunk_named_capture(r"(?!bad)(\d+)", 1, "num");
-            assert_eq!(result, Some(r"(?!bad)(?<num>\d+)".to_string()));
-
-            let result = convert_to_splunk_named_capture(r"(?<=pre)(\d+)", 1, "num");
-            assert_eq!(result, Some(r"(?<=pre)(?<num>\d+)".to_string()));
-
-            let result = convert_to_splunk_named_capture(r"(?<!bad)(\d+)", 1, "num");
-            assert_eq!(result, Some(r"(?<!bad)(?<num>\d+)".to_string()));
+        #[test_case(r"(\d+)", 0, "code" ; "group_zero")]
+        #[test_case(r"(\d+)", 5, "code" ; "invalid_group_number")]
+        fn returns_none(pattern: &str, group: i64, name: &str) {
+            assert_eq!(convert_to_splunk_named_capture(pattern, group, name), None);
         }
     }
 
     mod rex_spl {
         use super::*;
 
+        fn rex(field: &str, pattern: &str, output_field: &str) -> SplunkOp {
+            SplunkOp::Rex {
+                field: field.to_string(),
+                pattern: pattern.to_string(),
+                output_field: output_field.to_string(),
+            }
+        }
+
         #[test]
         fn basic_rex_command() {
-            let handle = SplunkHandle::default().push(SplunkOp::Rex {
-                field: "message".to_string(),
-                pattern: r"error: (?<code>\d+)".to_string(),
-                output_field: "code".to_string(),
-            });
+            let handle =
+                SplunkHandle::default().push(rex("message", r"error: (?<code>\d+)", "code"));
             assert_eq!(
                 handle.build_spl("myindex"),
                 r#"search (index="myindex") | rex field=message "error: (?<code>\d+)""#
@@ -1810,11 +1736,7 @@ mod tests {
         fn rex_with_other_ops() {
             let handle = SplunkHandle::default()
                 .push(SplunkOp::Search("foo=bar".into()))
-                .push(SplunkOp::Rex {
-                    field: "msg".to_string(),
-                    pattern: r"id=(?<id>\w+)".to_string(),
-                    output_field: "id".to_string(),
-                })
+                .push(rex("msg", r"id=(?<id>\w+)", "id"))
                 .push(SplunkOp::Head(100));
             assert_eq!(
                 handle.build_spl("myindex"),
@@ -1824,14 +1746,8 @@ mod tests {
 
         #[test]
         fn rex_followed_by_filter() {
-            // Simulates: extend code = extract("...", 1, msg) | where code == "123"
-            // After pushdown, rex creates the field, then filter uses it
             let handle = SplunkHandle::default()
-                .push(SplunkOp::Rex {
-                    field: "msg".to_string(),
-                    pattern: r"error: (?<code>\d+)".to_string(),
-                    output_field: "code".to_string(),
-                })
+                .push(rex("msg", r"error: (?<code>\d+)", "code"))
                 .push(SplunkOp::Search(r#"code=CASE("123")"#.into()));
             assert_eq!(
                 handle.build_spl("myindex"),
@@ -1841,13 +1757,8 @@ mod tests {
 
         #[test]
         fn rex_followed_by_where() {
-            // Simulates: extend code = extract("...", 1, msg) | where code != "error"
             let handle = SplunkHandle::default()
-                .push(SplunkOp::Rex {
-                    field: "msg".to_string(),
-                    pattern: r"status: (?<status>\w+)".to_string(),
-                    output_field: "status".to_string(),
-                })
+                .push(rex("msg", r"status: (?<status>\w+)", "status"))
                 .push(SplunkOp::Where(r#"status != "error""#.into()));
             assert_eq!(
                 handle.build_spl("myindex"),
@@ -1858,11 +1769,7 @@ mod tests {
         #[test]
         fn fields_remove() {
             let handle = SplunkHandle::default()
-                .push(SplunkOp::Rex {
-                    field: "msg".to_string(),
-                    pattern: r"(?<_tmp>\w+)".to_string(),
-                    output_field: "_tmp".to_string(),
-                })
+                .push(rex("msg", r"(?<_tmp>\w+)", "_tmp"))
                 .push(SplunkOp::Where(r#"_tmp="foo""#.into()))
                 .push(SplunkOp::FieldsRemove(vec!["_tmp".to_string()]));
             assert_eq!(
@@ -1874,33 +1781,21 @@ mod tests {
 
     mod extract_filter_vs_extend_filter {
         use super::*;
-        use miso_workflow_types::{expr::Expr, field::Field, value::Value};
-
-        fn field(name: &str) -> Field {
-            name.parse().unwrap()
-        }
-
-        fn string_lit(s: &str) -> Value {
-            Value::String(s.to_string())
-        }
 
         #[test]
         fn filter_with_inlined_extract_creates_temporary_field_and_removes_it() {
-            // where extract("^(Calculate)", 1, title) == "Calculate"
-            // -> rex + where + fields-remove (temporary field not in output)
             let filter_expr = Expr::Eq(
                 Box::new(Expr::Extract(
-                    Box::new(Expr::Literal(Value::String("^(Calculate)".to_string()))),
-                    Box::new(Expr::Literal(Value::Int(1))),
-                    Box::new(Expr::Field(field("title"))),
+                    lit_str("^(Calculate)"),
+                    lit_int(1),
+                    field_expr("title"),
                 )),
-                Box::new(Expr::Literal(string_lit("Calculate"))),
+                lit_str("Calculate"),
             );
 
-            let result = compile_filter_to_spl(&filter_expr);
-            assert!(result.is_some(), "Should compile successfully");
-
-            let ops = result.unwrap().into_spl_ops();
+            let ops = compile_filter_to_spl(&filter_expr)
+                .expect("Should compile successfully")
+                .into_spl_ops();
 
             assert_eq!(
                 ops.len(),
@@ -1926,17 +1821,11 @@ mod tests {
 
         #[test]
         fn extend_then_filter_keeps_user_field() {
-            // extend calc = extract(...) | where calc == "Calculate"
-            // -> simple search (no fields-remove since user's field should be in output)
-            let filter_expr = Expr::Eq(
-                Box::new(Expr::Field(field("calc"))),
-                Box::new(Expr::Literal(string_lit("Calculate"))),
-            );
+            let filter_expr = Expr::Eq(field_expr("calc"), lit_str("Calculate"));
 
-            let result = compile_filter_to_spl(&filter_expr);
-            assert!(result.is_some(), "Should compile successfully");
-
-            let ops = result.unwrap().into_spl_ops();
+            let ops = compile_filter_to_spl(&filter_expr)
+                .expect("Should compile successfully")
+                .into_spl_ops();
 
             assert_eq!(ops.len(), 1, "Expected 1 operation: Search");
             assert!(
