@@ -24,7 +24,6 @@
 
 pub mod expr_substitude;
 
-use hashbrown::{HashMap, HashSet};
 use miso_workflow::WorkflowStep;
 use miso_workflow_types::{
     expr::Expr,
@@ -35,6 +34,7 @@ use miso_workflow_types::{
     summarize::{Aggregation, ByField, Summarize},
     value::Value,
 };
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::{
     Group, Optimization, OptimizationResult, Pattern, pattern,
@@ -99,9 +99,9 @@ fn apply(
         return None;
     }
 
-    let mut renames: HashMap<Field, Field> = HashMap::new(); // a = b
-    let mut literals: HashMap<Field, Value> = HashMap::new(); // c = 50
-    let mut exprs: HashMap<Field, Expr> = HashMap::new(); // code = case(...)
+    let mut renames: BTreeMap<Field, Field> = BTreeMap::new(); // a = b
+    let mut literals: BTreeMap<Field, Value> = BTreeMap::new(); // c = 50
+    let mut exprs: BTreeMap<Field, Expr> = BTreeMap::new(); // code = case(...)
 
     let step_type = match &steps[0] {
         WorkflowStep::Project(fields) => {
@@ -219,8 +219,8 @@ fn apply(
 
 fn rewrite_sorts(
     mut sorts: Vec<Sort>,
-    renames: &HashMap<Field, Field>,
-    literals: &HashMap<Field, Value>,
+    renames: &BTreeMap<Field, Field>,
+    literals: &BTreeMap<Field, Value>,
 ) -> Vec<Sort> {
     sorts.retain(|sort| !literals.contains_key(&sort.by));
     for sort in &mut sorts {
@@ -233,9 +233,9 @@ fn rewrite_sorts(
 
 fn rewrite_project_fields(
     fields: Vec<ProjectField>,
-    renames: &HashMap<Field, Field>,
-    literals: &HashMap<Field, Value>,
-    exprs: &HashMap<Field, Expr>,
+    renames: &BTreeMap<Field, Field>,
+    literals: &BTreeMap<Field, Value>,
+    exprs: &BTreeMap<Field, Expr>,
 ) -> Vec<ProjectField> {
     let expr_subst = ExprSubstitute::with_exprs(renames, literals, exprs);
     fields
@@ -249,9 +249,9 @@ fn rewrite_project_fields(
 
 fn rewrite_expand(
     fields: Vec<Field>,
-    renames: &HashMap<Field, Field>,
-    literals: &HashMap<Field, Value>,
-    exprs: &HashMap<Field, Expr>,
+    renames: &BTreeMap<Field, Field>,
+    literals: &BTreeMap<Field, Value>,
+    exprs: &BTreeMap<Field, Expr>,
 ) -> Vec<Field> {
     let expr_subst = ExprSubstitute::with_exprs(renames, literals, exprs);
     fields
@@ -268,9 +268,9 @@ fn rewrite_expand(
 
 fn categorize_fields(
     fields: &[ProjectField],
-    renames: &mut HashMap<Field, Field>,
-    literals: &mut HashMap<Field, Value>,
-    exprs: &mut HashMap<Field, Expr>,
+    renames: &mut BTreeMap<Field, Field>,
+    literals: &mut BTreeMap<Field, Value>,
+    exprs: &mut BTreeMap<Field, Expr>,
 ) {
     for pf in fields.iter().cloned() {
         match pf.from {
@@ -289,12 +289,12 @@ fn categorize_fields(
 
 fn rewrite_summarize(
     sum: Summarize,
-    renames: &HashMap<Field, Field>,
-    literals: &HashMap<Field, Value>,
-    exprs: &HashMap<Field, Expr>,
+    renames: &BTreeMap<Field, Field>,
+    literals: &BTreeMap<Field, Value>,
+    exprs: &BTreeMap<Field, Expr>,
 ) -> Option<(Summarize, Vec<ProjectField>)> {
     let mut project_fields = Vec::new();
-    let mut summarize_output_fields = HashSet::new();
+    let mut summarize_output_fields = BTreeSet::new();
 
     let new_by = {
         let expr_subst = ExprSubstitute::with_exprs(renames, literals, exprs)
@@ -326,7 +326,7 @@ fn rewrite_summarize(
     }
 
     let expr_subst = ExprSubstitute::with_exprs(renames, literals, exprs);
-    let mut new_aggs = HashMap::new();
+    let mut new_aggs = BTreeMap::new();
 
     for (k, agg) in sum.aggs {
         summarize_output_fields.insert(k.clone());
@@ -431,9 +431,9 @@ fn rewrite_summarize(
 }
 
 fn to_project_fields(
-    renames: HashMap<Field, Field>,
-    literals: HashMap<Field, Value>,
-    exprs: HashMap<Field, Expr>,
+    renames: BTreeMap<Field, Field>,
+    literals: BTreeMap<Field, Value>,
+    exprs: BTreeMap<Field, Expr>,
 ) -> Vec<ProjectField> {
     let mut project_fields = Vec::with_capacity(renames.len() + literals.len() + exprs.len());
     for (to, from) in renames {

@@ -2,13 +2,13 @@ mod common;
 
 use std::{sync::Arc, time::Duration};
 
-use collection_macros::btreemap;
 use color_eyre::{
     eyre::{bail, OptionExt, WrapErr},
     Result,
 };
 use ctor::ctor;
 use futures_util::future::try_join_all;
+use miso_common::btreemap;
 use miso_connectors::{
     splunk::{SplunkAuth, SplunkConfig, SplunkConnector},
     Connector, ConnectorState,

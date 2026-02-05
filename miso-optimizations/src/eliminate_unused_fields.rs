@@ -12,7 +12,8 @@
 //! Works backwards through the pipeline to figure out which fields are actually
 //! used, then inserts a minimal project. Pairs well with project propagation.
 
-use hashbrown::HashSet;
+use std::collections::BTreeSet;
+
 use miso_workflow::WorkflowStep;
 use miso_workflow_types::{expr::Expr, field::Field, project::ProjectField};
 
@@ -39,7 +40,7 @@ fn transform_steps(steps: &[WorkflowStep]) -> Option<Vec<WorkflowStep>> {
         return None;
     }
 
-    let mut required = HashSet::new();
+    let mut required = BTreeSet::new();
     for step in steps.iter().rev() {
         required = compute_required_before_step(step, required);
     }
@@ -54,7 +55,7 @@ fn transform_steps(steps: &[WorkflowStep]) -> Option<Vec<WorkflowStep>> {
     None
 }
 
-fn create_identity_project(fields: HashSet<Field>) -> WorkflowStep {
+fn create_identity_project(fields: BTreeSet<Field>) -> WorkflowStep {
     WorkflowStep::Project(
         fields
             .into_iter()
@@ -69,14 +70,17 @@ fn create_identity_project(fields: HashSet<Field>) -> WorkflowStep {
     )
 }
 
-fn compute_required_before_step(step: &WorkflowStep, mut after: HashSet<Field>) -> HashSet<Field> {
+fn compute_required_before_step(
+    step: &WorkflowStep,
+    mut after: BTreeSet<Field>,
+) -> BTreeSet<Field> {
     match step {
-        WorkflowStep::Count | WorkflowStep::MuxCount => HashSet::new(),
+        WorkflowStep::Count | WorkflowStep::MuxCount => BTreeSet::new(),
 
         WorkflowStep::Summarize(s) | WorkflowStep::MuxSummarize(s) => s.used_fields(),
 
         WorkflowStep::Project(fields) => {
-            let mut required = HashSet::new();
+            let mut required = BTreeSet::new();
             for pf in fields {
                 required.extend(pf.from.fields());
             }
@@ -84,7 +88,7 @@ fn compute_required_before_step(step: &WorkflowStep, mut after: HashSet<Field>) 
         }
 
         WorkflowStep::Extend(fields) => {
-            let mut inputs_needed = HashSet::new();
+            let mut inputs_needed = BTreeSet::new();
             for pf in fields {
                 if after.contains(&pf.to) {
                     inputs_needed.extend(pf.from.fields());
@@ -98,7 +102,7 @@ fn compute_required_before_step(step: &WorkflowStep, mut after: HashSet<Field>) 
         }
 
         WorkflowStep::Rename(renames) => {
-            let mut inputs_needed = HashSet::new();
+            let mut inputs_needed = BTreeSet::new();
             for (from, to) in renames {
                 if after.contains(to) {
                     inputs_needed.insert(from.clone());
@@ -148,7 +152,8 @@ fn compute_required_before_step(step: &WorkflowStep, mut after: HashSet<Field>) 
 
 #[cfg(test)]
 mod tests {
-    use hashbrown::HashSet;
+    use std::collections::BTreeSet;
+
     use miso_workflow::{Workflow, WorkflowStep as S};
     use miso_workflow_types::{
         expr::Expr,
@@ -160,7 +165,7 @@ mod tests {
     use super::compute_required_before_step;
     use crate::test_utils::{by_field, field, project_field, sort_asc, summarize};
 
-    fn required(step: &S, after: &[&str]) -> HashSet<String> {
+    fn required(step: &S, after: &[&str]) -> BTreeSet<String> {
         let after = after.iter().map(|s| field(s)).collect();
         compute_required_before_step(step, after)
             .iter()
@@ -182,7 +187,7 @@ mod tests {
         );
         assert_eq!(
             required(&step, &[]),
-            HashSet::from(["x".into(), "y".into()])
+            BTreeSet::from(["x".into(), "y".into()])
         );
     }
 
@@ -191,7 +196,7 @@ mod tests {
         let step = S::Filter(Expr::Field(field("a")));
         assert_eq!(
             required(&step, &["b"]),
-            HashSet::from(["a".into(), "b".into()])
+            BTreeSet::from(["a".into(), "b".into()])
         );
     }
 
@@ -216,7 +221,7 @@ mod tests {
                 project_field(to, expr)
             })
             .collect();
-        let expected: HashSet<String> = expected.iter().map(|s| (*s).into()).collect();
+        let expected: BTreeSet<String> = expected.iter().map(|s| (*s).into()).collect();
         assert_eq!(required(&S::Extend(fields), after), expected);
     }
 
@@ -226,7 +231,7 @@ mod tests {
     #[test_case(&[("a", "b"), ("b", "a")], &["a", "b"], &["a", "b"]; "swap both needed")]
     fn rename(mappings: &[(&str, &str)], after: &[&str], expected: &[&str]) {
         let renames = mappings.iter().map(|(f, t)| (field(f), field(t))).collect();
-        let expected: HashSet<String> = expected.iter().map(|s| (*s).into()).collect();
+        let expected: BTreeSet<String> = expected.iter().map(|s| (*s).into()).collect();
         assert_eq!(required(&S::Rename(renames), after), expected);
     }
 
@@ -235,7 +240,7 @@ mod tests {
         let step = S::Sort(vec![sort_asc(field("ts"))]);
         assert_eq!(
             required(&step, &["x"]),
-            HashSet::from(["ts".into(), "x".into()])
+            BTreeSet::from(["ts".into(), "x".into()])
         );
     }
 

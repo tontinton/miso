@@ -9,13 +9,13 @@ use std::{
 };
 
 use async_trait::async_trait;
-use collection_macros::btreemap;
 use color_eyre::{
     Result,
     eyre::{Context, ContextCompat},
 };
 use ctor::ctor;
 use futures_util::{StreamExt, TryStreamExt, stream};
+use miso_common::btreemap;
 use miso_connectors::{
     Collection, Connector, ConnectorState, QueryHandle, QueryResponse, Split,
     stats::{CollectionStats, ConnectorStats, FieldStats},

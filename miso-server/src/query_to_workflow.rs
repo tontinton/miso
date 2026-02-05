@@ -1,5 +1,7 @@
 use std::sync::Arc;
 
+use std::collections::BTreeMap;
+
 use axum::http::StatusCode;
 use hashbrown::HashMap;
 use miso_connectors::Sink;
@@ -151,7 +153,7 @@ fn to_workflow_steps_inner(
             }
             QueryStep::Distinct(by) => {
                 steps.push(WorkflowStep::Summarize(Summarize {
-                    aggs: HashMap::new(),
+                    aggs: BTreeMap::new(),
                     by: by
                         .into_iter()
                         .map(|f| ByField {

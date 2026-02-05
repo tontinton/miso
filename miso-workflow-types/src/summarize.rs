@@ -1,6 +1,7 @@
 use std::fmt;
 
-use hashbrown::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
+
 use serde::{Deserialize, Serialize};
 
 use crate::{expr::Expr, field::Field};
@@ -64,7 +65,7 @@ impl Aggregation {
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct Summarize {
-    pub aggs: HashMap<Field, Aggregation>,
+    pub aggs: BTreeMap<Field, Aggregation>,
     pub by: Vec<ByField>,
 }
 
@@ -90,7 +91,7 @@ impl fmt::Display for Summarize {
 
 impl Summarize {
     pub fn convert_to_partial(mut self) -> Self {
-        let mut aggs = HashMap::new();
+        let mut aggs = BTreeMap::new();
         for (field, agg) in self.aggs {
             match agg {
                 Aggregation::Count
@@ -125,7 +126,7 @@ impl Summarize {
     }
 
     pub fn convert_to_mux(self) -> Self {
-        let mut aggs = HashMap::new();
+        let mut aggs = BTreeMap::new();
         for (field, agg) in self.aggs {
             let mux = agg.convert_to_mux(&field);
             aggs.insert(field, mux);
@@ -137,8 +138,8 @@ impl Summarize {
         self.aggs.is_empty() && self.by.is_empty()
     }
 
-    pub fn used_fields(&self) -> HashSet<Field> {
-        let mut fields = HashSet::new();
+    pub fn used_fields(&self) -> BTreeSet<Field> {
+        let mut fields = BTreeSet::new();
 
         for agg in self.aggs.values() {
             match agg {

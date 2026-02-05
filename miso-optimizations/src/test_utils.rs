@@ -1,7 +1,5 @@
 use std::str::FromStr;
 
-use hashbrown::HashMap;
-use miso_common::hashmap;
 use miso_workflow::WorkflowStep as S;
 use miso_workflow_types::{
     expand::Expand,
@@ -13,6 +11,7 @@ use miso_workflow_types::{
     summarize::{Aggregation, ByField, Summarize},
     value::Value,
 };
+use std::collections::BTreeMap;
 
 pub fn field(name: &str) -> Field {
     field_unwrap!(name)
@@ -121,14 +120,14 @@ pub fn by_field(expr: Expr, name: &str) -> ByField {
 
 pub fn summarize(agg_field: &str, agg: Aggregation, by: Vec<ByField>) -> S {
     S::Summarize(Summarize {
-        aggs: hashmap! { field(agg_field) => agg },
+        aggs: BTreeMap::from([(field(agg_field), agg)]),
         by,
     })
 }
 
 pub fn summarize_by(fields: &[&str]) -> S {
     S::Summarize(Summarize {
-        aggs: HashMap::new(),
+        aggs: BTreeMap::new(),
         by: fields
             .iter()
             .map(|f| ByField {

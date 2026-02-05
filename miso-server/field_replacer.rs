@@ -1,5 +1,7 @@
 use std::str::FromStr;
 
+use std::collections::BTreeMap;
+
 use axum::http::StatusCode;
 use hashbrown::HashMap;
 use miso_workflow::{Workflow, WorkflowStep, scan::Scan};
@@ -169,7 +171,7 @@ impl QueryToWorkflowTranspiler {
                 }
                 QueryStep::Distinct(by) => {
                     steps.push(WorkflowStep::Summarize(Summarize {
-                        aggs: HashMap::new(),
+                        aggs: BTreeMap::new(),
                         by: by.into_iter().map(Expr::Field).collect(),
                     }));
                 }

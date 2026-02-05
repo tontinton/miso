@@ -1,5 +1,6 @@
-use hashbrown::HashMap;
-use miso_common::hashmap;
+use std::collections::BTreeMap;
+
+use miso_common::btreemap;
 use miso_workflow::{Workflow, WorkflowStep as S, display::DisplayableWorkflowSteps};
 use miso_workflow_types::{
     expr::Expr,
@@ -156,7 +157,7 @@ fn remove_sorts_before_count() {
 #[test]
 fn remove_sorts_before_summarize() {
     let summarize = Summarize {
-        aggs: hashmap! { field("c") => Aggregation::Count },
+        aggs: btreemap! { field("c") => Aggregation::Count },
         by: vec![by_field(Expr::Field(field("x")), "x")],
     };
     check_default(
@@ -181,7 +182,7 @@ fn remove_redundant_steps_before_count() {
 #[test]
 fn remove_redundant_steps_before_summarize() {
     let summarize = Summarize {
-        aggs: hashmap! { field("c") => Aggregation::Count },
+        aggs: btreemap! { field("c") => Aggregation::Count },
         by: vec![by_field(Expr::Field(field("x")), "x")],
     };
     check_default(
@@ -288,7 +289,7 @@ fn topn_into_union() {
 #[test]
 fn summarize_into_union() {
     let original = S::Summarize(Summarize {
-        aggs: hashmap! {
+        aggs: btreemap! {
             field("c") => Aggregation::Count,
             field("s") => Aggregation::Sum(field("y")),
             field("d") => Aggregation::DCount(field("x")),
@@ -298,7 +299,7 @@ fn summarize_into_union() {
     });
 
     let partial = S::Summarize(Summarize {
-        aggs: hashmap! {
+        aggs: btreemap! {
             field("c") => Aggregation::Count,
             field("s") => Aggregation::Sum(field("y")),
         },
@@ -309,7 +310,7 @@ fn summarize_into_union() {
     });
 
     let post = S::MuxSummarize(Summarize {
-        aggs: hashmap! {
+        aggs: btreemap! {
             field("c") => Aggregation::Sum(field("c")),
             field("s") => Aggregation::Sum(field("s")),
             field("d") => Aggregation::DCount(field("x")),
@@ -629,11 +630,7 @@ fn test_project_propagation_through_project(input: Vec<S>, expected: Vec<S>) {
     vec![by_field(Expr::Field(field("c")), "c")],
     vec![
         S::Summarize(Summarize {
-            aggs: {
-                let mut map = HashMap::new();
-                map.insert(field("total"), Aggregation::Sum(field("b")));
-                map
-            },
+            aggs: btreemap! { field("total") => Aggregation::Sum(field("b")) },
             by: vec![by_field(Expr::Field(field("c")), "c")],
         })
     ]
@@ -646,11 +643,7 @@ fn test_project_propagation_through_project(input: Vec<S>, expected: Vec<S>) {
     vec![by_field(Expr::Field(field("d")), "d")],
     vec![
         S::Summarize(Summarize {
-            aggs: {
-                let mut map = HashMap::new();
-                map.insert(field("min_val"), Aggregation::Min(field("b")));
-                map
-            },
+            aggs: btreemap! { field("min_val") => Aggregation::Min(field("b")) },
             by: vec![by_field(Expr::Field(field("d")), "d")],
         })
     ]
@@ -663,11 +656,7 @@ fn test_project_propagation_through_project(input: Vec<S>, expected: Vec<S>) {
     vec![by_field(Expr::Field(field("e")), "e")],
     vec![
         S::Summarize(Summarize {
-            aggs: {
-                let mut map = HashMap::new();
-                map.insert(field("max_val"), Aggregation::Max(field("b")));
-                map
-            },
+            aggs: btreemap! { field("max_val") => Aggregation::Max(field("b")) },
             by: vec![by_field(Expr::Field(field("e")), "e")],
         })
     ]
@@ -680,7 +669,7 @@ fn test_project_propagation_through_project(input: Vec<S>, expected: Vec<S>) {
     vec![by_field(Expr::Field(field("f")), "f")],
     vec![
         S::Summarize(Summarize {
-            aggs: hashmap! { field("unique_count") => Aggregation::DCount(field("b")) },
+            aggs: btreemap! { field("unique_count") => Aggregation::DCount(field("b")) },
             by: vec![by_field(Expr::Field(field("f")), "f")],
         })
     ]
@@ -696,11 +685,7 @@ fn test_project_propagation_rename_through_summarize(
     let input = vec![
         S::Project(project_fields),
         S::Summarize(Summarize {
-            aggs: {
-                let mut map = HashMap::new();
-                map.insert(field(agg_name), aggregation);
-                map
-            },
+            aggs: btreemap! { field(agg_name) => aggregation },
             by: by_clause,
         }),
     ];
@@ -714,7 +699,7 @@ fn test_project_propagation_rename_through_summarize(
     vec![by_field(Expr::Field(field("c")), "c")],
     vec![
         S::Summarize(Summarize {
-            aggs: hashmap! { field("total") => Aggregation::Count },
+            aggs: btreemap! { field("total") => Aggregation::Count },
             by: vec![by_field(Expr::Field(field("c")), "c")],
         }),
         S::Project(vec![
@@ -737,7 +722,7 @@ fn test_project_propagation_rename_through_summarize(
     vec![by_field(Expr::Field(field("c")), "c")],
     vec![
         S::Summarize(Summarize {
-            aggs: HashMap::new(),
+            aggs: BTreeMap::new(),
             by: vec![by_field(Expr::Field(field("c")), "c")],
         }),
         S::Project(vec![
@@ -757,7 +742,7 @@ fn test_project_propagation_rename_through_summarize(
     vec![by_field(Expr::Field(field("d")), "d")],
     vec![
         S::Summarize(Summarize {
-            aggs: HashMap::new(),
+            aggs: BTreeMap::new(),
             by: vec![by_field(Expr::Field(field("d")), "d")],
         }),
         S::Project(vec![
@@ -780,7 +765,7 @@ fn test_project_propagation_literal_through_summarize(
     let input = vec![
         S::Project(vec![project_field]),
         S::Summarize(Summarize {
-            aggs: hashmap! { field(agg_name) => agg },
+            aggs: btreemap! { field(agg_name) => agg },
             by,
         }),
     ];
@@ -794,7 +779,7 @@ fn test_project_propagation_literal_through_summarize(
     S::MuxSummarize,
     vec![
         S::MuxSummarize(Summarize {
-            aggs: hashmap! { field("total") => Aggregation::Sum(field("b")) },
+            aggs: btreemap! { field("total") => Aggregation::Sum(field("b")) },
             by: vec![by_field(Expr::Field(field("c")), "c")],
         })
     ]
@@ -807,7 +792,7 @@ fn test_project_propagation_literal_through_summarize(
     S::MuxSummarize,
     vec![
         S::MuxSummarize(Summarize {
-            aggs: hashmap! { field("total") => Aggregation::Sum(field("b")) },
+            aggs: btreemap! { field("total") => Aggregation::Sum(field("b")) },
             by: vec![by_field(Expr::Field(field("c")), "c")],
         })
     ]
@@ -820,7 +805,7 @@ fn test_project_propagation_literal_through_summarize(
     S::Summarize,
     vec![
         S::Summarize(Summarize {
-            aggs: hashmap! { field("cnt") => Aggregation::Count },
+            aggs: btreemap! { field("cnt") => Aggregation::Count },
             by: vec![by_field(Expr::Field(field("c")), "c")],
         })
     ]
@@ -833,7 +818,7 @@ fn test_project_propagation_literal_through_summarize(
     S::Summarize,
     vec![
         S::Summarize(Summarize {
-            aggs: hashmap! { field("cnt") => Aggregation::Count },
+            aggs: btreemap! { field("cnt") => Aggregation::Count },
             by: vec![by_field(Expr::Field(field("c")), "c")],
         })
     ]
@@ -849,7 +834,7 @@ fn test_project_propagation_summarize_variants(
     let input = vec![
         step,
         summarize_constructor(Summarize {
-            aggs: hashmap! { field(agg_name) => aggregation },
+            aggs: btreemap! { field(agg_name) => aggregation },
             by: vec![by_field(Expr::Field(field("c")), "c")],
         }),
     ];
@@ -997,18 +982,14 @@ fn test_project_propagation_drop_unused_field_through_summarize() {
             rename_project("unused", "unused2"),
         ]),
         S::Summarize(Summarize {
-            aggs: {
-                let mut map = HashMap::new();
-                map.insert(field("max_x"), Aggregation::Max(field("x")));
-                map
-            },
+            aggs: btreemap! { field("max_x") => Aggregation::Max(field("x")) },
             by: vec![by_field(Expr::Field(field("c")), "c")],
         }),
     ];
 
     let expected = vec![
         S::Summarize(Summarize {
-            aggs: HashMap::new(),
+            aggs: BTreeMap::new(),
             by: vec![by_field(Expr::Field(field("c")), "c")],
         }),
         S::Project(vec![
@@ -1026,7 +1007,7 @@ fn test_project_propagation_drop_unused_field_through_summarize() {
 #[test]
 fn test_project_propagation_rename_by_clause_field_through_summarize() {
     let summarize = Summarize {
-        aggs: HashMap::new(),
+        aggs: BTreeMap::new(),
         by: vec![by_field(Expr::Field(field("z")), "z")],
     };
     let project_input = vec![
@@ -1040,7 +1021,7 @@ fn test_project_propagation_rename_by_clause_field_through_summarize() {
 
     let expected = vec![
         S::Summarize(Summarize {
-            aggs: HashMap::new(),
+            aggs: BTreeMap::new(),
             by: vec![by_field(Expr::Field(field("c")), "c")],
         }),
         S::Project(vec![rename_project("z", "c")]),
@@ -1053,7 +1034,7 @@ fn test_project_propagation_rename_by_clause_field_through_summarize() {
 #[test]
 fn test_project_propagation_rename_summarize_by_bin() {
     let summarize = Summarize {
-        aggs: HashMap::new(),
+        aggs: BTreeMap::new(),
         by: vec![by_field(
             Expr::Bin(
                 Box::new(Expr::Field(field("x"))),
@@ -1073,7 +1054,7 @@ fn test_project_propagation_rename_summarize_by_bin() {
 
     let expected = vec![
         S::Summarize(Summarize {
-            aggs: HashMap::new(),
+            aggs: BTreeMap::new(),
             by: vec![by_field(
                 Expr::Bin(
                     Box::new(Expr::Field(field("z"))),
@@ -1154,13 +1135,13 @@ fn test_project_propagation_complex_expr_to_summarize() {
     let input = vec![
         S::Extend(vec![project_field("code", case_expr.clone())]),
         S::Summarize(Summarize {
-            aggs: hashmap! { field("cnt") => Aggregation::Count },
+            aggs: btreemap! { field("cnt") => Aggregation::Count },
             by: vec![by_field(field_expr("code"), "code")],
         }),
     ];
 
     let expected = vec![S::Summarize(Summarize {
-        aggs: hashmap! { field("cnt") => Aggregation::Count },
+        aggs: btreemap! { field("cnt") => Aggregation::Count },
         by: vec![by_field(case_expr, "code")],
     })];
 
@@ -1534,7 +1515,7 @@ fn sort_longer_than_topn_unchanged() {
 fn summarize_const_to_project() {
     check_default(
         vec![S::Summarize(Summarize {
-            aggs: HashMap::new(),
+            aggs: BTreeMap::new(),
             by: vec![by_field(
                 Expr::Literal(Value::String("yes".to_string())),
                 "Column1",
@@ -1556,7 +1537,7 @@ fn filter_propagation_into_summarize_case() {
                 Box::new(Expr::Literal(int_val(5))),
             )),
             S::Summarize(Summarize {
-                aggs: HashMap::new(),
+                aggs: BTreeMap::new(),
                 by: vec![by_field(
                     Expr::Case(
                         vec![(
@@ -1589,7 +1570,7 @@ fn filter_propagation_range_into_summarize_case() {
         vec![
             S::Filter(gt(field_expr("x"), lit(5))),
             S::Summarize(Summarize {
-                aggs: HashMap::new(),
+                aggs: BTreeMap::new(),
                 by: vec![by_field(
                     case(
                         vec![(

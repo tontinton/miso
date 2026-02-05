@@ -4,7 +4,9 @@ use chumsky::{
     input::{Stream, ValueInput},
     prelude::*,
 };
-use hashbrown::{HashMap, HashSet};
+use std::collections::BTreeMap;
+
+use hashbrown::HashSet;
 use logos::Logos;
 use miso_workflow_types::{
     expand::{Expand, ExpandKind},
@@ -995,7 +997,7 @@ where
                 .or_not(),
         )
         .map(|(aggs_tuple, by)| {
-            let mut aggs = HashMap::new();
+            let mut aggs = BTreeMap::new();
             let mut unnamed_aggs = vec![];
             for (maybe_field, agg) in aggs_tuple {
                 if let Some(field) = maybe_field {

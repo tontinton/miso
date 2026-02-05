@@ -1,31 +1,31 @@
 use std::cell::RefCell;
 
-use hashbrown::HashMap;
 use miso_workflow_types::{expr::Expr, expr_visitor::ExprTransformer, field::Field, value::Value};
+use std::collections::BTreeMap;
 
 type RenameHook<'a> = RefCell<Box<dyn FnMut(Field, &Field) + 'a>>;
 type LiteralHook<'a> = RefCell<Box<dyn FnMut(Field, &Value) + 'a>>;
 
-static EMPTY_EXPRS: std::sync::LazyLock<HashMap<Field, Expr>> =
-    std::sync::LazyLock::new(HashMap::new);
+static EMPTY_EXPRS: std::sync::LazyLock<BTreeMap<Field, Expr>> =
+    std::sync::LazyLock::new(BTreeMap::new);
 
 pub struct ExprSubstitute<'a> {
-    renames: &'a HashMap<Field, Field>,
-    literals: &'a HashMap<Field, Value>,
-    exprs: &'a HashMap<Field, Expr>,
+    renames: &'a BTreeMap<Field, Field>,
+    literals: &'a BTreeMap<Field, Value>,
+    exprs: &'a BTreeMap<Field, Expr>,
     rename_hook: Option<RenameHook<'a>>,
     literal_hook: Option<LiteralHook<'a>>,
 }
 
 impl<'a> ExprSubstitute<'a> {
-    pub fn new(renames: &'a HashMap<Field, Field>, literals: &'a HashMap<Field, Value>) -> Self {
+    pub fn new(renames: &'a BTreeMap<Field, Field>, literals: &'a BTreeMap<Field, Value>) -> Self {
         Self::with_exprs(renames, literals, &EMPTY_EXPRS)
     }
 
     pub fn with_exprs(
-        renames: &'a HashMap<Field, Field>,
-        literals: &'a HashMap<Field, Value>,
-        exprs: &'a HashMap<Field, Expr>,
+        renames: &'a BTreeMap<Field, Field>,
+        literals: &'a BTreeMap<Field, Value>,
+        exprs: &'a BTreeMap<Field, Expr>,
     ) -> Self {
         Self {
             renames,

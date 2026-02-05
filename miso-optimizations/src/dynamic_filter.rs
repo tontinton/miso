@@ -192,6 +192,8 @@ mod tests {
 
     use async_trait::async_trait;
     use color_eyre::Result;
+    use std::collections::BTreeMap;
+
     use hashbrown::HashMap;
     use miso_connectors::{
         Collection, Connector, QueryHandle, QueryResponse, Split,
@@ -409,7 +411,7 @@ mod tests {
             calc(
                 &s,
                 &[WorkflowStep::MuxSummarize(Summarize {
-                    aggs: HashMap::new(),
+                    aggs: BTreeMap::new(),
                     by: vec![]
                 })]
             ),

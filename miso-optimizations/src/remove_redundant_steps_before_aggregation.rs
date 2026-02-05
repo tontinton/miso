@@ -1,6 +1,6 @@
-use hashbrown::HashSet;
 use miso_workflow::WorkflowStep;
 use miso_workflow_types::field::Field;
+use std::collections::BTreeSet;
 
 use crate::pattern;
 
@@ -35,19 +35,18 @@ impl Optimization for RemoveRedundantStepsBeforeAggregation {
     }
 }
 
-fn get_defined_fields(step: &WorkflowStep) -> HashSet<Field> {
+fn get_defined_fields(step: &WorkflowStep) -> BTreeSet<Field> {
     match step {
         WorkflowStep::Project(fields) | WorkflowStep::Extend(fields) => {
             fields.iter().map(|f| f.to.clone()).collect()
         }
         WorkflowStep::Rename(renames) => renames.iter().map(|(_, to)| to.clone()).collect(),
-        _ => HashSet::new(),
+        _ => BTreeSet::new(),
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use miso_common::hashmap;
     use miso_workflow::WorkflowStep as S;
     use miso_workflow_types::{
         expr::Expr,
@@ -90,7 +89,7 @@ mod tests {
     )]
     #[test_case(
         S::Extend(vec![project_field("x", Expr::Field(field("a")))]),
-        S::Summarize(Summarize { aggs: hashmap! {}, by: vec![by_field(Expr::Field(field("x")), "x")] })
+        S::Summarize(Summarize { aggs: Default::default(), by: vec![by_field(Expr::Field(field("x")), "x")] })
         ; "extend_field_in_group_by"
     )]
     #[test_case(

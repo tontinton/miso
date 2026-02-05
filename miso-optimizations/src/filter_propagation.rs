@@ -15,7 +15,6 @@
 //!
 //! The const folding optimization will further simplify the query.
 
-use hashbrown::HashMap;
 use miso_workflow::WorkflowStep;
 use miso_workflow_types::{
     expr::Expr,
@@ -23,6 +22,7 @@ use miso_workflow_types::{
     summarize::{ByField, Summarize},
     value::Value,
 };
+use std::collections::BTreeMap;
 
 use crate::{
     Group, Optimization, OptimizationResult, Pattern, pattern,
@@ -48,7 +48,7 @@ impl Optimization for FilterPropagation {
             return OptimizationResult::Unchanged;
         }
 
-        let renames = HashMap::new();
+        let renames = BTreeMap::new();
         let expr_subst = ExprSubstitute::new(&renames, &eq_constraints);
 
         let (middle_start, middle_end) = groups[0];
@@ -137,8 +137,8 @@ fn normalize_field_cmp<'a>(
     }
 }
 
-fn extract_range_constraints(expr: &Expr) -> HashMap<Field, Vec<RangeBound>> {
-    let mut result: HashMap<Field, Vec<RangeBound>> = HashMap::new();
+fn extract_range_constraints(expr: &Expr) -> BTreeMap<Field, Vec<RangeBound>> {
+    let mut result: BTreeMap<Field, Vec<RangeBound>> = BTreeMap::new();
     if let Some((op, left, right)) = cmp_operands(expr) {
         if let Some((field, op, val)) = normalize_field_cmp(op, left, right) {
             result
@@ -180,13 +180,13 @@ fn check_single_implication(known_op: CmpOp, kv: f64, check_op: CmpOp, cv: f64) 
     }
 }
 
-fn try_resolve_cmp(expr: &Expr, constraints: &HashMap<Field, Vec<RangeBound>>) -> Option<bool> {
+fn try_resolve_cmp(expr: &Expr, constraints: &BTreeMap<Field, Vec<RangeBound>>) -> Option<bool> {
     let (op, left, right) = cmp_operands(expr)?;
     let (field, op, val) = normalize_field_cmp(op, left, right)?;
     check_implication(constraints.get(field)?, op, val)
 }
 
-fn apply_range_constraints(expr: Expr, constraints: &HashMap<Field, Vec<RangeBound>>) -> Expr {
+fn apply_range_constraints(expr: Expr, constraints: &BTreeMap<Field, Vec<RangeBound>>) -> Expr {
     if let Some(result) = try_resolve_cmp(&expr, constraints) {
         return Expr::Literal(Value::Bool(result));
     }
@@ -210,13 +210,13 @@ fn apply_range_constraints(expr: Expr, constraints: &HashMap<Field, Vec<RangeBou
     }
 }
 
-fn extract_equality_constraints(expr: &Expr) -> HashMap<Field, Value> {
+fn extract_equality_constraints(expr: &Expr) -> BTreeMap<Field, Value> {
     match expr {
         Expr::Eq(left, right) => match (left.as_ref(), right.as_ref()) {
             (Expr::Field(f), Expr::Literal(v)) | (Expr::Literal(v), Expr::Field(f)) => {
                 [(f.clone(), v.clone())].into_iter().collect()
             }
-            _ => HashMap::new(),
+            _ => BTreeMap::new(),
         },
         Expr::And(left, right) => {
             let mut constraints = extract_equality_constraints(left);
@@ -225,14 +225,14 @@ fn extract_equality_constraints(expr: &Expr) -> HashMap<Field, Value> {
             }
             constraints
         }
-        _ => HashMap::new(),
+        _ => BTreeMap::new(),
     }
 }
 
 fn rewrite_summarize(
     sum: &Summarize,
     expr_subst: &ExprSubstitute,
-    range_constraints: &HashMap<Field, Vec<RangeBound>>,
+    range_constraints: &BTreeMap<Field, Vec<RangeBound>>,
 ) -> (Summarize, bool) {
     let mut changed = false;
     let new_by = sum
