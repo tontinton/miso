@@ -1582,3 +1582,30 @@ fn filter_propagation_into_summarize_case() {
         ],
     );
 }
+
+#[test]
+fn filter_propagation_range_into_summarize_case() {
+    check_default(
+        vec![
+            S::Filter(gt(field_expr("x"), lit(5))),
+            S::Summarize(Summarize {
+                aggs: HashMap::new(),
+                by: vec![by_field(
+                    case(
+                        vec![(
+                            gt(field_expr("x"), lit(3)),
+                            Expr::Literal(string_val("yes")),
+                        )],
+                        Expr::Literal(string_val("no")),
+                    ),
+                    "result",
+                )],
+            }),
+        ],
+        vec![
+            S::Filter(gt(field_expr("x"), lit(5))),
+            S::Limit(1),
+            S::Project(vec![literal_project("result", string_val("yes"))]),
+        ],
+    );
+}
