@@ -6,6 +6,8 @@ use futures_util::Stream;
 
 use crate::value::{Map, Value};
 
+pub const COUNT_FIELD_NAME: &str = "Count";
+
 pub type Log = Map<String, Value>;
 pub type LogIter = Box<dyn Iterator<Item = LogItem>>;
 pub type LogStream = Pin<Box<dyn Stream<Item = Log> + Send>>;
