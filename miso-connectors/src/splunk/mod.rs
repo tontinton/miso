@@ -531,6 +531,8 @@ enum FilterResult {
         filter_field: String,
         filter_value: String,
     },
+    /// Multiple ops from AND expressions with mixed search/where children.
+    Batched(Vec<SplunkOp>),
 }
 
 impl FilterResult {
@@ -547,13 +549,14 @@ impl FilterResult {
                 SplunkOp::Where(format!("{filter_field}={filter_value}")),
                 SplunkOp::FieldsRemove(vec![filter_field]),
             ],
+            FilterResult::Batched(ops) => ops,
         }
     }
 
     fn as_str(&self) -> Option<&str> {
         match self {
             FilterResult::Search(s) | FilterResult::Where(s) => Some(s),
-            FilterResult::RexThenWhere { .. } => None,
+            FilterResult::RexThenWhere { .. } | FilterResult::Batched(_) => None,
         }
     }
 
@@ -620,27 +623,88 @@ fn compile_extract_filter(
     })
 }
 
+fn flatten_binary<'a>(
+    expr: &'a Expr,
+    destructure: fn(&'a Expr) -> Option<(&'a Expr, &'a Expr)>,
+) -> Vec<&'a Expr> {
+    if let Some((left, right)) = destructure(expr) {
+        let mut result = flatten_binary(left, destructure);
+        result.extend(flatten_binary(right, destructure));
+        result
+    } else {
+        vec![expr]
+    }
+}
+
+fn and_combine(parts: &[&str]) -> String {
+    if parts.len() == 1 {
+        parts[0].to_string()
+    } else {
+        format!("({})", parts.join(" AND "))
+    }
+}
+
 fn compile_filter_to_spl(expr: &Expr) -> Option<FilterResult> {
     Some(match expr {
-        Expr::Or(left, right) => {
-            let left_result = compile_filter_to_spl(left)?;
-            let right_result = compile_filter_to_spl(right)?;
-            let combined = format!("({} OR {})", left_result.as_str()?, right_result.as_str()?);
-            if left_result.is_where() || right_result.is_where() {
+        Expr::Or(_, _) => {
+            let children = flatten_binary(expr, |e| match e {
+                Expr::Or(l, r) => Some((l, r)),
+                _ => None,
+            });
+            let results: Vec<FilterResult> = children
+                .iter()
+                .map(|c| compile_filter_to_spl(c))
+                .collect::<Option<Vec<_>>>()?;
+            let any_where = results.iter().any(|r| r.is_where());
+            let parts: Vec<&str> = results
+                .iter()
+                .map(|r| r.as_str())
+                .collect::<Option<Vec<_>>>()?;
+            let combined = format!("({})", parts.join(" OR "));
+            if any_where {
                 FilterResult::Where(combined)
             } else {
                 FilterResult::Search(combined)
             }
         }
-        Expr::And(left, right) => {
-            let left_result = compile_filter_to_spl(left)?;
-            let right_result = compile_filter_to_spl(right)?;
-            let combined = format!("({} AND {})", left_result.as_str()?, right_result.as_str()?);
-            if left_result.is_where() || right_result.is_where() {
-                FilterResult::Where(combined)
-            } else {
-                FilterResult::Search(combined)
+        Expr::And(_, _) => {
+            let children = flatten_binary(expr, |e| match e {
+                Expr::And(l, r) => Some((l, r)),
+                _ => None,
+            });
+            let results: Vec<FilterResult> = children
+                .iter()
+                .map(|c| compile_filter_to_spl(c))
+                .collect::<Option<Vec<_>>>()?;
+
+            let mut search_parts: Vec<&str> = Vec::new();
+            let mut where_parts: Vec<&str> = Vec::new();
+            let mut complex_ops: Vec<SplunkOp> = Vec::new();
+
+            for result in &results {
+                match result {
+                    FilterResult::Search(s) => search_parts.push(s),
+                    FilterResult::Where(s) => where_parts.push(s),
+                    _ => complex_ops.extend(result.clone().into_spl_ops()),
+                }
             }
+
+            if where_parts.is_empty() && complex_ops.is_empty() {
+                return Some(FilterResult::Search(and_combine(&search_parts)));
+            }
+            if search_parts.is_empty() && complex_ops.is_empty() {
+                return Some(FilterResult::Where(and_combine(&where_parts)));
+            }
+
+            let mut ops = Vec::new();
+            if !search_parts.is_empty() {
+                ops.push(SplunkOp::Search(and_combine(&search_parts)));
+            }
+            if !where_parts.is_empty() {
+                ops.push(SplunkOp::Where(and_combine(&where_parts)));
+            }
+            ops.extend(complex_ops);
+            FilterResult::Batched(ops)
         }
         Expr::Not(inner) => {
             let inner_result = compile_filter_to_spl(inner)?;
@@ -1476,6 +1540,19 @@ mod tests {
                 "| tstats count as Count where (index=\"myindex\") earliest=1000 latest=2000"
             );
         }
+
+        #[test]
+        fn batched_search_then_where() {
+            let handle = SplunkHandle::default()
+                .push(SplunkOp::Search(
+                    r#"(status=CASE("error") AND user=CASE("admin"))"#.into(),
+                ))
+                .push(SplunkOp::Where("isnotnull(optional)".into()));
+            assert_eq!(
+                handle.build_spl("logs"),
+                r#"search (index="logs") | search (status=CASE("error") AND user=CASE("admin")) | where isnotnull(optional)"#
+            );
+        }
     }
 
     mod compile_filter {
@@ -1555,14 +1632,119 @@ mod tests {
         }
 
         #[test]
-        fn and_with_exists_uses_where() {
+        fn and_with_mixed_search_where_batches_by_type() {
             let expr = Expr::And(
+                eq_field("a", lit_int(1)),
+                Box::new(Expr::Exists(field_expr("b"))),
+            );
+            let ops = compile_filter_to_spl(&expr).unwrap().into_spl_ops();
+            assert_eq!(
+                ops,
+                vec![
+                    SplunkOp::Search("a=1".to_string()),
+                    SplunkOp::Where("isnotnull(b)".to_string()),
+                ]
+            );
+        }
+
+        #[test]
+        fn deeply_nested_and_flattens_and_batches() {
+            // a=1 AND b=2 AND exists(c) AND d=3
+            let expr = Expr::And(
+                Box::new(Expr::And(
+                    eq_field("a", lit_int(1)),
+                    eq_field("b", lit_int(2)),
+                )),
+                Box::new(Expr::And(
+                    Box::new(Expr::Exists(field_expr("c"))),
+                    eq_field("d", lit_int(3)),
+                )),
+            );
+            let ops = compile_filter_to_spl(&expr).unwrap().into_spl_ops();
+            assert_eq!(
+                ops,
+                vec![
+                    SplunkOp::Search("(a=1 AND b=2 AND d=3)".to_string()),
+                    SplunkOp::Where("isnotnull(c)".to_string()),
+                ]
+            );
+        }
+
+        #[test]
+        fn and_all_where_combines_into_single_where() {
+            let expr = Expr::And(
+                Box::new(Expr::Exists(field_expr("a"))),
+                Box::new(Expr::Exists(field_expr("b"))),
+            );
+            let result = compile_filter_to_spl(&expr).unwrap();
+            assert!(matches!(result, FilterResult::Where(_)));
+            assert_eq!(result.as_str().unwrap(), "(isnotnull(a) AND isnotnull(b))");
+        }
+
+        #[test]
+        fn and_with_extract_and_search_batches() {
+            let expr = Expr::And(
+                Box::new(Expr::Eq(
+                    Box::new(Expr::Extract(
+                        lit_str("^(Calc)"),
+                        lit_int(1),
+                        field_expr("title"),
+                    )),
+                    lit_str("Calc"),
+                )),
+                eq_field("status", lit_str("active")),
+            );
+            let ops = compile_filter_to_spl(&expr).unwrap().into_spl_ops();
+            assert_eq!(ops.len(), 4);
+            assert_eq!(
+                ops[0],
+                SplunkOp::Search(r#"status=CASE("active")"#.to_string())
+            );
+            assert!(matches!(&ops[1], SplunkOp::Rex { .. }));
+            assert!(matches!(&ops[2], SplunkOp::Where(_)));
+            assert!(matches!(&ops[3], SplunkOp::FieldsRemove(_)));
+        }
+
+        #[test]
+        fn and_all_complex_batches_ops_in_order() {
+            // extract(regex, 1, title) == "Calc" AND extract(regex, 1, name) == "Test"
+            let expr = Expr::And(
+                Box::new(Expr::Eq(
+                    Box::new(Expr::Extract(
+                        lit_str("^(Calc)"),
+                        lit_int(1),
+                        field_expr("title"),
+                    )),
+                    lit_str("Calc"),
+                )),
+                Box::new(Expr::Eq(
+                    Box::new(Expr::Extract(
+                        lit_str("^(Test)"),
+                        lit_int(1),
+                        field_expr("name"),
+                    )),
+                    lit_str("Test"),
+                )),
+            );
+            let ops = compile_filter_to_spl(&expr).unwrap().into_spl_ops();
+            assert_eq!(ops.len(), 6);
+            assert!(matches!(&ops[0], SplunkOp::Rex { field, .. } if field == "title"));
+            assert!(matches!(&ops[1], SplunkOp::Where(_)));
+            assert!(matches!(&ops[2], SplunkOp::FieldsRemove(_)));
+            assert!(matches!(&ops[3], SplunkOp::Rex { field, .. } if field == "name"));
+            assert!(matches!(&ops[4], SplunkOp::Where(_)));
+            assert!(matches!(&ops[5], SplunkOp::FieldsRemove(_)));
+        }
+
+        #[test]
+        fn or_with_mixed_types_uses_where() {
+            let expr = Expr::Or(
                 eq_field("a", lit_int(1)),
                 Box::new(Expr::Exists(field_expr("b"))),
             );
             let result = compile_filter_to_spl(&expr).unwrap();
             assert!(matches!(result, FilterResult::Where(_)));
-            assert_eq!(result.as_str().unwrap(), "(a=1 AND isnotnull(b))");
+            assert_eq!(result.as_str().unwrap(), "(a=1 OR isnotnull(b))");
         }
 
         #[test]
