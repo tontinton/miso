@@ -4,7 +4,7 @@ use std::iter;
 
 use miso_common::metrics::{METRICS, STEP_COUNT};
 use miso_workflow_types::{
-    log::{Log, LogItem, LogIter},
+    log::{COUNT_FIELD_NAME, Log, LogItem, LogIter},
     value::Value,
 };
 
@@ -13,11 +13,9 @@ use super::{
     partial_stream_tracker::PartialStreamTracker, try_next_with_partial_stream,
 };
 
-const COUNT_LOG_FIELD_NAME: &str = "Count";
-
 pub fn count_to_log(count: u64) -> Log {
     let mut log = Log::new();
-    log.insert(COUNT_LOG_FIELD_NAME.into(), Value::from(count));
+    log.insert(COUNT_FIELD_NAME.into(), Value::from(count));
     log
 }
 
@@ -26,7 +24,7 @@ fn count_to_log_item(count: u64) -> LogItem {
 }
 
 fn log_to_count(mut log: Log) -> Option<u64> {
-    if let Some(value) = log.remove(COUNT_LOG_FIELD_NAME)
+    if let Some(value) = log.remove(COUNT_FIELD_NAME)
         && let Some(count) = value.as_u64()
     {
         return Some(count);
@@ -159,7 +157,9 @@ mod tests {
         items
             .iter()
             .filter_map(|i| match i {
-                LogItem::Log(l) | LogItem::PartialStreamLog(l, _) => l.get("Count")?.as_u64(),
+                LogItem::Log(l) | LogItem::PartialStreamLog(l, _) => {
+                    l.get(COUNT_FIELD_NAME)?.as_u64()
+                }
                 _ => None,
             })
             .collect()

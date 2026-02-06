@@ -7,7 +7,10 @@ use miso_common::metrics::{
     CONNECTOR_SPLUNK, METRICS, OP_CREATE_JOB, OP_FETCH_RESULTS, OP_POLL_JOB,
 };
 use miso_workflow_types::{
-    log::{Log, LogItem, LogItemTryStream, LogTryStream, PartialStreamKey, next_source_id},
+    log::{
+        COUNT_FIELD_NAME, Log, LogItem, LogItemTryStream, LogTryStream, PartialStreamKey,
+        next_source_id,
+    },
     value::Value,
 };
 use reqwest::Client;
@@ -107,6 +110,20 @@ impl QueryRunner {
     #[instrument(skip(self), name = "splunk run_with_previews")]
     pub fn run_with_previews(self, spl: String, preview_interval: Duration) -> LogItemTryStream {
         self.poll_with_previews_until_done(spl, preview_interval, None)
+    }
+
+    #[instrument(skip(self), name = "splunk run_count_with_previews")]
+    pub fn run_count_with_previews(
+        self,
+        spl: String,
+        preview_interval: Duration,
+    ) -> LogItemTryStream {
+        let numeric_fields = HashSet::from([COUNT_FIELD_NAME.to_string()]);
+        self.poll_with_previews_until_done(
+            spl,
+            preview_interval,
+            Some((HashSet::new(), numeric_fields)),
+        )
     }
 
     #[instrument(skip(self), name = "splunk run_stats_with_previews")]

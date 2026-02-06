@@ -21,7 +21,7 @@ use miso_common::{
 use miso_workflow_types::{
     expr::Expr,
     field::Field,
-    log::Log,
+    log::{COUNT_FIELD_NAME, Log},
     project::ProjectField,
     sort::{Sort, SortOrder},
     summarize::{Aggregation, Summarize},
@@ -226,7 +226,9 @@ impl SplunkHandle {
 
         // tstats is much faster for simple count queries without filters
         if self.can_use_tstats() {
-            spl.push_str(&format!("| tstats count as count where ({})", index_clause));
+            spl.push_str(&format!(
+                "| tstats count as {COUNT_FIELD_NAME} where ({index_clause})",
+            ));
             if let Some(earliest) = self.earliest {
                 spl.push_str(&format!(" earliest={}", earliest));
             }
@@ -280,7 +282,7 @@ impl SplunkHandle {
                     }
                 }
                 SplunkOp::Count => {
-                    spl.push_str(" | stats count");
+                    spl.push_str(&format!(" | stats count as {COUNT_FIELD_NAME}"));
                 }
                 SplunkOp::Rename(renames) => {
                     spl.push_str(" | rename ");
@@ -1050,9 +1052,15 @@ impl Connector for SplunkConnector {
         );
 
         if has_count && !has_stats {
+            if self.config.enable_partial_stream {
+                return Ok(QueryResponse::PartialLogs(
+                    runner.run_count_with_previews(spl, self.config.preview_interval),
+                ));
+            }
+
             let (result_count, log) = runner.run_count(&spl).await?;
             let count = log
-                .get("count")
+                .get(COUNT_FIELD_NAME)
                 .and_then(|v| match v {
                     Value::UInt(n) => Some(*n),
                     Value::Int(n) => Some(*n as u64),
@@ -1404,7 +1412,7 @@ mod tests {
             let handle = SplunkHandle::default().push(SplunkOp::Count);
             assert_eq!(
                 handle.build_spl("myindex"),
-                "| tstats count as count where (index=\"myindex\")"
+                format!("| tstats count as {COUNT_FIELD_NAME} where (index=\"myindex\")").as_str()
             );
         }
 
@@ -1415,7 +1423,7 @@ mod tests {
                 .push(SplunkOp::Count);
             assert_eq!(
                 handle.build_spl("myindex"),
-                "search (index=\"myindex\") | search foo=CASE(\"bar\") | stats count"
+                format!("search (index=\"myindex\") | search foo=CASE(\"bar\") | stats count as {COUNT_FIELD_NAME}").as_str()
             );
         }
 
@@ -1465,7 +1473,7 @@ mod tests {
             };
             assert_eq!(
                 handle.build_spl("myindex"),
-                "| tstats count as count where (index=\"myindex\") earliest=1000 latest=2000"
+                "| tstats count as Count where (index=\"myindex\") earliest=1000 latest=2000"
             );
         }
     }

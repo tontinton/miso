@@ -31,7 +31,13 @@ use miso_workflow::{
     sort::SortError,
     summarize::SummarizeError,
 };
-use miso_workflow_types::{expr::Expr, field::Field, field_unwrap, json, log::Log, value::Value};
+use miso_workflow_types::{
+    expr::Expr,
+    field::Field,
+    field_unwrap, json,
+    log::{COUNT_FIELD_NAME, Log},
+    value::Value,
+};
 use serde::{Deserialize, Serialize};
 use test_case::test_case;
 use tokio::{task::spawn_blocking, time::sleep};
@@ -2265,9 +2271,9 @@ async fn partial_stream_count() -> Result<()> {
         .expect_final(r#"[{"Count": 2}]"#)
         .call()
         .await?;
-    let final_count = r.finals[0].get("Count").unwrap().as_i64().unwrap();
+    let final_count = r.finals[0].get(COUNT_FIELD_NAME).unwrap().as_i64().unwrap();
     for p in &r.partials {
-        assert!(p.get("Count").unwrap().as_i64().unwrap() <= final_count);
+        assert!(p.get(COUNT_FIELD_NAME).unwrap().as_i64().unwrap() <= final_count);
     }
     Ok(())
 }
@@ -2368,7 +2374,7 @@ async fn partial_stream_filter() -> Result<()> {
         .call()
         .await?;
     for p in &r.partials {
-        assert!(p.get("Count").unwrap().as_i64().unwrap() > 0);
+        assert!(p.get(COUNT_FIELD_NAME).unwrap().as_i64().unwrap() > 0);
     }
     Ok(())
 }
@@ -2383,7 +2389,7 @@ async fn partial_stream_project() -> Result<()> {
         .await?;
     let final_c = r.finals[0].get("c").unwrap().as_i64().unwrap();
     for p in &r.partials {
-        assert!(!p.contains_key("Count"));
+        assert!(!p.contains_key(COUNT_FIELD_NAME));
         assert!(p.get("c").unwrap().as_i64().unwrap() <= final_c);
     }
     Ok(())
@@ -2431,9 +2437,9 @@ async fn partial_stream_multi_union() -> Result<()> {
         .expect_final(r#"[{"Count": 3}]"#)
         .call()
         .await?;
-    let final_count = r.finals[0].get("Count").unwrap().as_i64().unwrap();
+    let final_count = r.finals[0].get(COUNT_FIELD_NAME).unwrap().as_i64().unwrap();
     for p in &r.partials {
-        assert!(p.get("Count").unwrap().as_i64().unwrap() <= final_count);
+        assert!(p.get(COUNT_FIELD_NAME).unwrap().as_i64().unwrap() <= final_count);
     }
     Ok(())
 }
