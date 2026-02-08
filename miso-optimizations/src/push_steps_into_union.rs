@@ -24,7 +24,7 @@ pub struct PushStepsIntoUnion;
 
 impl Optimization for PushStepsIntoUnion {
     fn pattern(&self) -> Pattern {
-        pattern!(Union + [Filter Project Extend])
+        pattern!(Union + [Filter Project Extend Rename])
     }
 
     fn apply(&self, steps: &[WorkflowStep], _groups: &[Group]) -> OptimizationResult {
