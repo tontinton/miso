@@ -26,7 +26,7 @@ use miso_kql::{ParseError, parse};
 use miso_optimizations::Optimizer;
 use miso_workflow::{Workflow, limits::WorkflowLimits, partial_stream::PartialStream};
 use prometheus::TextEncoder;
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
 use serde_json::json;
 use time::OffsetDateTime;
 use tokio::{sync::RwLock, task::spawn_blocking};
@@ -108,8 +108,30 @@ struct QueryRequest {
     query: String,
 
     /// If set, send partial results as soon as a split / union subquery finishes.
+    #[serde(default, deserialize_with = "deserialize_partial_stream")]
     #[schema(value_type = Option<Object>)]
     partial_stream: Option<PartialStream>,
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum PartialStreamInput {
+    Bool(bool),
+    Obj(PartialStream),
+}
+
+fn deserialize_partial_stream<'de, D>(deserializer: D) -> Result<Option<PartialStream>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let input = Option::<PartialStreamInput>::deserialize(deserializer)?;
+
+    match input {
+        Some(PartialStreamInput::Bool(true)) => Ok(Some(PartialStream::default())),
+        Some(PartialStreamInput::Bool(false)) => Ok(None),
+        Some(PartialStreamInput::Obj(ps)) => Ok(Some(ps)),
+        None => Ok(None),
+    }
 }
 
 #[derive(Debug)]

@@ -48,6 +48,14 @@ pub struct PartialStream {
     pub debounce: Duration,
 }
 
+impl Default for PartialStream {
+    fn default() -> Self {
+        Self {
+            debounce: default_debounce(),
+        }
+    }
+}
+
 pub trait PartialLogIter: Iterator<Item = LogItem> {
     fn get_partial(&self) -> LogIter;
 }
