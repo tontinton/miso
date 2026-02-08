@@ -239,6 +239,7 @@ where
         Token::Let => "let".to_string(),
         Token::Between => "between".to_string(),
         Token::Case => "case".to_string(),
+        Token::Iff => "iff".to_string(),
         Token::Extract => "extract".to_string(),
     }
 }
@@ -460,6 +461,32 @@ where
             .labelled("case")
             .boxed();
 
+        let iff = just(Token::Iff)
+            .ignore_then(
+                expr.clone()
+                    .then_ignore(just(Token::Comma))
+                    .then(expr.clone())
+                    .then_ignore(just(Token::Comma))
+                    .then(expr.clone())
+                    .delimited_by(just(Token::LParen), just(Token::RParen))
+                    .recover_with(via_parser(nested_delimiters(
+                        Token::LParen,
+                        Token::RParen,
+                        [(Token::LBracket, Token::RBracket)],
+                        |_| {
+                            (
+                                (Expr::Literal(Value::Null), Expr::Literal(Value::Null)),
+                                Expr::Literal(Value::Null),
+                            )
+                        },
+                    ))),
+            )
+            .map(|((cond, then_expr), else_expr)| {
+                Expr::Case(vec![(cond, then_expr)], Box::new(else_expr))
+            })
+            .labelled("iff")
+            .boxed();
+
         let bin = just(Token::Bin)
             .ignore_then(
                 expr.clone()
@@ -546,6 +573,7 @@ where
             .or(cast)
             .or(exists)
             .or(case)
+            .or(iff)
             .or(datetime)
             // Must be last (fields can contain tokens that are keywords).
             .or(field.map(Expr::Field))

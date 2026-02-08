@@ -1137,6 +1137,23 @@ fn test_case_expression(expr_str: &str) {
 }
 
 #[test]
+fn test_iff_basic() {
+    let result = parse_unwrap!("connector.table | extend result = iff(x > 10, \"yes\", \"no\")");
+    match &result[1] {
+        QueryStep::Extend(fields) => match &fields[0].from {
+            Expr::Case(arms, else_expr) => {
+                assert_eq!(arms.len(), 1);
+                assert!(matches!(&arms[0].0, Expr::Gt(_, _)));
+                assert!(matches!(&arms[0].1, Expr::Literal(Value::String(_))));
+                assert!(matches!(&**else_expr, Expr::Literal(Value::String(_))));
+            }
+            other => panic!("Expected Expr::Case, got {:?}", other),
+        },
+        _ => panic!("Expected Extend step"),
+    }
+}
+
+#[test]
 fn test_parse_error_includes_line_and_column() {
     let query = "connector.table | where field1 == \"value\"\n| invalid_operator field2";
     let result = parse(query);
