@@ -572,8 +572,10 @@ fn test_project_propagation_through_next_step(first_step: S, second_step: S, exp
     ],
     vec![
         S::Limit(1),
-        S::Extend(vec![rename_project("c", "b")]),
-        S::Extend(vec![rename_project("a", "b")])
+        S::Extend(vec![
+            rename_project("c", "b"),
+            rename_project("a", "b"),
+        ])
     ]
     ; "extend rename project through extend"
 )]
@@ -1613,6 +1615,82 @@ fn merge_consecutive_projects_complex_expr() {
             S::Project(vec![rename_project("d", "a")]),
         ],
         vec![S::Project(vec![project_field("d", plus_expr)])],
+    );
+}
+
+#[test]
+fn merge_consecutive_extends_basic_rename() {
+    // extend a=b | extend c=a
+    //  ->
+    // extend a=b, c=b
+    check_default(
+        vec![
+            S::Extend(vec![rename_project("a", "b")]),
+            S::Extend(vec![rename_project("c", "a")]),
+        ],
+        vec![S::Extend(vec![
+            rename_project("a", "b"),
+            rename_project("c", "b"),
+        ])],
+    );
+}
+
+#[test]
+fn merge_consecutive_extends_conflict_resolution() {
+    // extend a=x, b=y | extend b=z
+    //  ->
+    // extend a=x, b=z
+    check_default(
+        vec![
+            S::Extend(vec![rename_project("a", "x"), rename_project("b", "y")]),
+            S::Extend(vec![rename_project("b", "z")]),
+        ],
+        vec![S::Extend(vec![
+            rename_project("a", "x"),
+            rename_project("b", "z"),
+        ])],
+    );
+}
+
+#[test]
+fn merge_consecutive_extends_complex_expr() {
+    // extend a=b+c | extend d=a
+    //  ->
+    // extend a=b+c, d=b+c
+    let plus_expr = Expr::Plus(
+        Box::new(Expr::Field(field("b"))),
+        Box::new(Expr::Field(field("c"))),
+    );
+    check_default(
+        vec![
+            S::Extend(vec![project_field("a", plus_expr.clone())]),
+            S::Extend(vec![rename_project("d", "a")]),
+        ],
+        vec![S::Extend(vec![
+            project_field("a", plus_expr.clone()),
+            project_field("d", plus_expr),
+        ])],
+    );
+}
+
+#[test]
+fn merge_consecutive_extends_self_referencing_overwrite() {
+    // extend a=a+1 | extend b=a
+    //  ->
+    // extend a=a+1, b=a+1
+    let plus_one = Expr::Plus(
+        Box::new(Expr::Field(field("a"))),
+        Box::new(Expr::Literal(int_val(1))),
+    );
+    check_default(
+        vec![
+            S::Extend(vec![project_field("a", plus_one.clone())]),
+            S::Extend(vec![rename_project("b", "a")]),
+        ],
+        vec![S::Extend(vec![
+            project_field("a", plus_one.clone()),
+            project_field("b", plus_one),
+        ])],
     );
 }
 

@@ -9,6 +9,7 @@ use dynamic_filter::DynamicFilter;
 use eliminate_unused_fields::EliminateUnusedFields;
 use filter_propagation::FilterPropagation;
 use invert_branch_filter::InvertBranchFilter;
+use merge_consecutive_extends::MergeConsecutiveExtends;
 use merge_consecutive_projects::MergeConsecutiveProjects;
 use merge_filters_into_and_filter::MergeFiltersIntoAndFilter;
 use merge_topns::MergeTopNs;
@@ -38,6 +39,7 @@ mod eliminate_unused_fields;
 mod field_replacer;
 mod filter_propagation;
 mod invert_branch_filter;
+mod merge_consecutive_extends;
 mod merge_consecutive_projects;
 mod merge_filters_into_and_filter;
 mod merge_topns;
@@ -173,6 +175,7 @@ impl Optimizer {
             // Move steps around to enable pushdowns.
             vec![
                 opt!(ReorderFilterBeforeSort),
+                opt!(MergeConsecutiveExtends),
                 opt!(MergeConsecutiveProjects),
                 opt!(ProjectPropagationWithEnd),
                 opt!(ProjectPropagationWithoutEnd),
