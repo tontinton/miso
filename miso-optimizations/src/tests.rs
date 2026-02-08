@@ -1565,6 +1565,58 @@ fn filter_propagation_into_summarize_case() {
 }
 
 #[test]
+fn merge_consecutive_projects_basic_rename() {
+    // project a=b | project c=a
+    //  ->
+    // project c=b
+    check_default(
+        vec![
+            S::Project(vec![rename_project("a", "b")]),
+            S::Project(vec![rename_project("c", "a")]),
+        ],
+        vec![S::Project(vec![rename_project("c", "b")])],
+    );
+}
+
+#[test]
+fn merge_consecutive_projects_mixed_fields() {
+    // project a=b, c=10 | project d=a, e=c
+    //  ->
+    // project d=b, e=10
+    check_default(
+        vec![
+            S::Project(vec![
+                rename_project("a", "b"),
+                literal_project("c", int_val(10)),
+            ]),
+            S::Project(vec![rename_project("d", "a"), rename_project("e", "c")]),
+        ],
+        vec![S::Project(vec![
+            rename_project("d", "b"),
+            literal_project("e", int_val(10)),
+        ])],
+    );
+}
+
+#[test]
+fn merge_consecutive_projects_complex_expr() {
+    // project a=b+c | project d=a
+    //  ->
+    // project d=b+c
+    let plus_expr = Expr::Plus(
+        Box::new(Expr::Field(field("b"))),
+        Box::new(Expr::Field(field("c"))),
+    );
+    check_default(
+        vec![
+            S::Project(vec![project_field("a", plus_expr.clone())]),
+            S::Project(vec![rename_project("d", "a")]),
+        ],
+        vec![S::Project(vec![project_field("d", plus_expr)])],
+    );
+}
+
+#[test]
 fn filter_propagation_range_into_summarize_case() {
     check_default(
         vec![

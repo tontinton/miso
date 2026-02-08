@@ -266,7 +266,7 @@ fn rewrite_expand(
         .collect()
 }
 
-fn categorize_fields(
+pub(crate) fn categorize_fields(
     fields: &[ProjectField],
     renames: &mut BTreeMap<Field, Field>,
     literals: &mut BTreeMap<Field, Value>,
