@@ -4,6 +4,7 @@ use miso_common::btreemap;
 use miso_workflow::{Workflow, WorkflowStep as S, display::DisplayableWorkflowSteps};
 use miso_workflow_types::{
     expr::Expr,
+    field::Field,
     join::{Join, JoinType},
     json,
     project::ProjectField,
@@ -1718,5 +1719,44 @@ fn filter_propagation_range_into_summarize_case() {
             S::Limit(1),
             S::Project(vec![literal_project("result", string_val("yes"))]),
         ],
+    );
+}
+
+#[test_case(
+    // rename b=a | project c=a -> project c=b
+    vec![(field("b"), field("a"))],
+    vec![rename_project("c", "a")],
+    vec![rename_project("c", "b")]
+    ; "basic_rename_folded_into_project"
+)]
+#[test_case(
+    // rename b=a, d→e | project c=a, f=e -> project c=b, f=d
+    vec![(field("b"), field("a")), (field("d"), field("e"))],
+    vec![rename_project("c", "a"), rename_project("f", "e")],
+    vec![rename_project("c", "b"), rename_project("f", "d")]
+    ; "multiple_renames_folded_into_project"
+)]
+#[test_case(
+    // rename b=a | project c=x -> project c=x
+    vec![(field("b"), field("a"))],
+    vec![rename_project("c", "x")],
+    vec![rename_project("c", "x")]
+    ; "unreferenced_rename_folded_into_project"
+)]
+#[test_case(
+    // rename b=a | project c=a+1 -> project c=b+1
+    vec![(field("b"), field("a"))],
+    vec![project_field("c", Expr::Plus(Box::new(Expr::Field(field("a"))), Box::new(Expr::Literal(int_val(1)))))],
+    vec![project_field("c", Expr::Plus(Box::new(Expr::Field(field("b"))), Box::new(Expr::Literal(int_val(1)))))]
+    ; "expression referencing renamed field"
+)]
+fn test_fold_rename_into_project(
+    renames: Vec<(Field, Field)>,
+    project_fields: Vec<ProjectField>,
+    expected_fields: Vec<ProjectField>,
+) {
+    check_default(
+        vec![S::Rename(renames), S::Project(project_fields)],
+        vec![S::Project(expected_fields)],
     );
 }

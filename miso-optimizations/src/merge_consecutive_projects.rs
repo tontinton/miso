@@ -4,8 +4,8 @@ use miso_workflow::WorkflowStep;
 use miso_workflow_types::{expr::Expr, field::Field, project::ProjectField, value::Value};
 
 use crate::{
-    Group, Optimization, OptimizationResult, Pattern, pattern,
-    project_propagation::{categorize_fields, expr_substitude::ExprSubstitute},
+    Group, Optimization, OptimizationResult, Pattern, expr_substitude::ExprSubstitute, pattern,
+    project_propagation::categorize_fields,
 };
 
 pub struct MergeConsecutiveProjects;

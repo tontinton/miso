@@ -25,8 +25,7 @@ use miso_workflow_types::{
 use std::collections::BTreeMap;
 
 use crate::{
-    Group, Optimization, OptimizationResult, Pattern, pattern,
-    project_propagation::expr_substitude::ExprSubstitute,
+    Group, Optimization, OptimizationResult, Pattern, expr_substitude::ExprSubstitute, pattern,
 };
 
 pub struct FilterPropagation;

@@ -8,6 +8,7 @@ use convert_sort_limit_to_topn::ConvertSortLimitToTopN;
 use dynamic_filter::DynamicFilter;
 use eliminate_unused_fields::EliminateUnusedFields;
 use filter_propagation::FilterPropagation;
+use fold_rename_into_project::FoldRenameIntoProject;
 use invert_branch_filter::InvertBranchFilter;
 use merge_consecutive_extends::MergeConsecutiveExtends;
 use merge_consecutive_projects::MergeConsecutiveProjects;
@@ -36,8 +37,10 @@ mod const_folding;
 mod convert_sort_limit_to_topn;
 mod dynamic_filter;
 mod eliminate_unused_fields;
+mod expr_substitude;
 mod field_replacer;
 mod filter_propagation;
+mod fold_rename_into_project;
 mod invert_branch_filter;
 mod merge_consecutive_extends;
 mod merge_consecutive_projects;
@@ -176,6 +179,7 @@ impl Optimizer {
             vec![
                 opt!(ReorderFilterBeforeSort),
                 opt!(MergeConsecutiveExtends),
+                opt!(FoldRenameIntoProject),
                 opt!(MergeConsecutiveProjects),
                 opt!(ProjectPropagationWithEnd),
                 opt!(ProjectPropagationWithoutEnd),

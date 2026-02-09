@@ -22,8 +22,6 @@
 //! becomes:
 //!   summarize d = sum(b) | extend c = 50
 
-pub mod expr_substitude;
-
 use miso_workflow::WorkflowStep;
 use miso_workflow_types::{
     expr::Expr,
@@ -37,8 +35,7 @@ use miso_workflow_types::{
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::{
-    Group, Optimization, OptimizationResult, Pattern, pattern,
-    project_propagation::expr_substitude::ExprSubstitute,
+    Group, Optimization, OptimizationResult, Pattern, expr_substitude::ExprSubstitute, pattern,
 };
 
 pub struct ProjectPropagationWithoutEnd;
