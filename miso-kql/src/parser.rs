@@ -98,6 +98,11 @@ macro_rules! agg_single_param {
     };
 }
 
+#[derive(Clone)]
+struct KqlParser {
+    now: OffsetDateTime,
+}
+
 #[derive(Debug, Serialize)]
 pub struct ParseError {
     pub span: std::ops::Range<usize>,
@@ -141,34 +146,7 @@ fn offset_to_line_col(source: &str, offset: usize) -> (usize, usize) {
 }
 
 pub fn parse(query: &str) -> Result<Vec<QueryStep>, Vec<ParseError>> {
-    let token_iter = Token::lexer(query).spanned().map(|(tok, span)| match tok {
-        Ok(tok) => (tok, span.into()),
-        Err(()) => (Token::Error, span.into()),
-    });
-
-    let token_stream =
-        Stream::from_iter(token_iter).map((0..query.len()).into(), |(t, s): (_, _)| (t, s));
-
-    match query_parser().parse(token_stream).into_result() {
-        Ok(expr) => Ok(expr),
-        Err(errs) => {
-            let parse_errors: Vec<ParseError> = errs
-                .into_iter()
-                .map(|err| {
-                    let span = err.span().into_range();
-                    let (line, column) = offset_to_line_col(query, span.start);
-                    ParseError {
-                        span,
-                        line,
-                        column,
-                        message: format!("{err:?}"),
-                        reason: format!("{:?}", err.reason()),
-                    }
-                })
-                .collect();
-            Err(parse_errors)
-        }
-    }
+    KqlParser::new().parse(query)
 }
 
 fn ident_parser<'a, I>() -> impl Parser<'a, I, String, extra::Err<Rich<'a, Token>>> + Clone
@@ -309,405 +287,6 @@ where
         .boxed()
 }
 
-fn now_expr() -> Expr {
-    Expr::Literal(json!(OffsetDateTime::now_utc()))
-}
-
-fn datetime_parser<'a, I>() -> impl Parser<'a, I, Expr, extra::Err<Rich<'a, Token>>> + Clone
-where
-    I: ValueInput<'a, Token = Token, Span = SimpleSpan>,
-{
-    let datetime = just(Token::Datetime)
-        .ignore_then(
-            // datetime() - current time.
-            just(Token::LParen)
-                .ignore_then(just(Token::RParen))
-                .map(|_| now_expr())
-                .or(
-                    // datetime(null) - null value.
-                    just(Token::LParen)
-                        .ignore_then(just(Token::Null))
-                        .then_ignore(just(Token::RParen))
-                        .map(|_| Expr::Literal(Value::Null)),
-                )
-                .or(
-                    // datetime(year.month.day hour:minute:second.milliseconds)
-                    // or datetime(year.month.day).
-                    just(Token::LParen)
-                        .ignore_then(
-                            select! { Token::DatetimeLiteral(x) => Expr::Literal(Value::from(x)) },
-                        )
-                        .then_ignore(just(Token::RParen))
-                        .boxed(),
-                )
-                .recover_with(via_parser(nested_delimiters(
-                    Token::LParen,
-                    Token::RParen,
-                    [(Token::LBracket, Token::RBracket)],
-                    |_| Expr::Literal(Value::Null),
-                ))),
-        )
-        .labelled("datetime")
-        .boxed();
-
-    let now = just(Token::Now)
-        .ignore_then(just(Token::LParen))
-        .ignore_then(just(Token::RParen))
-        .map(|_| now_expr())
-        .recover_with(via_parser(nested_delimiters(
-            Token::LParen,
-            Token::RParen,
-            [(Token::LBracket, Token::RBracket)],
-            |_| Expr::Literal(Value::Null),
-        )))
-        .labelled("now")
-        .boxed();
-
-    datetime.or(now).labelled("datetime literal").boxed()
-}
-
-fn expr_parser<'a, I>() -> impl Parser<'a, I, Expr, extra::Err<Rich<'a, Token>>> + Clone
-where
-    I: ValueInput<'a, Token = Token, Span = SimpleSpan>,
-{
-    recursive(|expr| {
-        let string_literal = select! {
-            Token::String(x) => x
-        }
-        .validate(|val, e, emitter| match val {
-            StringValue::Text(text) => text,
-            StringValue::Bytes(_) => {
-                emitter.emit(Rich::custom(
-                    e.span(),
-                    "byte strings are currently not supported. Use regular strings with double quotes",
-                ));
-                String::new()
-            }
-        })
-        .labelled("string literal")
-        .boxed();
-
-        let datetime = datetime_parser();
-
-        let literal = select! {
-            Token::Integer(x) => {
-                Expr::Literal(json!(x))
-            },
-            Token::Float(x) => Expr::Literal(json!(x)),
-            Token::Bool(x) => Expr::Literal(json!(x)),
-            Token::Timespan(x) => Expr::Literal(json!(x)),
-            Token::Null => Expr::Literal(Value::Null),
-        }
-        .or(string_literal.map(|x| Expr::Literal(json!(x))))
-        .labelled("literal")
-        .boxed();
-
-        let field = field_parser(true);
-
-        let exists = just(Token::Exists)
-            .ignore_then(
-                expr.clone()
-                    .delimited_by(just(Token::LParen), just(Token::RParen))
-                    .recover_with(via_parser(nested_delimiters(
-                        Token::LParen,
-                        Token::RParen,
-                        [(Token::LBracket, Token::RBracket)],
-                        |_| Expr::Field(Field::from_str(ERROR_FIELD_NAME).expect("error field")),
-                    ))),
-            )
-            .map(|e| Expr::Exists(Box::new(e)))
-            .labelled("exists")
-            .boxed();
-
-        let case = just(Token::Case)
-            .ignore_then(
-                expr.clone()
-                    .separated_by(just(Token::Comma))
-                    .collect::<Vec<_>>()
-                    .delimited_by(just(Token::LParen), just(Token::RParen))
-                    .recover_with(via_parser(nested_delimiters(
-                        Token::LParen,
-                        Token::RParen,
-                        [(Token::LBracket, Token::RBracket)],
-                        |_| vec![],
-                    ))),
-            )
-            .validate(|mut items, e, emitter| {
-                if items.len() < 3 {
-                    emitter.emit(Rich::custom(
-                        e.span(),
-                        "case() requires at least 3 arguments: case(condition, result, defaultResult). Example: case(x > 10, \"high\", \"low\")",
-                    ));
-                    return Expr::Literal(Value::Null);
-                }
-
-                let else_expr = items.pop().unwrap();
-                let mut pairs = Vec::new();
-                let mut iter = items.into_iter();
-
-                while let (Some(pred), Some(then)) = (iter.next(), iter.next()) {
-                    pairs.push((pred, then));
-                }
-
-                if iter.next().is_some() {
-                    emitter.emit(Rich::custom(
-                        e.span(),
-                        "case() needs pairs of (condition, result) before the default. Example: case(x > 10, \"high\", x > 5, \"medium\", \"low\")",
-                    ));
-                }
-
-                Expr::Case(pairs, Box::new(else_expr))
-            })
-            .labelled("case")
-            .boxed();
-
-        let iff = just(Token::Iff)
-            .ignore_then(
-                expr.clone()
-                    .then_ignore(just(Token::Comma))
-                    .then(expr.clone())
-                    .then_ignore(just(Token::Comma))
-                    .then(expr.clone())
-                    .delimited_by(just(Token::LParen), just(Token::RParen))
-                    .recover_with(via_parser(nested_delimiters(
-                        Token::LParen,
-                        Token::RParen,
-                        [(Token::LBracket, Token::RBracket)],
-                        |_| {
-                            (
-                                (Expr::Literal(Value::Null), Expr::Literal(Value::Null)),
-                                Expr::Literal(Value::Null),
-                            )
-                        },
-                    ))),
-            )
-            .map(|((cond, then_expr), else_expr)| {
-                Expr::Case(vec![(cond, then_expr)], Box::new(else_expr))
-            })
-            .labelled("iff")
-            .boxed();
-
-        let bin = just(Token::Bin)
-            .ignore_then(
-                expr.clone()
-                    .then_ignore(just(Token::Comma))
-                    .then(expr.clone())
-                    .delimited_by(just(Token::LParen), just(Token::RParen))
-                    .recover_with(via_parser(nested_delimiters(
-                        Token::LParen,
-                        Token::RParen,
-                        [(Token::LBracket, Token::RBracket)],
-                        |_| (Expr::Literal(Value::Null), Expr::Literal(Value::Null)),
-                    ))),
-            )
-            .map(|(l, r)| Expr::Bin(Box::new(l), Box::new(r)))
-            .labelled("bin")
-            .boxed();
-
-        let extract = just(Token::Extract)
-            .ignore_then(
-                expr.clone()
-                    .then_ignore(just(Token::Comma))
-                    .then(expr.clone())
-                    .then_ignore(just(Token::Comma))
-                    .then(expr.clone())
-                    .delimited_by(just(Token::LParen), just(Token::RParen))
-                    .recover_with(via_parser(nested_delimiters(
-                        Token::LParen,
-                        Token::RParen,
-                        [(Token::LBracket, Token::RBracket)],
-                        |_| {
-                            (
-                                (Expr::Literal(Value::Null), Expr::Literal(Value::Null)),
-                                Expr::Literal(Value::Null),
-                            )
-                        },
-                    ))),
-            )
-            .map(|((regex, group), source)| {
-                Expr::Extract(Box::new(regex), Box::new(group), Box::new(source))
-            })
-            .labelled("extract")
-            .boxed();
-
-        let expr_delimited_by_parentheses = expr
-            .clone()
-            .delimited_by(just(Token::LParen), just(Token::RParen))
-            .recover_with(via_parser(nested_delimiters(
-                Token::LParen,
-                Token::RParen,
-                [(Token::LBracket, Token::RBracket)],
-                |_| Expr::Literal(Value::Null),
-            )))
-            .labelled("parentheses over an expression");
-
-        let not = just(Token::Not)
-            .ignore_then(expr_delimited_by_parentheses.clone())
-            .map(|expr| Expr::Not(Box::new(expr.clone())))
-            .labelled("not")
-            .boxed();
-
-        let negate = just(Token::Minus)
-            .ignore_then(literal.clone())
-            .map(|expr| Expr::Minus(Box::new(Expr::Literal(json!(0))), Box::new(expr)))
-            .labelled("negate")
-            .boxed();
-
-        let cast = select! {
-            Token::ToString => CastType::String,
-            Token::ToInt | Token::ToLong => CastType::Int,
-            Token::ToReal | Token::ToDecimal => CastType::Float,
-            Token::ToBool => CastType::Bool,
-        }
-        .then(expr_delimited_by_parentheses.clone())
-        .map(|(cast, e)| Expr::Cast(cast, Box::new(e)))
-        .labelled("cast")
-        .boxed();
-
-        let atom = literal
-            .or(expr_delimited_by_parentheses)
-            .or(bin)
-            .or(extract)
-            .or(not)
-            .or(negate)
-            .or(cast)
-            .or(exists)
-            .or(case)
-            .or(iff)
-            .or(datetime)
-            // Must be last (fields can contain tokens that are keywords).
-            .or(field.map(Expr::Field))
-            .recover_with(skip_then_retry_until(
-                any().ignored(),
-                one_of(EXPR_TERMINATORS).ignored(),
-            ))
-            .boxed();
-
-        let mul_div = binary_ops!(atom;
-            Token::Mul => Expr::Mul,
-            Token::Div => Expr::Div,
-        )
-        .labelled("multiplication or division");
-
-        let add_sub = binary_ops!(mul_div;
-            Token::Plus  => Expr::Plus,
-            Token::Minus => Expr::Minus,
-        )
-        .labelled("addition or subtraction");
-
-        let comparisons = binary_ops!(add_sub;
-            Token::DoubleEq => Expr::Eq,
-            Token::Ne       => Expr::Ne,
-            Token::Gte      => Expr::Gte,
-            Token::Gt       => Expr::Gt,
-            Token::Lte      => Expr::Lte,
-            Token::Lt       => Expr::Lt,
-        )
-        .labelled("comparison");
-
-        let text_ops = binary_ops!(comparisons;
-            Token::StartsWith => Expr::StartsWith,
-            Token::EndsWith   => Expr::EndsWith,
-            Token::Contains   => Expr::Contains,
-            Token::Has        => Expr::Has,
-            Token::HasCs      => Expr::HasCs,
-        )
-        .labelled("text operation");
-
-        let bin_op_expr = text_ops
-            .recover_with(skip_until(
-                any().ignored(),
-                one_of([Token::Comma, Token::Pipe]).ignored(),
-                || Expr::Literal(Value::Null),
-            ))
-            .boxed();
-
-        let range = bin_op_expr
-            .clone()
-            .then_ignore(just(Token::DotDot))
-            .then(bin_op_expr.clone())
-            .delimited_by(just(Token::LParen), just(Token::RParen))
-            .recover_with(via_parser(nested_delimiters(
-                Token::LParen,
-                Token::RParen,
-                [(Token::LBracket, Token::RBracket)],
-                |_| (Expr::Literal(Value::Null), Expr::Literal(Value::Null)),
-            )))
-            .boxed();
-
-        let between_expr = bin_op_expr
-            .clone()
-            .then(
-                choice((
-                    just(Token::Between).to(true),
-                    just(Token::NotBetween).to(false),
-                ))
-                .then(range)
-                .or_not(),
-            )
-            .map(|(left, maybe_range)| match maybe_range {
-                Some((is_between, (start, end))) => {
-                    if is_between {
-                        Expr::And(
-                            Box::new(Expr::Gte(Box::new(left.clone()), Box::new(start))),
-                            Box::new(Expr::Lte(Box::new(left), Box::new(end))),
-                        )
-                    } else {
-                        Expr::Or(
-                            Box::new(Expr::Lt(Box::new(left.clone()), Box::new(start))),
-                            Box::new(Expr::Gt(Box::new(left), Box::new(end))),
-                        )
-                    }
-                }
-                None => left,
-            })
-            .boxed();
-
-        let expr_list = between_expr
-            .clone()
-            .recover_with(skip_until(
-                any().ignored(),
-                one_of([Token::Comma, Token::RParen]).ignored(),
-                || Expr::Literal(Value::Null),
-            ))
-            .separated_by(just(Token::Comma))
-            .collect::<Vec<_>>()
-            .delimited_by(just(Token::LParen), just(Token::RParen))
-            .recover_with(via_parser(nested_delimiters(
-                Token::LParen,
-                Token::RParen,
-                [(Token::LBracket, Token::RBracket)],
-                |_| vec![],
-            )))
-            .boxed();
-
-        let in_expr = between_expr
-            .clone()
-            .then(just(Token::In).ignore_then(expr_list).or_not())
-            .map(|(left, maybe_list)| match maybe_list {
-                Some(list) => Expr::In(Box::new(left), list),
-                None => left,
-            })
-            .boxed();
-
-        let and_expr = in_expr
-            .clone()
-            .foldl(just(Token::And).ignore_then(in_expr).repeated(), |l, r| {
-                Expr::And(Box::new(l), Box::new(r))
-            })
-            .labelled("and")
-            .boxed();
-
-        and_expr
-            .clone()
-            .foldl(just(Token::Or).ignore_then(and_expr).repeated(), |l, r| {
-                Expr::Or(Box::new(l), Box::new(r))
-            })
-            .labelled("or")
-            .boxed()
-    })
-}
-
 fn agg_default_name(agg: &Aggregation) -> String {
     match agg {
         Aggregation::Count => "count_".to_string(),
@@ -784,205 +363,83 @@ fn name_summarize_by(exprs: Vec<(Option<Field>, Expr)>) -> Vec<ByField> {
     result
 }
 
-fn query_step_parser<'a, I>(
-    query_expr: impl Parser<'a, I, Vec<QueryStep>, extra::Err<Rich<'a, Token>>> + Clone + 'a,
-) -> impl Parser<'a, I, QueryStep, extra::Err<Rich<'a, Token>>> + Clone
-where
-    I: ValueInput<'a, Token = Token, Span = SimpleSpan>,
-{
-    let expr = expr_parser().labelled("expression");
-    let field_no_arr = field_parser(false);
-    let field = field_parser(true);
+impl KqlParser {
+    pub fn new() -> Self {
+        Self {
+            now: OffsetDateTime::now_utc(),
+        }
+    }
 
-    let filter_step = just(Token::Where)
-        .or(just(Token::Filter))
-        .ignore_then(
-            just(Token::Pipe)
-                .rewind()
-                .validate(|_, e, emitter| {
-                    emitter.emit(Rich::custom(e.span(), "expected expression after where"));
-                    Expr::Literal(Value::Null)
-                })
-                .or(expr.clone()),
-        )
-        .map(QueryStep::Filter)
-        .labelled("filter")
-        .boxed();
+    pub fn parse(&self, query: &str) -> Result<Vec<QueryStep>, Vec<ParseError>> {
+        let token_iter = Token::lexer(query).spanned().map(|(tok, span)| match tok {
+            Ok(tok) => (tok, span.into()),
+            Err(()) => (Token::Error, span.into()),
+        });
 
-    let project_expr = (field_no_arr.clone().then_ignore(just(Token::Eq)).or_not())
-        .then(expr.clone())
-        .map(|(maybe_to, from)| UnnamedProjectField { from, to: maybe_to })
-        .labelled("project expression")
-        .boxed();
+        let token_stream =
+            Stream::from_iter(token_iter).map((0..query.len()).into(), |(t, s): (_, _)| (t, s));
 
-    let project_exprs = project_expr
-        .separated_by(just(Token::Comma))
-        .at_least(1)
-        .collect::<Vec<_>>();
-
-    let project_step = just(Token::Project)
-        .ignore_then(
-            just(Token::Pipe)
-                .rewind()
-                .validate(|_, e, emitter| {
-                    emitter.emit(Rich::custom(e.span(), "expected expression after project"));
-                    vec![UnnamedProjectField {
-                        from: Expr::Literal(Value::Null),
-                        to: None,
-                    }]
-                })
-                .or(project_exprs.clone()),
-        )
-        .map(|fields: Vec<UnnamedProjectField>| QueryStep::Project(name_project_fields(fields)))
-        .labelled("project")
-        .boxed();
-
-    let extend_step = just(Token::Extend)
-        .ignore_then(project_exprs)
-        .map(|fields: Vec<UnnamedProjectField>| QueryStep::Extend(name_project_fields(fields)))
-        .labelled("extend");
-
-    let project_rename_expr = field_no_arr
-        .clone()
-        .then(just(Token::Eq).ignore_then(field_no_arr.clone()))
-        .map(|(to, from)| (from, to))
-        .labelled("project-rename expression")
-        .boxed();
-
-    let project_rename_exprs = project_rename_expr
-        .separated_by(just(Token::Comma))
-        .at_least(1)
-        .collect::<Vec<_>>();
-
-    let project_rename_step = just(Token::ProjectRename)
-        .ignore_then(project_rename_exprs.clone())
-        .map(QueryStep::Rename)
-        .labelled("project-rename")
-        .boxed();
-
-    let mv_expand_exprs = field
-        .clone()
-        .separated_by(just(Token::Comma))
-        .at_least(1)
-        .collect::<Vec<_>>();
-
-    let mv_expand_step = just(Token::MvExpand)
-        .ignore_then(
-            just(Token::Kind)
-                .ignore_then(just(Token::Eq))
-                .ignore_then(
-                    select! {
-                        Token::Bag => ExpandKind::Bag,
-                        Token::Array => ExpandKind::Array,
-                    }
-                    .recover_with(skip_until(
-                        any().ignored(),
-                        one_of([Token::Pipe, Token::Comma]).ignored(),
-                        ExpandKind::default,
-                    )),
-                )
-                .or_not(),
-        )
-        .then(mv_expand_exprs)
-        .map(|(kind, fields)| {
-            QueryStep::Expand(Expand {
-                fields,
-                kind: kind.unwrap_or_default(),
-            })
-        })
-        .labelled("mv-expand")
-        .boxed();
-
-    let limit_int = select! { Token::Integer(x) => x }
-        .validate(|x, e, emitter| {
-            if x < 0 {
-                emitter.emit(Rich::custom(
-                    e.span(),
-                    "limit must be a positive number. Use 'limit 100' or 'take 50'",
-                ));
-                100
-            } else {
-                x as u64
+        match self
+            .clone()
+            .query_parser()
+            .parse(token_stream)
+            .into_result()
+        {
+            Ok(expr) => Ok(expr),
+            Err(errs) => {
+                let parse_errors: Vec<ParseError> = errs
+                    .into_iter()
+                    .map(|err| {
+                        let span = err.span().into_range();
+                        let (line, column) = offset_to_line_col(query, span.start);
+                        ParseError {
+                            span,
+                            line,
+                            column,
+                            message: format!("{err:?}"),
+                            reason: format!("{:?}", err.reason()),
+                        }
+                    })
+                    .collect();
+                Err(parse_errors)
             }
-        })
-        .labelled("limit value");
+        }
+    }
 
-    let limit_step = just(Token::Limit)
-        .or(just(Token::Take))
-        .ignore_then(limit_int)
-        .map(QueryStep::Limit)
-        .labelled("limit")
-        .boxed();
+    fn now_expr(self) -> Expr {
+        Expr::Literal(json!(self.now))
+    }
 
-    let sort_expr = field
-        .clone()
-        .then(
-            just(Token::Asc)
-                .to(SortOrder::Asc)
-                .or(just(Token::Desc).to(SortOrder::Desc))
-                .or_not(),
-        )
-        .then(
-            just(Token::Nulls)
-                .ignore_then(
-                    just(Token::First)
-                        .to(NullsOrder::First)
-                        .or(just(Token::Last).to(NullsOrder::Last))
-                        .recover_with(skip_until(
-                            any().ignored(),
-                            one_of([Token::Comma, Token::Pipe]).ignored(),
-                            NullsOrder::default,
-                        )),
-                )
-                .or_not(),
-        )
-        .map(|((by, order), nulls)| Sort {
-            by,
-            order: order.unwrap_or_default(),
-            nulls: nulls.unwrap_or_default(),
-        })
-        .labelled("sort expression")
-        .boxed();
+    fn datetime_parser<'a, I>(self) -> impl Parser<'a, I, Expr, extra::Err<Rich<'a, Token>>> + Clone
+    where
+        I: ValueInput<'a, Token = Token, Span = SimpleSpan>,
+    {
+        let now_val = self.now_expr();
+        let now_val2 = now_val.clone();
 
-    let sort_exprs = sort_expr
-        .separated_by(just(Token::Comma))
-        .at_least(1)
-        .collect::<Vec<_>>();
-
-    let sort_step = just(Token::Sort)
-        .or(just(Token::Order))
-        .ignore_then(just(Token::By).recover_with(skip_until(
-            any().ignored(),
-            one_of([Token::Pipe, Token::Comma]).ignored(),
-            || Token::By,
-        )))
-        .ignore_then(sort_exprs.clone())
-        .map(QueryStep::Sort)
-        .labelled("sort")
-        .boxed();
-
-    let top_step = just(Token::Top)
-        .ignore_then(limit_int)
-        .then_ignore(just(Token::By).recover_with(skip_until(
-            any().ignored(),
-            one_of([Token::Pipe]).ignored(),
-            || Token::By,
-        )))
-        .then(sort_exprs)
-        .map(|(limit, sorts)| QueryStep::Top(sorts, limit))
-        .labelled("top")
-        .boxed();
-
-    let summarize_agg = agg_zero_param!(Count => Count)
-        .or(agg_single_param!(field; DCount => DCount))
-        .or(agg_single_param!(field; Sum => Sum))
-        .or(agg_single_param!(field; Avg => Avg))
-        .or(agg_single_param!(field; Min => Min))
-        .or(agg_single_param!(field; Max => Max))
-        .or(just(Token::Countif)
+        let datetime = just(Token::Datetime)
             .ignore_then(
-                expr.clone()
-                    .delimited_by(just(Token::LParen), just(Token::RParen))
+                // datetime() - current time.
+                just(Token::LParen)
+                    .ignore_then(just(Token::RParen))
+                    .map(move |_| now_val.clone())
+                    .or(
+                        // datetime(null) - null value.
+                        just(Token::LParen)
+                            .ignore_then(just(Token::Null))
+                            .then_ignore(just(Token::RParen))
+                            .map(|_| Expr::Literal(Value::Null)),
+                    )
+                    .or(
+                        // datetime(year.month.day hour:minute:second.milliseconds)
+                        // or datetime(year.month.day).
+                        just(Token::LParen)
+                            .ignore_then(
+                                select! { Token::DatetimeLiteral(x) => Expr::Literal(Value::from(x)) },
+                            )
+                            .then_ignore(just(Token::RParen))
+                            .boxed(),
+                    )
                     .recover_with(via_parser(nested_delimiters(
                         Token::LParen,
                         Token::RParen,
@@ -990,319 +447,895 @@ where
                         |_| Expr::Literal(Value::Null),
                     ))),
             )
-            .map(Aggregation::Countif))
-        .labelled("summarize aggregation")
-        .boxed();
+            .labelled("datetime")
+            .boxed();
 
-    let summarize_agg_expr = (field_no_arr.clone().then_ignore(just(Token::Eq)).or_not())
-        .then(summarize_agg)
-        .map(|(maybe_field, agg)| (maybe_field, agg))
-        .labelled("summarize aggregation expression")
-        .boxed();
+        let now = just(Token::Now)
+            .ignore_then(just(Token::LParen))
+            .ignore_then(just(Token::RParen))
+            .map(move |_| now_val2.clone())
+            .recover_with(via_parser(nested_delimiters(
+                Token::LParen,
+                Token::RParen,
+                [(Token::LBracket, Token::RBracket)],
+                |_| Expr::Literal(Value::Null),
+            )))
+            .labelled("now")
+            .boxed();
 
-    let summarize_agg_exprs = summarize_agg_expr
-        .separated_by(just(Token::Comma))
-        .collect::<Vec<_>>()
-        .boxed();
+        datetime.or(now).labelled("datetime literal").boxed()
+    }
 
-    let summarize_by_expr = field_no_arr
-        .clone()
-        .then_ignore(just(Token::Eq))
-        .or_not()
-        .then(expr.clone())
-        .labelled("summarize by expression")
-        .boxed();
+    fn expr_parser<'a, I>(self) -> impl Parser<'a, I, Expr, extra::Err<Rich<'a, Token>>> + Clone
+    where
+        I: ValueInput<'a, Token = Token, Span = SimpleSpan>,
+    {
+        let datetime = self.datetime_parser();
 
-    let summarize_step = just(Token::Summarize)
-        .ignore_then(summarize_agg_exprs)
-        .then(
-            just(Token::By)
-                .ignore_then(
-                    summarize_by_expr
-                        .separated_by(just(Token::Comma))
-                        .collect::<Vec<_>>(),
-                )
-                .or_not(),
-        )
-        .map(|(aggs_tuple, by)| {
-            let mut aggs = BTreeMap::new();
-            let mut unnamed_aggs = vec![];
-            for (maybe_field, agg) in aggs_tuple {
-                if let Some(field) = maybe_field {
-                    aggs.insert(field, agg);
-                } else {
-                    unnamed_aggs.push(agg);
-                }
+        recursive(move |expr| {
+            let string_literal = select! {
+                Token::String(x) => x
             }
-
-            for agg in unnamed_aggs {
-                let base = agg_default_name(&agg);
-                let mut name = base.clone();
-                let mut counter = 1;
-                while aggs.contains_key(&Field::from_str(&name).unwrap()) {
-                    name = format!("{}{}", base, counter);
-                    counter += 1;
+            .validate(|val, e, emitter| match val {
+                StringValue::Text(text) => text,
+                StringValue::Bytes(_) => {
+                    emitter.emit(Rich::custom(
+                        e.span(),
+                        "byte strings are currently not supported. Use regular strings with double quotes",
+                    ));
+                    String::new()
                 }
-                let field = Field::from_str(&name).unwrap();
-                aggs.insert(field, agg);
-            }
-            QueryStep::Summarize(Summarize {
-                aggs,
-                by: name_summarize_by(by.unwrap_or_default()),
             })
-        })
-        .labelled("summarize")
-        .boxed();
+            .labelled("string literal")
+            .boxed();
 
-    let distinct_step = just(Token::Distinct)
-        .ignore_then(
-            field
-                .clone()
-                .recover_with(skip_until(
-                    any().ignored(),
-                    one_of([Token::Comma, Token::Pipe]).ignored(),
-                    || Field::from_str(ERROR_FIELD_NAME).expect("error field"),
-                ))
-                .separated_by(just(Token::Comma))
-                .collect::<Vec<_>>(),
-        )
-        .map(QueryStep::Distinct)
-        .labelled("distinct")
-        .boxed();
+            let datetime = datetime.clone();
 
-    let union_step = just(Token::Union)
-        .ignore_then(
-            query_expr
-                .clone()
-                .delimited_by(just(Token::LParen), just(Token::RParen))
-                .recover_with(via_parser(nested_delimiters(
-                    Token::LParen,
-                    Token::RParen,
-                    [
-                        (Token::LParen, Token::RParen),
-                        (Token::LBracket, Token::RBracket),
-                    ],
-                    |_| vec![QueryStep::Count],
-                ))),
-        )
-        .map(QueryStep::Union)
-        .labelled("union")
-        .boxed();
+            let literal = select! {
+                Token::Integer(x) => {
+                    Expr::Literal(json!(x))
+                },
+                Token::Float(x) => Expr::Literal(json!(x)),
+                Token::Bool(x) => Expr::Literal(json!(x)),
+                Token::Timespan(x) => Expr::Literal(json!(x)),
+                Token::Null => Expr::Literal(Value::Null),
+            }
+            .or(string_literal.map(|x| Expr::Literal(json!(x))))
+            .labelled("literal")
+            .boxed();
 
-    let join_prefixed_field = just(Token::Dollar)
-        .ignore_then(select! {
-            Token::Left => true,
-            Token::Right => false,
-        })
-        .then_ignore(just(Token::Dot))
-        .then(field.clone())
-        .boxed();
+            let field = field_parser(true);
 
-    let join_condition = join_prefixed_field
-        .clone()
-        .then_ignore(just(Token::DoubleEq))
-        .then(join_prefixed_field)
-        .validate(
-            |((left_side, left_expr), (right_side, right_expr)), e, emitter| match (
-                left_side, right_side,
-            ) {
-                (true, false) => (left_expr, right_expr),
-                (false, true) => (right_expr, left_expr),
-                (true, true) => {
-                    emitter.emit(Rich::custom(
-                        e.span(),
-                        "join condition has both sides marked as $left. Use '$left.field == $right.field'",
-                    ));
-                    (left_expr, right_expr)
-                }
-                (false, false) => {
-                    emitter.emit(Rich::custom(
-                        e.span(),
-                        "join condition has both sides marked as $right. Use '$left.field == $right.field'",
-                    ));
-                    (left_expr, right_expr)
-                }
-            },
-        )
-        .or(field.clone().map(|f| (f.clone(), f)))
-        .recover_with(skip_then_retry_until(
-            any().ignored(),
-            just(Token::Pipe).ignored(),
-        ))
-        .labelled("join on condition")
-        .boxed();
-
-    let join_step = just(Token::Join)
-        .ignore_then(
-            just(Token::Kind)
-                .ignore_then(just(Token::Eq))
-                .ignore_then(select! {
-                    Token::Inner => JoinType::Inner,
-                    Token::Outer => JoinType::Outer,
-                    Token::Left => JoinType::Left,
-                    Token::Right => JoinType::Right,
-                })
-                .or_not(),
-        )
-        .then(
-            just(Token::Hint)
-                .ignore_then(just(Token::Dot))
-                .ignore_then(just(Token::Partitions))
-                .ignore_then(just(Token::Eq))
+            let exists = just(Token::Exists)
                 .ignore_then(
-                    select! { Token::Integer(x) => x }
-                        .validate(|x, e, emitter| {
-                            if x <= 0 {
-                                emitter.emit(Rich::custom(
-                                    e.span(),
-                                    "partition count must be positive. Use 'hint.partitions=2' or similar",
-                                ));
-                                1 // default to 1
-                            } else {
-                                x
-                            }
-                        })
+                    expr.clone()
+                        .delimited_by(just(Token::LParen), just(Token::RParen))
+                        .recover_with(via_parser(nested_delimiters(
+                            Token::LParen,
+                            Token::RParen,
+                            [(Token::LBracket, Token::RBracket)],
+                            |_| {
+                                Expr::Field(Field::from_str(ERROR_FIELD_NAME).expect("error field"))
+                            },
+                        ))),
                 )
-                .or_not(),
-        )
-        .then(
-            query_expr
+                .map(|e| Expr::Exists(Box::new(e)))
+                .labelled("exists")
+                .boxed();
+
+            let case = just(Token::Case)
+                .ignore_then(
+                    expr.clone()
+                        .separated_by(just(Token::Comma))
+                        .collect::<Vec<_>>()
+                        .delimited_by(just(Token::LParen), just(Token::RParen))
+                        .recover_with(via_parser(nested_delimiters(
+                            Token::LParen,
+                            Token::RParen,
+                            [(Token::LBracket, Token::RBracket)],
+                            |_| vec![],
+                        ))),
+                )
+                .validate(|mut items, e, emitter| {
+                    if items.len() < 3 {
+                        emitter.emit(Rich::custom(
+                            e.span(),
+                            "case() requires at least 3 arguments: case(condition, result, defaultResult). Example: case(x > 10, \"high\", \"low\")",
+                        ));
+                        return Expr::Literal(Value::Null);
+                    }
+
+                    let else_expr = items.pop().unwrap();
+                    let mut pairs = Vec::new();
+                    let mut iter = items.into_iter();
+
+                    while let (Some(pred), Some(then)) = (iter.next(), iter.next()) {
+                        pairs.push((pred, then));
+                    }
+
+                    if iter.next().is_some() {
+                        emitter.emit(Rich::custom(
+                            e.span(),
+                            "case() needs pairs of (condition, result) before the default. Example: case(x > 10, \"high\", x > 5, \"medium\", \"low\")",
+                        ));
+                    }
+
+                    Expr::Case(pairs, Box::new(else_expr))
+                })
+                .labelled("case")
+                .boxed();
+
+            let iff = just(Token::Iff)
+                .ignore_then(
+                    expr.clone()
+                        .then_ignore(just(Token::Comma))
+                        .then(expr.clone())
+                        .then_ignore(just(Token::Comma))
+                        .then(expr.clone())
+                        .delimited_by(just(Token::LParen), just(Token::RParen))
+                        .recover_with(via_parser(nested_delimiters(
+                            Token::LParen,
+                            Token::RParen,
+                            [(Token::LBracket, Token::RBracket)],
+                            |_| {
+                                (
+                                    (Expr::Literal(Value::Null), Expr::Literal(Value::Null)),
+                                    Expr::Literal(Value::Null),
+                                )
+                            },
+                        ))),
+                )
+                .map(|((cond, then_expr), else_expr)| {
+                    Expr::Case(vec![(cond, then_expr)], Box::new(else_expr))
+                })
+                .labelled("iff")
+                .boxed();
+
+            let bin = just(Token::Bin)
+                .ignore_then(
+                    expr.clone()
+                        .then_ignore(just(Token::Comma))
+                        .then(expr.clone())
+                        .delimited_by(just(Token::LParen), just(Token::RParen))
+                        .recover_with(via_parser(nested_delimiters(
+                            Token::LParen,
+                            Token::RParen,
+                            [(Token::LBracket, Token::RBracket)],
+                            |_| (Expr::Literal(Value::Null), Expr::Literal(Value::Null)),
+                        ))),
+                )
+                .map(|(l, r)| Expr::Bin(Box::new(l), Box::new(r)))
+                .labelled("bin")
+                .boxed();
+
+            let extract = just(Token::Extract)
+                .ignore_then(
+                    expr.clone()
+                        .then_ignore(just(Token::Comma))
+                        .then(expr.clone())
+                        .then_ignore(just(Token::Comma))
+                        .then(expr.clone())
+                        .delimited_by(just(Token::LParen), just(Token::RParen))
+                        .recover_with(via_parser(nested_delimiters(
+                            Token::LParen,
+                            Token::RParen,
+                            [(Token::LBracket, Token::RBracket)],
+                            |_| {
+                                (
+                                    (Expr::Literal(Value::Null), Expr::Literal(Value::Null)),
+                                    Expr::Literal(Value::Null),
+                                )
+                            },
+                        ))),
+                )
+                .map(|((regex, group), source)| {
+                    Expr::Extract(Box::new(regex), Box::new(group), Box::new(source))
+                })
+                .labelled("extract")
+                .boxed();
+
+            let expr_delimited_by_parentheses = expr
+                .clone()
                 .delimited_by(just(Token::LParen), just(Token::RParen))
                 .recover_with(via_parser(nested_delimiters(
                     Token::LParen,
                     Token::RParen,
                     [(Token::LBracket, Token::RBracket)],
-                    |_| vec![QueryStep::Count],
-                ))),
-        )
-        .then(just(Token::On).ignore_then(join_condition))
-        .map(|(((kind, partitions), steps), on)| {
-            QueryStep::Join(
-                Join {
-                    on,
-                    type_: kind.unwrap_or_default(),
-                    partitions: partitions.unwrap_or(1i64) as usize,
-                },
-                steps,
-            )
-        })
-        .labelled("join")
-        .boxed();
+                    |_| Expr::Literal(Value::Null),
+                )))
+                .labelled("parentheses over an expression");
 
-    let count_step = just(Token::Count)
-        .to(QueryStep::Count)
-        .labelled("count")
-        .boxed();
+            let not = just(Token::Not)
+                .ignore_then(expr_delimited_by_parentheses.clone())
+                .map(|expr| Expr::Not(Box::new(expr.clone())))
+                .labelled("not")
+                .boxed();
 
-    let ident = ident_parser();
-    let tee_step = just(Token::Tee)
-        .ignore_then(ident.clone())
-        .then_ignore(just(Token::Dot))
-        .then(ident.clone())
-        .map(|(connector, collection)| QueryStep::Tee {
-            connector,
-            collection,
-        })
-        .labelled("tee")
-        .boxed();
+            let negate = just(Token::Minus)
+                .ignore_then(literal.clone())
+                .map(|expr| Expr::Minus(Box::new(Expr::Literal(json!(0))), Box::new(expr)))
+                .labelled("negate")
+                .boxed();
 
-    let write_step = just(Token::Write)
-        .ignore_then(ident.clone())
-        .then_ignore(just(Token::Dot))
-        .then(ident)
-        .map(|(connector, collection)| QueryStep::Write {
-            connector,
-            collection,
-        })
-        .labelled("write")
-        .boxed();
-
-    filter_step
-        .or(project_step)
-        .or(extend_step)
-        .or(project_rename_step)
-        .or(mv_expand_step)
-        .or(limit_step)
-        .or(sort_step)
-        .or(top_step)
-        .or(summarize_step)
-        .or(distinct_step)
-        .or(union_step)
-        .or(join_step)
-        .or(count_step)
-        .or(tee_step)
-        .or(write_step)
-        .recover_with(skip_until(
-            none_of([Token::Pipe]).ignored(),
-            just(Token::Pipe).ignored(),
-            || QueryStep::Count,
-        ))
-        .boxed()
-}
-
-fn query_parser<'a, I>() -> impl Parser<'a, I, Vec<QueryStep>, extra::Err<Rich<'a, Token>>> + Clone
-where
-    I: ValueInput<'a, Token = Token, Span = SimpleSpan>,
-{
-    recursive(|query_expr| {
-        let ident = ident_parser();
-
-        let let_step = just(Token::Let)
-            .ignore_then(ident.clone())
-            .then_ignore(just(Token::Eq))
-            .then(query_expr.clone().recover_with(skip_until(
-                any().ignored(),
-                just(Token::Semicolon).ignored(),
-                || vec![QueryStep::Count],
-            )))
-            .then_ignore(just(Token::Semicolon))
-            .map(|(name, steps)| QueryStep::Let(name, steps))
-            .labelled("let")
+            let cast = select! {
+                Token::ToString => CastType::String,
+                Token::ToInt | Token::ToLong => CastType::Int,
+                Token::ToReal | Token::ToDecimal => CastType::Float,
+                Token::ToBool => CastType::Bool,
+            }
+            .then(expr_delimited_by_parentheses.clone())
+            .map(|(cast, e)| Expr::Cast(cast, Box::new(e)))
+            .labelled("cast")
             .boxed();
 
-        let scan_step = ident
+            let atom = literal
+                .or(expr_delimited_by_parentheses)
+                .or(bin)
+                .or(extract)
+                .or(not)
+                .or(negate)
+                .or(cast)
+                .or(exists)
+                .or(case)
+                .or(iff)
+                .or(datetime)
+                // Must be last (fields can contain tokens that are keywords).
+                .or(field.map(Expr::Field))
+                .recover_with(skip_then_retry_until(
+                    any().ignored(),
+                    one_of(EXPR_TERMINATORS).ignored(),
+                ))
+                .boxed();
+
+            let mul_div = binary_ops!(atom;
+                Token::Mul => Expr::Mul,
+                Token::Div => Expr::Div,
+            )
+            .labelled("multiplication or division");
+
+            let add_sub = binary_ops!(mul_div;
+                Token::Plus  => Expr::Plus,
+                Token::Minus => Expr::Minus,
+            )
+            .labelled("addition or subtraction");
+
+            let comparisons = binary_ops!(add_sub;
+                Token::DoubleEq => Expr::Eq,
+                Token::Ne       => Expr::Ne,
+                Token::Gte      => Expr::Gte,
+                Token::Gt       => Expr::Gt,
+                Token::Lte      => Expr::Lte,
+                Token::Lt       => Expr::Lt,
+            )
+            .labelled("comparison");
+
+            let text_ops = binary_ops!(comparisons;
+                Token::StartsWith => Expr::StartsWith,
+                Token::EndsWith   => Expr::EndsWith,
+                Token::Contains   => Expr::Contains,
+                Token::Has        => Expr::Has,
+                Token::HasCs      => Expr::HasCs,
+            )
+            .labelled("text operation");
+
+            let bin_op_expr = text_ops
+                .recover_with(skip_until(
+                    any().ignored(),
+                    one_of([Token::Comma, Token::Pipe]).ignored(),
+                    || Expr::Literal(Value::Null),
+                ))
+                .boxed();
+
+            let range = bin_op_expr
+                .clone()
+                .then_ignore(just(Token::DotDot))
+                .then(bin_op_expr.clone())
+                .delimited_by(just(Token::LParen), just(Token::RParen))
+                .recover_with(via_parser(nested_delimiters(
+                    Token::LParen,
+                    Token::RParen,
+                    [(Token::LBracket, Token::RBracket)],
+                    |_| (Expr::Literal(Value::Null), Expr::Literal(Value::Null)),
+                )))
+                .boxed();
+
+            let between_expr = bin_op_expr
+                .clone()
+                .then(
+                    choice((
+                        just(Token::Between).to(true),
+                        just(Token::NotBetween).to(false),
+                    ))
+                    .then(range)
+                    .or_not(),
+                )
+                .map(|(left, maybe_range)| match maybe_range {
+                    Some((is_between, (start, end))) => {
+                        if is_between {
+                            Expr::And(
+                                Box::new(Expr::Gte(Box::new(left.clone()), Box::new(start))),
+                                Box::new(Expr::Lte(Box::new(left), Box::new(end))),
+                            )
+                        } else {
+                            Expr::Or(
+                                Box::new(Expr::Lt(Box::new(left.clone()), Box::new(start))),
+                                Box::new(Expr::Gt(Box::new(left), Box::new(end))),
+                            )
+                        }
+                    }
+                    None => left,
+                })
+                .boxed();
+
+            let expr_list = between_expr
+                .clone()
+                .recover_with(skip_until(
+                    any().ignored(),
+                    one_of([Token::Comma, Token::RParen]).ignored(),
+                    || Expr::Literal(Value::Null),
+                ))
+                .separated_by(just(Token::Comma))
+                .collect::<Vec<_>>()
+                .delimited_by(just(Token::LParen), just(Token::RParen))
+                .recover_with(via_parser(nested_delimiters(
+                    Token::LParen,
+                    Token::RParen,
+                    [(Token::LBracket, Token::RBracket)],
+                    |_| vec![],
+                )))
+                .boxed();
+
+            let in_expr = between_expr
+                .clone()
+                .then(just(Token::In).ignore_then(expr_list).or_not())
+                .map(|(left, maybe_list)| match maybe_list {
+                    Some(list) => Expr::In(Box::new(left), list),
+                    None => left,
+                })
+                .boxed();
+
+            let and_expr = in_expr
+                .clone()
+                .foldl(just(Token::And).ignore_then(in_expr).repeated(), |l, r| {
+                    Expr::And(Box::new(l), Box::new(r))
+                })
+                .labelled("and")
+                .boxed();
+
+            and_expr
+                .clone()
+                .foldl(just(Token::Or).ignore_then(and_expr).repeated(), |l, r| {
+                    Expr::Or(Box::new(l), Box::new(r))
+                })
+                .labelled("or")
+                .boxed()
+        })
+    }
+
+    fn query_step_parser<'a, I>(
+        self,
+        query_expr: impl Parser<'a, I, Vec<QueryStep>, extra::Err<Rich<'a, Token>>> + Clone + 'a,
+    ) -> impl Parser<'a, I, QueryStep, extra::Err<Rich<'a, Token>>> + Clone
+    where
+        I: ValueInput<'a, Token = Token, Span = SimpleSpan>,
+    {
+        let expr = self.expr_parser().labelled("expression");
+        let field_no_arr = field_parser(false);
+        let field = field_parser(true);
+
+        let filter_step = just(Token::Where)
+            .or(just(Token::Filter))
+            .ignore_then(
+                just(Token::Pipe)
+                    .rewind()
+                    .validate(|_, e, emitter| {
+                        emitter.emit(Rich::custom(e.span(), "expected expression after where"));
+                        Expr::Literal(Value::Null)
+                    })
+                    .or(expr.clone()),
+            )
+            .map(QueryStep::Filter)
+            .labelled("filter")
+            .boxed();
+
+        let project_expr = (field_no_arr.clone().then_ignore(just(Token::Eq)).or_not())
+            .then(expr.clone())
+            .map(|(maybe_to, from)| UnnamedProjectField { from, to: maybe_to })
+            .labelled("project expression")
+            .boxed();
+
+        let project_exprs = project_expr
+            .separated_by(just(Token::Comma))
+            .at_least(1)
+            .collect::<Vec<_>>();
+
+        let project_step = just(Token::Project)
+            .ignore_then(
+                just(Token::Pipe)
+                    .rewind()
+                    .validate(|_, e, emitter| {
+                        emitter.emit(Rich::custom(e.span(), "expected expression after project"));
+                        vec![UnnamedProjectField {
+                            from: Expr::Literal(Value::Null),
+                            to: None,
+                        }]
+                    })
+                    .or(project_exprs.clone()),
+            )
+            .map(|fields: Vec<UnnamedProjectField>| QueryStep::Project(name_project_fields(fields)))
+            .labelled("project")
+            .boxed();
+
+        let extend_step = just(Token::Extend)
+            .ignore_then(project_exprs)
+            .map(|fields: Vec<UnnamedProjectField>| QueryStep::Extend(name_project_fields(fields)))
+            .labelled("extend");
+
+        let project_rename_expr = field_no_arr
             .clone()
-            .then(
-                just(Token::Dot)
-                    .ignore_then(ident.recover_with(skip_until(
-                        any().ignored(),
-                        one_of([Token::Pipe]).ignored(),
-                        || ERROR_FIELD_NAME.to_string(),
-                    )))
+            .then(just(Token::Eq).ignore_then(field_no_arr.clone()))
+            .map(|(to, from)| (from, to))
+            .labelled("project-rename expression")
+            .boxed();
+
+        let project_rename_exprs = project_rename_expr
+            .separated_by(just(Token::Comma))
+            .at_least(1)
+            .collect::<Vec<_>>();
+
+        let project_rename_step = just(Token::ProjectRename)
+            .ignore_then(project_rename_exprs.clone())
+            .map(QueryStep::Rename)
+            .labelled("project-rename")
+            .boxed();
+
+        let mv_expand_exprs = field
+            .clone()
+            .separated_by(just(Token::Comma))
+            .at_least(1)
+            .collect::<Vec<_>>();
+
+        let mv_expand_step = just(Token::MvExpand)
+            .ignore_then(
+                just(Token::Kind)
+                    .ignore_then(just(Token::Eq))
+                    .ignore_then(
+                        select! {
+                            Token::Bag => ExpandKind::Bag,
+                            Token::Array => ExpandKind::Array,
+                        }
+                        .recover_with(skip_until(
+                            any().ignored(),
+                            one_of([Token::Pipe, Token::Comma]).ignored(),
+                            ExpandKind::default,
+                        )),
+                    )
                     .or_not(),
             )
-            .map(|(connector, collection)| {
-                QueryStep::Scan(match collection {
-                    Some(collection) => ScanKind::Collection {
-                        connector,
-                        collection,
-                    },
-                    None => ScanKind::Var(connector),
+            .then(mv_expand_exprs)
+            .map(|(kind, fields)| {
+                QueryStep::Expand(Expand {
+                    fields,
+                    kind: kind.unwrap_or_default(),
                 })
             })
-            .labelled("scan")
+            .labelled("mv-expand")
             .boxed();
 
-        let pipeline = query_step_parser(query_expr)
-            .separated_by(just(Token::Pipe))
-            .collect::<Vec<_>>()
-            .boxed();
-
-        let_step
-            .repeated()
-            .collect::<Vec<_>>()
-            .then(scan_step)
-            .then(just(Token::Pipe).ignore_then(pipeline).or_not())
-            .map(|((lets, scan), steps)| {
-                let mut all_steps = lets;
-                all_steps.push(scan);
-                if let Some(mut pipeline_steps) = steps {
-                    all_steps.append(&mut pipeline_steps);
+        let limit_int = select! { Token::Integer(x) => x }
+            .validate(|x, e, emitter| {
+                if x < 0 {
+                    emitter.emit(Rich::custom(
+                        e.span(),
+                        "limit must be a positive number. Use 'limit 100' or 'take 50'",
+                    ));
+                    100
+                } else {
+                    x as u64
                 }
-                all_steps
             })
-            .recover_with(skip_then_retry_until(any().ignored(), end()))
-            .labelled("query")
+            .labelled("limit value");
+
+        let limit_step = just(Token::Limit)
+            .or(just(Token::Take))
+            .ignore_then(limit_int)
+            .map(QueryStep::Limit)
+            .labelled("limit")
+            .boxed();
+
+        let sort_expr = field
+            .clone()
+            .then(
+                just(Token::Asc)
+                    .to(SortOrder::Asc)
+                    .or(just(Token::Desc).to(SortOrder::Desc))
+                    .or_not(),
+            )
+            .then(
+                just(Token::Nulls)
+                    .ignore_then(
+                        just(Token::First)
+                            .to(NullsOrder::First)
+                            .or(just(Token::Last).to(NullsOrder::Last))
+                            .recover_with(skip_until(
+                                any().ignored(),
+                                one_of([Token::Comma, Token::Pipe]).ignored(),
+                                NullsOrder::default,
+                            )),
+                    )
+                    .or_not(),
+            )
+            .map(|((by, order), nulls)| Sort {
+                by,
+                order: order.unwrap_or_default(),
+                nulls: nulls.unwrap_or_default(),
+            })
+            .labelled("sort expression")
+            .boxed();
+
+        let sort_exprs = sort_expr
+            .separated_by(just(Token::Comma))
+            .at_least(1)
+            .collect::<Vec<_>>();
+
+        let sort_step = just(Token::Sort)
+            .or(just(Token::Order))
+            .ignore_then(just(Token::By).recover_with(skip_until(
+                any().ignored(),
+                one_of([Token::Pipe, Token::Comma]).ignored(),
+                || Token::By,
+            )))
+            .ignore_then(sort_exprs.clone())
+            .map(QueryStep::Sort)
+            .labelled("sort")
+            .boxed();
+
+        let top_step = just(Token::Top)
+            .ignore_then(limit_int)
+            .then_ignore(just(Token::By).recover_with(skip_until(
+                any().ignored(),
+                one_of([Token::Pipe]).ignored(),
+                || Token::By,
+            )))
+            .then(sort_exprs)
+            .map(|(limit, sorts)| QueryStep::Top(sorts, limit))
+            .labelled("top")
+            .boxed();
+
+        let summarize_agg = agg_zero_param!(Count => Count)
+            .or(agg_single_param!(field; DCount => DCount))
+            .or(agg_single_param!(field; Sum => Sum))
+            .or(agg_single_param!(field; Avg => Avg))
+            .or(agg_single_param!(field; Min => Min))
+            .or(agg_single_param!(field; Max => Max))
+            .or(just(Token::Countif)
+                .ignore_then(
+                    expr.clone()
+                        .delimited_by(just(Token::LParen), just(Token::RParen))
+                        .recover_with(via_parser(nested_delimiters(
+                            Token::LParen,
+                            Token::RParen,
+                            [(Token::LBracket, Token::RBracket)],
+                            |_| Expr::Literal(Value::Null),
+                        ))),
+                )
+                .map(Aggregation::Countif))
+            .labelled("summarize aggregation")
+            .boxed();
+
+        let summarize_agg_expr = (field_no_arr.clone().then_ignore(just(Token::Eq)).or_not())
+            .then(summarize_agg)
+            .map(|(maybe_field, agg)| (maybe_field, agg))
+            .labelled("summarize aggregation expression")
+            .boxed();
+
+        let summarize_agg_exprs = summarize_agg_expr
+            .separated_by(just(Token::Comma))
+            .collect::<Vec<_>>()
+            .boxed();
+
+        let summarize_by_expr = field_no_arr
+            .clone()
+            .then_ignore(just(Token::Eq))
+            .or_not()
+            .then(expr.clone())
+            .labelled("summarize by expression")
+            .boxed();
+
+        let summarize_step = just(Token::Summarize)
+            .ignore_then(summarize_agg_exprs)
+            .then(
+                just(Token::By)
+                    .ignore_then(
+                        summarize_by_expr
+                            .separated_by(just(Token::Comma))
+                            .collect::<Vec<_>>(),
+                    )
+                    .or_not(),
+            )
+            .map(|(aggs_tuple, by)| {
+                let mut aggs = BTreeMap::new();
+                let mut unnamed_aggs = vec![];
+                for (maybe_field, agg) in aggs_tuple {
+                    if let Some(field) = maybe_field {
+                        aggs.insert(field, agg);
+                    } else {
+                        unnamed_aggs.push(agg);
+                    }
+                }
+
+                for agg in unnamed_aggs {
+                    let base = agg_default_name(&agg);
+                    let mut name = base.clone();
+                    let mut counter = 1;
+                    while aggs.contains_key(&Field::from_str(&name).unwrap()) {
+                        name = format!("{}{}", base, counter);
+                        counter += 1;
+                    }
+                    let field = Field::from_str(&name).unwrap();
+                    aggs.insert(field, agg);
+                }
+                QueryStep::Summarize(Summarize {
+                    aggs,
+                    by: name_summarize_by(by.unwrap_or_default()),
+                })
+            })
+            .labelled("summarize")
+            .boxed();
+
+        let distinct_step = just(Token::Distinct)
+            .ignore_then(
+                field
+                    .clone()
+                    .recover_with(skip_until(
+                        any().ignored(),
+                        one_of([Token::Comma, Token::Pipe]).ignored(),
+                        || Field::from_str(ERROR_FIELD_NAME).expect("error field"),
+                    ))
+                    .separated_by(just(Token::Comma))
+                    .collect::<Vec<_>>(),
+            )
+            .map(QueryStep::Distinct)
+            .labelled("distinct")
+            .boxed();
+
+        let union_step = just(Token::Union)
+            .ignore_then(
+                query_expr
+                    .clone()
+                    .delimited_by(just(Token::LParen), just(Token::RParen))
+                    .recover_with(via_parser(nested_delimiters(
+                        Token::LParen,
+                        Token::RParen,
+                        [
+                            (Token::LParen, Token::RParen),
+                            (Token::LBracket, Token::RBracket),
+                        ],
+                        |_| vec![QueryStep::Count],
+                    ))),
+            )
+            .map(QueryStep::Union)
+            .labelled("union")
+            .boxed();
+
+        let join_prefixed_field = just(Token::Dollar)
+            .ignore_then(select! {
+                Token::Left => true,
+                Token::Right => false,
+            })
+            .then_ignore(just(Token::Dot))
+            .then(field.clone())
+            .boxed();
+
+        let join_condition = join_prefixed_field
+            .clone()
+            .then_ignore(just(Token::DoubleEq))
+            .then(join_prefixed_field)
+            .validate(
+                |((left_side, left_expr), (right_side, right_expr)), e, emitter| match (
+                    left_side, right_side,
+                ) {
+                    (true, false) => (left_expr, right_expr),
+                    (false, true) => (right_expr, left_expr),
+                    (true, true) => {
+                        emitter.emit(Rich::custom(
+                            e.span(),
+                            "join condition has both sides marked as $left. Use '$left.field == $right.field'",
+                        ));
+                        (left_expr, right_expr)
+                    }
+                    (false, false) => {
+                        emitter.emit(Rich::custom(
+                            e.span(),
+                            "join condition has both sides marked as $right. Use '$left.field == $right.field'",
+                        ));
+                        (left_expr, right_expr)
+                    }
+                },
+            )
+            .or(field.clone().map(|f| (f.clone(), f)))
+            .recover_with(skip_then_retry_until(
+                any().ignored(),
+                just(Token::Pipe).ignored(),
+            ))
+            .labelled("join on condition")
+            .boxed();
+
+        let join_step = just(Token::Join)
+            .ignore_then(
+                just(Token::Kind)
+                    .ignore_then(just(Token::Eq))
+                    .ignore_then(select! {
+                        Token::Inner => JoinType::Inner,
+                        Token::Outer => JoinType::Outer,
+                        Token::Left => JoinType::Left,
+                        Token::Right => JoinType::Right,
+                    })
+                    .or_not(),
+            )
+            .then(
+                just(Token::Hint)
+                    .ignore_then(just(Token::Dot))
+                    .ignore_then(just(Token::Partitions))
+                    .ignore_then(just(Token::Eq))
+                    .ignore_then(
+                        select! { Token::Integer(x) => x }
+                            .validate(|x, e, emitter| {
+                                if x <= 0 {
+                                    emitter.emit(Rich::custom(
+                                        e.span(),
+                                        "partition count must be positive. Use 'hint.partitions=2' or similar",
+                                    ));
+                                    1 // default to 1
+                                } else {
+                                    x
+                                }
+                            })
+                    )
+                    .or_not(),
+            )
+            .then(
+                query_expr
+                    .delimited_by(just(Token::LParen), just(Token::RParen))
+                    .recover_with(via_parser(nested_delimiters(
+                        Token::LParen,
+                        Token::RParen,
+                        [(Token::LBracket, Token::RBracket)],
+                        |_| vec![QueryStep::Count],
+                    ))),
+            )
+            .then(just(Token::On).ignore_then(join_condition))
+            .map(|(((kind, partitions), steps), on)| {
+                QueryStep::Join(
+                    Join {
+                        on,
+                        type_: kind.unwrap_or_default(),
+                        partitions: partitions.unwrap_or(1i64) as usize,
+                    },
+                    steps,
+                )
+            })
+            .labelled("join")
+            .boxed();
+
+        let count_step = just(Token::Count)
+            .to(QueryStep::Count)
+            .labelled("count")
+            .boxed();
+
+        let ident = ident_parser();
+        let tee_step = just(Token::Tee)
+            .ignore_then(ident.clone())
+            .then_ignore(just(Token::Dot))
+            .then(ident.clone())
+            .map(|(connector, collection)| QueryStep::Tee {
+                connector,
+                collection,
+            })
+            .labelled("tee")
+            .boxed();
+
+        let write_step = just(Token::Write)
+            .ignore_then(ident.clone())
+            .then_ignore(just(Token::Dot))
+            .then(ident)
+            .map(|(connector, collection)| QueryStep::Write {
+                connector,
+                collection,
+            })
+            .labelled("write")
+            .boxed();
+
+        filter_step
+            .or(project_step)
+            .or(extend_step)
+            .or(project_rename_step)
+            .or(mv_expand_step)
+            .or(limit_step)
+            .or(sort_step)
+            .or(top_step)
+            .or(summarize_step)
+            .or(distinct_step)
+            .or(union_step)
+            .or(join_step)
+            .or(count_step)
+            .or(tee_step)
+            .or(write_step)
+            .recover_with(skip_until(
+                none_of([Token::Pipe]).ignored(),
+                just(Token::Pipe).ignored(),
+                || QueryStep::Count,
+            ))
             .boxed()
-    })
+    }
+
+    fn query_parser<'a, I>(
+        self,
+    ) -> impl Parser<'a, I, Vec<QueryStep>, extra::Err<Rich<'a, Token>>> + Clone
+    where
+        I: ValueInput<'a, Token = Token, Span = SimpleSpan>,
+    {
+        recursive(move |query_expr| {
+            let ident = ident_parser();
+
+            let let_step = just(Token::Let)
+                .ignore_then(ident.clone())
+                .then_ignore(just(Token::Eq))
+                .then(query_expr.clone().recover_with(skip_until(
+                    any().ignored(),
+                    just(Token::Semicolon).ignored(),
+                    || vec![QueryStep::Count],
+                )))
+                .then_ignore(just(Token::Semicolon))
+                .map(|(name, steps)| QueryStep::Let(name, steps))
+                .labelled("let")
+                .boxed();
+
+            let scan_step = ident
+                .clone()
+                .then(
+                    just(Token::Dot)
+                        .ignore_then(ident.recover_with(skip_until(
+                            any().ignored(),
+                            one_of([Token::Pipe]).ignored(),
+                            || ERROR_FIELD_NAME.to_string(),
+                        )))
+                        .or_not(),
+                )
+                .map(|(connector, collection)| {
+                    QueryStep::Scan(match collection {
+                        Some(collection) => ScanKind::Collection {
+                            connector,
+                            collection,
+                        },
+                        None => ScanKind::Var(connector),
+                    })
+                })
+                .labelled("scan")
+                .boxed();
+
+            let pipeline = self
+                .query_step_parser(query_expr)
+                .separated_by(just(Token::Pipe))
+                .collect::<Vec<_>>()
+                .boxed();
+
+            let_step
+                .repeated()
+                .collect::<Vec<_>>()
+                .then(scan_step)
+                .then(just(Token::Pipe).ignore_then(pipeline).or_not())
+                .map(|((lets, scan), steps)| {
+                    let mut all_steps = lets;
+                    all_steps.push(scan);
+                    if let Some(mut pipeline_steps) = steps {
+                        all_steps.append(&mut pipeline_steps);
+                    }
+                    all_steps
+                })
+                .recover_with(skip_then_retry_until(any().ignored(), end()))
+                .labelled("query")
+                .boxed()
+        })
+    }
 }
