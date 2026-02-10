@@ -107,49 +107,26 @@ fn rewrite_summarize(sum: &Summarize) -> (Summarize, bool) {
 mod tests {
     use miso_workflow::WorkflowStep as S;
     use miso_workflow_types::{expr::Expr, summarize::Summarize};
+    use test_case::test_case;
 
     use super::ConstFolding;
     use crate::test_utils::{by_field, field_expr, project_field};
     use crate::{Optimization, OptimizationResult};
 
-    #[test]
-    fn unchanged_filter_no_folding() {
-        let opt = ConstFolding;
-        let input = vec![S::Filter(field_expr("x"))];
-        assert_eq!(opt.apply(&input, &[]), OptimizationResult::Unchanged);
-    }
-
-    #[test]
-    fn unchanged_project_no_folding() {
-        let opt = ConstFolding;
-        let input = vec![S::Project(vec![project_field("a", field_expr("b"))])];
-        assert_eq!(opt.apply(&input, &[]), OptimizationResult::Unchanged);
-    }
-
-    #[test]
-    fn unchanged_extend_no_folding() {
-        let opt = ConstFolding;
-        let input = vec![S::Extend(vec![project_field("a", field_expr("b"))])];
-        assert_eq!(opt.apply(&input, &[]), OptimizationResult::Unchanged);
-    }
-
-    #[test]
-    fn unchanged_summarize_no_folding() {
-        let opt = ConstFolding;
-        let input = vec![S::Summarize(Summarize {
+    fn summarize_step() -> Summarize {
+        Summarize {
             aggs: Default::default(),
             by: vec![by_field(field_expr("x"), "x")],
-        })];
-        assert_eq!(opt.apply(&input, &[]), OptimizationResult::Unchanged);
+        }
     }
 
-    #[test]
-    fn unchanged_mux_summarize_no_folding() {
+    #[test_case(vec![S::Filter(field_expr("x"))] ; "filter")]
+    #[test_case(vec![S::Project(vec![project_field("a", field_expr("b"))])] ; "project")]
+    #[test_case(vec![S::Extend(vec![project_field("a", field_expr("b"))])] ; "extend")]
+    #[test_case(vec![S::Summarize(summarize_step())] ; "summarize")]
+    #[test_case(vec![S::MuxSummarize(summarize_step())] ; "mux_summarize")]
+    fn unchanged_no_folding(input: Vec<S>) {
         let opt = ConstFolding;
-        let input = vec![S::MuxSummarize(Summarize {
-            aggs: Default::default(),
-            by: vec![by_field(field_expr("x"), "x")],
-        })];
         assert_eq!(opt.apply(&input, &[]), OptimizationResult::Unchanged);
     }
 
