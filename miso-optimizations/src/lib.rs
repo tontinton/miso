@@ -17,6 +17,7 @@ use merge_topns::MergeTopNs;
 use mux_into_union::MuxIntoUnion;
 use pattern::{Group, Pattern};
 use project_propagation::{ProjectPropagationWithEnd, ProjectPropagationWithoutEnd};
+use push_filter_into_join::PushFilterIntoJoin;
 use push_into_scan::PushIntoScan;
 use push_join_into_scan::PushJoinIntoScan;
 use push_limit_into_limit::PushLimitIntoLimit;
@@ -49,6 +50,7 @@ mod merge_topns;
 mod mux_into_union;
 mod pattern;
 mod project_propagation;
+mod push_filter_into_join;
 mod push_into_scan;
 mod push_join_into_scan;
 mod push_limit_into_limit;
@@ -178,6 +180,7 @@ impl Optimizer {
             // Move steps around to enable pushdowns.
             vec![
                 opt!(ReorderFilterBeforeSort),
+                opt!(PushFilterIntoJoin),
                 opt!(MergeConsecutiveExtends),
                 opt!(FoldRenameIntoProject),
                 opt!(MergeConsecutiveProjects),

@@ -348,7 +348,7 @@ fn fold_exprs(
         .expect("fold_exprs requires at least one element")
 }
 
-fn and_all(exprs: impl IntoIterator<Item = Expr>) -> Expr {
+pub fn and_all(exprs: impl IntoIterator<Item = Expr>) -> Expr {
     fold_exprs(exprs, Expr::And)
 }
 
