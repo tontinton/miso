@@ -13,20 +13,17 @@ use ratatui::{
 
 use crate::{
     client::{StreamMessage, query_stream},
-    components::{Action, Component, ErrorModal, Footer, QueryInput, ResultsWithPreview},
+    components::{
+        error_modal::{self, ErrorModal},
+        footer::{self, Footer},
+        query_input::{self, QueryInput},
+        results_with_preview::{self, ResultsWithPreview},
+    },
 };
-
-macro_rules! act {
-    ($self:expr, $action:expr) => {{
-        let action = $action;
-        $self.handle_action(action);
-    }};
-}
 
 /// How many logs to try to fetch (without blocking) before updating the UI.
 const LOGS_CHUNK: usize = 4096;
 
-#[derive(Debug)]
 enum FocusedWindow {
     Results,
     Query,
@@ -35,14 +32,14 @@ enum FocusedWindow {
 
 pub struct App {
     results_view: ResultsWithPreview,
-    query_input_view: QueryInput,
-    footer_view: Footer,
+    query_input: QueryInput,
+    footer: Footer,
     error_modal: ErrorModal,
 
     focused: FocusedWindow,
     redraw: bool,
     exit: bool,
-    clipboard: Clipboard,
+    clipboard: Option<Clipboard>,
 
     query_rx: Option<mpsc::Receiver<StreamMessage>>,
 }
@@ -53,69 +50,60 @@ impl App {
 
         let mut app = Self {
             results_view: ResultsWithPreview::default(),
-            query_input_view: QueryInput::new(query.unwrap_or("".to_string())),
-            footer_view: Footer::default(),
+            query_input: QueryInput::new(query.unwrap_or_default()),
+            footer: Footer::default(),
             error_modal: ErrorModal::default(),
 
             focused: FocusedWindow::Query,
             redraw: true,
             exit: false,
-            clipboard: Clipboard::new().expect("failed to init clipboard"),
+            clipboard: Clipboard::new().ok(),
 
             query_rx: None,
         };
 
         if input_given {
-            app.handle_action(Action::RunQuery(app.query_input_view.value()));
+            app.run_query(app.query_input.value());
         }
 
         app
     }
-}
 
-impl App {
     pub fn run(&mut self, terminal: &mut DefaultTerminal) -> Result<()> {
-        act!(
-            self,
-            match self.focused {
-                FocusedWindow::Query => self.query_input_view.handle_focus_event(true),
-                FocusedWindow::Results => self.results_view.handle_focus_event(true),
-                FocusedWindow::Footer => self.footer_view.handle_focus_event(true),
-            }
-        );
+        self.change_focus(FocusedWindow::Query);
 
         while !self.exit {
             if self.redraw {
-                terminal.draw(|frame| self.draw(frame))?;
+                terminal.draw(|f| self.view(f))?;
                 self.redraw = false;
             }
+
             self.handle_events()?;
         }
 
         Ok(())
     }
 
-    fn draw(&mut self, frame: &mut Frame) {
+    fn view(&mut self, frame: &mut Frame) {
         let add_footer = matches!(self.focused, FocusedWindow::Footer);
 
         let mut constraints = vec![
             Constraint::Min(1),
-            Constraint::Length(self.query_input_view.height()),
+            Constraint::Length(self.query_input.height()),
         ];
         if add_footer {
-            constraints.push(Constraint::Length(self.footer_view.height()));
+            constraints.push(Constraint::Length(self.footer.height()));
         }
 
-        let vertical = &Layout::vertical(constraints);
-        let rects = vertical.split(frame.area());
+        let rects = Layout::vertical(constraints).split(frame.area());
 
-        self.results_view.draw(frame, rects[0]);
-        self.query_input_view.draw(frame, rects[1]);
+        self.results_view.view(frame, rects[0]);
+        self.query_input.view(frame, rects[1]);
         if add_footer {
-            self.footer_view.draw(frame, rects[2]);
+            self.footer.view(frame, rects[2]);
         }
 
-        self.error_modal.draw(frame, frame.area());
+        self.error_modal.view(frame, frame.area());
     }
 
     fn handle_events(&mut self) -> Result<()> {
@@ -129,22 +117,22 @@ impl App {
             if let Some(rx) = &self.query_rx {
                 match rx.try_recv() {
                     Ok(StreamMessage::Log(log)) => {
-                        act!(self, self.results_view.results_list.push(log));
+                        self.push_log(log);
                         logs_received += 1;
                         continue;
                     }
-                    Ok(StreamMessage::Error(error)) => {
-                        self.handle_action(Action::ShowError(error));
+                    Ok(StreamMessage::Error(e)) => {
                         self.query_rx = None;
+                        self.error_modal.update(error_modal::Msg::Show(e));
+                        self.change_focus(FocusedWindow::Query);
+                        self.redraw = true;
                         break;
                     }
                     Err(TryRecvError::Disconnected) => {
                         self.query_rx = None;
                         break;
                     }
-                    Err(TryRecvError::Empty) if logs_received > 0 => {
-                        break;
-                    }
+                    Err(TryRecvError::Empty) if logs_received > 0 => break,
                     Err(TryRecvError::Empty) => {}
                 }
             }
@@ -155,136 +143,168 @@ impl App {
             }
         }
 
+        if logs_received > 0 {
+            self.redraw = true;
+        }
+
         Ok(())
     }
 
     fn handle_term_event(&mut self) -> Result<()> {
         match event::read()? {
-            Event::Key(key_event) if key_event.kind == KeyEventKind::Press => {
-                self.handle_key_event(key_event)
-            }
-            Event::Resize(..) => {
+            Event::Key(key) if key.kind == KeyEventKind::Press => {
+                self.route_key(key);
                 self.redraw = true;
             }
+            Event::Resize(..) => self.redraw = true,
             _ => {}
-        };
+        }
         Ok(())
     }
 
-    fn handle_key_event(&mut self, key_event: KeyEvent) {
-        // Handle error modal keys first
+    fn route_key(&mut self, key: KeyEvent) {
         if self.error_modal.is_visible() {
-            act!(self, self.error_modal.handle_key_event(key_event));
+            if let Some(out) = self.error_modal.update(error_modal::Msg::Key(key)) {
+                self.handle_error_out(out);
+            }
             return;
         }
 
-        match key_event.code {
+        match key.code {
             KeyCode::Esc => match self.focused {
+                FocusedWindow::Footer => self.change_focus(FocusedWindow::Results),
                 FocusedWindow::Results => {
-                    act!(self, self.results_view.handle_key_event(key_event));
+                    self.results_view
+                        .update(results_with_preview::Msg::Key(key));
                 }
-                FocusedWindow::Query => {
-                    act!(self, self.query_input_view.handle_key_event(key_event));
-                }
-                FocusedWindow::Footer => {
-                    self.focused = FocusedWindow::Results;
-                    self.redraw = true;
-                }
+                FocusedWindow::Query => {}
             },
             KeyCode::Char(':') => match self.focused {
-                FocusedWindow::Results => {
-                    self.focused = FocusedWindow::Footer;
-                    self.redraw = true;
-                }
+                FocusedWindow::Results => self.change_focus(FocusedWindow::Footer),
                 FocusedWindow::Footer => {
-                    act!(self, self.footer_view.handle_key_event(key_event));
+                    self.footer.update(footer::Msg::Key(key));
                 }
                 FocusedWindow::Query => {
-                    act!(self, self.query_input_view.handle_key_event(key_event));
+                    self.query_input.update(query_input::Msg::Key(key));
                 }
             },
             KeyCode::Tab => match self.focused {
-                FocusedWindow::Results => {
-                    act!(self, self.results_view.handle_focus_event(false));
-                    self.focused = FocusedWindow::Query;
-                    act!(self, self.query_input_view.handle_focus_event(true));
-                }
-                FocusedWindow::Query => {
-                    act!(self, self.query_input_view.handle_focus_event(false));
-                    self.focused = FocusedWindow::Results;
-                    act!(self, self.results_view.handle_focus_event(true));
-                }
+                FocusedWindow::Results => self.change_focus(FocusedWindow::Query),
+                FocusedWindow::Query => self.change_focus(FocusedWindow::Results),
                 FocusedWindow::Footer => {
-                    act!(self, self.footer_view.handle_key_event(key_event))
+                    self.footer.update(footer::Msg::Key(key));
                 }
             },
-            _ => match self.focused {
-                FocusedWindow::Results => {
-                    act!(self, self.results_view.handle_key_event(key_event));
-                }
-                FocusedWindow::Query => {
-                    act!(self, self.query_input_view.handle_key_event(key_event));
-                }
-                FocusedWindow::Footer => {
-                    act!(self, self.footer_view.handle_key_event(key_event));
-                }
-            },
+            _ => self.route_to_focused(key),
         }
     }
 
-    fn handle_action(&mut self, action: Action) {
-        match action {
-            Action::None => {}
-            Action::Exit => self.exit(),
-            Action::Multi(actions) => {
-                for a in actions {
-                    self.handle_action(a);
+    fn route_to_focused(&mut self, key: KeyEvent) {
+        match self.focused {
+            FocusedWindow::Results => {
+                if let Some(out) = self
+                    .results_view
+                    .update(results_with_preview::Msg::Key(key))
+                {
+                    self.handle_results_out(out);
                 }
             }
-            Action::Redraw => self.redraw = true,
-            Action::RunQuery(query) => {
-                if self.query_rx.is_some() {
-                    return;
+            FocusedWindow::Query => {
+                if let Some(out) = self.query_input.update(query_input::Msg::Key(key)) {
+                    self.handle_query_out(out);
                 }
-
-                act!(self, self.results_view.results_list.clear());
-
-                act!(self, self.query_input_view.handle_focus_event(false));
-                self.focused = FocusedWindow::Results;
-                act!(self, self.results_view.handle_focus_event(true));
-
-                let (tx, rx) = mpsc::channel();
-                self.query_rx = Some(rx);
-                std::thread::spawn(move || {
-                    query_stream(&query, tx);
-                });
             }
-            Action::PreviewLog(log) => {
-                act!(self, self.results_view.log_view.set_log(log));
+            FocusedWindow::Footer => {
+                if let Some(out) = self.footer.update(footer::Msg::Key(key)) {
+                    self.handle_footer_out(out);
+                }
             }
-            Action::CopyToClipboard(text) => {
-                if let Err(e) = self.copy_to_clipboard(&text) {
-                    self.handle_action(Action::ShowError(format!(
+        }
+    }
+
+    fn handle_results_out(&mut self, out: results_with_preview::OutMsg) {
+        match out {
+            results_with_preview::OutMsg::CopyLog(text) => self.copy_to_clipboard(&text),
+            results_with_preview::OutMsg::Exit => self.exit = true,
+        }
+    }
+
+    fn handle_query_out(&mut self, out: query_input::OutMsg) {
+        let query_input::OutMsg::RunQuery(q) = out;
+        self.run_query(q);
+    }
+
+    fn handle_footer_out(&mut self, out: footer::OutMsg) {
+        let footer::OutMsg::Command(cmd) = out;
+        self.handle_command(&cmd);
+    }
+
+    fn handle_error_out(&mut self, out: error_modal::OutMsg) {
+        match out {
+            error_modal::OutMsg::Dismissed => self.change_focus(FocusedWindow::Query),
+            error_modal::OutMsg::CopyError(text) => self.copy_to_clipboard(&text),
+            error_modal::OutMsg::Exit => self.exit = true,
+        }
+    }
+
+    fn handle_command(&mut self, cmd: &str) {
+        if cmd == "q" {
+            self.exit = true;
+        }
+    }
+
+    fn push_log(&mut self, log: crate::log::Log) {
+        self.results_view
+            .update(results_with_preview::Msg::PushLog(log));
+    }
+
+    fn run_query(&mut self, query: String) {
+        if self.query_rx.is_some() {
+            return;
+        }
+
+        self.results_view.update(results_with_preview::Msg::Clear);
+        self.change_focus(FocusedWindow::Results);
+
+        let (tx, rx) = mpsc::channel();
+        self.query_rx = Some(rx);
+        std::thread::spawn(move || {
+            query_stream(&query, tx);
+        });
+    }
+
+    fn change_focus(&mut self, target: FocusedWindow) {
+        match self.focused {
+            FocusedWindow::Results => self.results_view.set_focused(false),
+            FocusedWindow::Query => self.query_input.set_focused(false),
+            FocusedWindow::Footer => {}
+        }
+
+        self.focused = target;
+
+        match self.focused {
+            FocusedWindow::Results => self.results_view.set_focused(true),
+            FocusedWindow::Query => self.query_input.set_focused(true),
+            FocusedWindow::Footer => {}
+        }
+    }
+
+    fn copy_to_clipboard(&mut self, text: &str) {
+        match &mut self.clipboard {
+            Some(cb) => {
+                if let Err(e) = cb.set_text(text.to_string()) {
+                    self.error_modal.update(error_modal::Msg::Show(format!(
                         "Failed to copy to clipboard: {e}"
                     )));
+                    self.change_focus(FocusedWindow::Query);
                 }
             }
-            Action::ShowError(message) => {
-                self.error_modal.show(message);
-                act!(self, self.query_input_view.handle_focus_event(true));
-                self.focused = FocusedWindow::Query;
-                act!(self, self.results_view.handle_focus_event(false));
-                self.redraw = true;
+            None => {
+                self.error_modal.update(error_modal::Msg::Show(
+                    "Clipboard not available".to_string(),
+                ));
+                self.change_focus(FocusedWindow::Query);
             }
         }
-    }
-
-    fn copy_to_clipboard(&mut self, text: &str) -> Result<()> {
-        self.clipboard.set_text(text.to_string())?;
-        Ok(())
-    }
-
-    fn exit(&mut self) {
-        self.exit = true;
     }
 }

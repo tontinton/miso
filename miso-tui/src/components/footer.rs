@@ -7,13 +7,26 @@ use ratatui::{
     widgets::Paragraph,
 };
 
-use crate::components::{Action, Component};
+use crate::text_buffer::TextBuffer;
 
-#[derive(Debug, Default)]
+pub enum Msg {
+    Key(KeyEvent),
+}
+
+pub enum OutMsg {
+    Command(String),
+}
+
 pub struct Footer {
-    line: String,
-    x: usize,
-    width: usize,
+    buffer: TextBuffer,
+}
+
+impl Default for Footer {
+    fn default() -> Self {
+        Self {
+            buffer: TextBuffer::single_line(),
+        }
+    }
 }
 
 impl Footer {
@@ -21,57 +34,33 @@ impl Footer {
         1
     }
 
-    fn push_char(&mut self, c: char) {
-        self.line.insert(self.x, c);
-        self.x += 1;
+    pub fn update(&mut self, msg: Msg) -> Option<OutMsg> {
+        let Msg::Key(key) = msg;
+        let is_ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+
+        match key.code {
+            KeyCode::Enter => return Some(OutMsg::Command(self.buffer.value())),
+            KeyCode::Backspace => self.buffer.remove_char(),
+            KeyCode::Delete => self.buffer.delete_char(),
+            KeyCode::Char('w') if is_ctrl => self.buffer.remove_word_before_cursor(),
+            KeyCode::Char(c) => self.buffer.push_char(c),
+            KeyCode::Left => self.buffer.move_left(),
+            KeyCode::Right => self.buffer.move_right(),
+            KeyCode::Home => self.buffer.move_home(),
+            KeyCode::End => self.buffer.move_end(),
+            _ => return None,
+        }
+        None
     }
 
-    /// Delete char to the left of cursor.
-    fn remove_char(&mut self) {
-        if self.x == 0 {
-            return;
-        }
-        self.line.remove(self.x - 1);
-        self.x -= 1;
-    }
-
-    /// Delete char to the right of cursor.
-    fn delete_char(&mut self) {
-        if self.x == self.line.len() - 1 {
-            return;
-        }
-        self.line.remove(self.x);
-    }
-
-    fn remove_word_before_cursor(&mut self) {
-        if self.x == 0 {
-            return;
-        }
-
-        let mut new_x = self.x;
-
-        while new_x > 0 && self.line.as_bytes()[new_x - 1].is_ascii_whitespace() {
-            new_x -= 1;
-        }
-        while new_x > 0 && !self.line.as_bytes()[new_x - 1].is_ascii_whitespace() {
-            new_x -= 1;
-        }
-
-        self.line.replace_range(new_x..self.x, "");
-        self.x = new_x;
-    }
-}
-
-impl Component for Footer {
-    fn draw(&mut self, frame: &mut Frame, area: Rect) {
-        self.width = area.width as usize;
-
-        let (before, rest) = self.line.split_at(self.x);
+    pub fn view(&self, frame: &mut Frame, area: Rect) {
+        let line_str = self.buffer.first_line();
+        let x = self.buffer.x();
+        let (before, rest) = line_str.split_at(x);
         let cursor_char = rest.chars().next();
         let after = cursor_char.map(|c| &rest[c.len_utf8()..]).unwrap_or("");
 
-        let mut spans: Vec<Span<'_>> =
-            Vec::with_capacity(1 + !before.is_empty() as usize + 1 + !after.is_empty() as usize);
+        let mut spans: Vec<Span<'_>> = Vec::new();
         spans.push(Span::raw(":"));
         if !before.is_empty() {
             spans.push(Span::raw(before));
@@ -88,40 +77,25 @@ impl Component for Footer {
 
         let query = Text::from(Line::from(spans));
         let paragraph = Paragraph::new(query);
-
         frame.render_widget(paragraph, area);
     }
+}
 
-    fn handle_key_event(&mut self, key: KeyEvent) -> Action {
-        use KeyCode::*;
+#[cfg(test)]
+mod tests {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-        let is_ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+    use super::{Footer, Msg, OutMsg};
 
-        match key.code {
-            Enter => {
-                if &self.line == "q" {
-                    return Action::Exit;
-                }
-            }
-            Backspace => self.remove_char(),
-            Delete => self.delete_char(),
-            Char('w') if is_ctrl => self.remove_word_before_cursor(),
-            Char(c) => self.push_char(c),
-            Left if self.x > 0 => {
-                self.x -= 1;
-            }
-            Right if self.x < self.line.len() => {
-                self.x += 1;
-            }
-            Home => {
-                self.x = 0;
-            }
-            End => {
-                self.x = self.line.len();
-            }
-            _ => return Action::None,
-        }
+    fn key(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::empty())
+    }
 
-        Action::Redraw
+    #[test]
+    fn enter_emits_command() {
+        let mut footer = Footer::default();
+        footer.update(Msg::Key(key(KeyCode::Char('q'))));
+        let out = footer.update(Msg::Key(key(KeyCode::Enter)));
+        assert!(matches!(out, Some(OutMsg::Command(ref s)) if s == "q"));
     }
 }

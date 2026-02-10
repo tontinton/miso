@@ -3,6 +3,7 @@ mod client;
 mod common;
 mod components;
 mod log;
+mod text_buffer;
 
 use std::env::args;
 
