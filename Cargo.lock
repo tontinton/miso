@@ -2463,6 +2463,7 @@ dependencies = [
  "reqwest",
  "serde_json",
  "simd-json",
+ "test-case",
 ]
 
 [[package]]

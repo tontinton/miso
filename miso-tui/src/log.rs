@@ -10,11 +10,9 @@ pub struct Log {
 
 impl Log {
     pub fn raw(slice: &mut [u8]) -> Result<Self> {
+        let len = slice.len();
         if let Value::Object(parsed) = from_slice::<Value>(slice)? {
-            Ok(Self {
-                parsed,
-                len: slice.len(),
-            })
+            Ok(Self { parsed, len })
         } else {
             Err(eyre!("not object"))
         }

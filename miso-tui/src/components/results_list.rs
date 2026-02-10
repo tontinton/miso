@@ -1,31 +1,38 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
     Frame,
-    layout::{Margin, Rect},
+    layout::Rect,
     style::{Style, Stylize},
     text::Line,
-    widgets::{Block, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState},
+    widgets::Paragraph,
 };
 use serde_json::{Map, Value};
 
 use crate::{
-    common::{BORDER_TYPE, HORIZONTAL},
-    components::{Action, Component},
+    common::{HORIZONTAL, render_horizontal_scrollbar, render_vertical_scrollbar, styled_block},
     log::Log,
 };
 
-#[derive(Debug, Default)]
-pub struct ResultsList {
-    focused: bool,
-    logs: Vec<Map<String, Value>>,
-    logs_lens: Vec<usize>,
-    max_len: usize,
+pub enum Msg {
+    Key(KeyEvent),
+    PushLog(Log),
+    Clear,
+}
 
-    width: usize,
-    height: usize,
+pub enum OutMsg {
+    SelectedLog(Map<String, Value>),
+}
+
+#[derive(Default)]
+pub struct ResultsList {
+    logs: Vec<Map<String, Value>>,
+    log_lens: Vec<usize>,
+    max_len: usize,
     selected: usize,
     scroll_x: usize,
     scroll_y: usize,
+    focused: bool,
+    last_area: Rect,
 }
 
 impl ResultsList {
@@ -33,77 +40,127 @@ impl ResultsList {
         self.logs.is_empty()
     }
 
-    pub fn push(&mut self, log: Log) -> Action {
-        self.logs.push(log.parsed);
-        self.logs_lens.push(log.len);
-        if self.max_len < log.len {
-            self.max_len = log.len
-        }
-        if self.logs.len() == 1 {
-            Action::PreviewLog(self.logs[self.selected].clone())
-        } else {
-            Action::Redraw
-        }
-    }
-
-    pub fn clear(&mut self) -> Action {
-        self.logs.clear();
-        self.logs_lens.clear();
-        self.max_len = 0;
-        self.selected = 0;
-        self.scroll_x = 0;
-        self.scroll_y = 0;
-        Action::Redraw
-    }
-
-    fn ensure_visible(&mut self, visible_height: usize) {
-        if self.selected < self.scroll_y {
-            self.scroll_y = self.selected;
-        } else if self.selected >= self.scroll_y + visible_height {
-            self.scroll_y = self.selected + 1 - visible_height;
-        }
-    }
-
     pub fn selected_log(&self) -> &Map<String, Value> {
+        debug_assert!(
+            !self.logs.is_empty(),
+            "selected_log called on empty ResultsList"
+        );
         &self.logs[self.selected]
     }
-}
 
-impl Component for ResultsList {
-    fn draw(&mut self, frame: &mut Frame, area: Rect) {
-        self.width = area.width as usize - 2;
-        self.height = area.height as usize - 2;
+    pub fn set_focused(&mut self, focused: bool) {
+        self.focused = focused;
+    }
 
-        let mut title_text = "Results".white();
+    fn visible_height(&self) -> usize {
+        self.last_area.height.saturating_sub(2) as usize
+    }
 
-        let mut bottom_title_text = if self.logs.is_empty() {
+    fn visible_width(&self) -> usize {
+        self.last_area.width.saturating_sub(2) as usize
+    }
+
+    fn ensure_visible(&mut self) {
+        let h = self.visible_height();
+        if h == 0 {
+            return;
+        }
+        if self.selected < self.scroll_y {
+            self.scroll_y = self.selected;
+        } else if self.selected >= self.scroll_y + h {
+            self.scroll_y = self.selected + 1 - h;
+        }
+    }
+
+    pub fn update(&mut self, msg: Msg) -> Option<OutMsg> {
+        match msg {
+            Msg::PushLog(log) => {
+                if log.len > self.max_len {
+                    self.max_len = log.len;
+                }
+                self.log_lens.push(log.len);
+                self.logs.push(log.parsed);
+                if self.logs.len() == 1 {
+                    return Some(OutMsg::SelectedLog(self.logs[0].clone()));
+                }
+                None
+            }
+            Msg::Clear => {
+                self.logs.clear();
+                self.log_lens.clear();
+                self.max_len = 0;
+                self.selected = 0;
+                self.scroll_x = 0;
+                self.scroll_y = 0;
+                None
+            }
+            Msg::Key(key) => self.handle_key(key),
+        }
+    }
+
+    fn handle_key(&mut self, key: KeyEvent) -> Option<OutMsg> {
+        use KeyCode::*;
+        let is_ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        let h = self.visible_height();
+
+        match key.code {
+            Up | Char('k') if self.selected > 0 => {
+                self.selected -= 1;
+                self.ensure_visible();
+                return Some(OutMsg::SelectedLog(self.selected_log().clone()));
+            }
+            Down | Char('j') if self.selected < self.logs.len().saturating_sub(1) => {
+                self.selected += 1;
+                self.ensure_visible();
+                return Some(OutMsg::SelectedLog(self.selected_log().clone()));
+            }
+            PageUp | Char('u') if is_ctrl => {
+                self.selected = self.selected.saturating_sub(h / 2);
+                self.ensure_visible();
+                return Some(OutMsg::SelectedLog(self.selected_log().clone()));
+            }
+            PageDown | Char('d') if is_ctrl => {
+                self.selected = (self.selected + h / 2).min(self.logs.len().saturating_sub(1));
+                self.ensure_visible();
+                return Some(OutMsg::SelectedLog(self.selected_log().clone()));
+            }
+            Left | Char('h') => {
+                self.scroll_x = self.scroll_x.saturating_sub(5);
+            }
+            Right | Char('l') => {
+                self.scroll_x = self.scroll_x.saturating_add(5);
+            }
+            Home | Char('^') => {
+                self.scroll_x = 0;
+            }
+            End | Char('$') if !self.logs.is_empty() => {
+                self.scroll_x = self.log_lens[self.selected].saturating_sub(self.visible_width());
+            }
+            _ => {}
+        }
+        None
+    }
+
+    pub fn view(&mut self, frame: &mut Frame, area: Rect) {
+        self.last_area = area;
+
+        let bottom_text = if self.logs.is_empty() {
             "0".to_string()
         } else {
             format!(" {}/{} ", self.selected + 1, self.logs.len())
-        }
-        .white();
+        };
 
-        let mut border_color = Style::new().white();
+        let mut bottom_title_text = bottom_text.white();
         if self.focused {
-            title_text = title_text.bold();
             bottom_title_text = bottom_title_text.bold();
-            border_color = border_color.green();
         }
-
-        let title = Line::from(vec![HORIZONTAL.into(), title_text]);
         let bottom_title = Line::from(vec![bottom_title_text, HORIZONTAL.into()]);
-        let bottom_title_width = bottom_title.width();
-        let block = Block::bordered()
-            .border_type(BORDER_TYPE)
-            .border_style(border_color)
-            .title_top(title)
-            .title_bottom(bottom_title.right_aligned());
+        let bottom_title_width = bottom_title.width() as u16 + 2;
 
+        let block = styled_block("Results", self.focused, Some(bottom_title));
         let inner = block.inner(area);
-        let visible_width = inner.width as usize;
         let visible_height = inner.height as usize;
-
-        self.ensure_visible(visible_height);
+        let visible_width = inner.width as usize;
 
         let start = self.scroll_y;
         let end = (start + visible_height).min(self.logs.len());
@@ -112,7 +169,7 @@ impl Component for ResultsList {
             .iter()
             .enumerate()
             .map(|(i, log)| {
-                let text = serde_json::to_string(log).unwrap_or_else(|e| e.to_string());
+                let text = serde_json::to_string(log).unwrap_or_default();
                 let line = Line::from(text);
                 if self.focused && start + i == self.selected {
                     line.style(Style::default().reversed())
@@ -128,100 +185,77 @@ impl Component for ResultsList {
 
         frame.render_widget(paragraph, area);
 
-        let show_vertical_scrollbar = self.logs.len() > visible_height;
-        if show_vertical_scrollbar {
-            let mut scrollbar_state = ScrollbarState::default()
-                .content_length(self.logs.len())
-                .position(self.selected);
+        if self.logs.len() > visible_height {
+            render_vertical_scrollbar(frame, area, self.logs.len(), self.selected);
+        }
 
-            let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
-                .thumb_symbol("▐")
-                .track_symbol(None)
-                .begin_symbol(None)
-                .end_symbol(None);
-
-            frame.render_stateful_widget(
-                scrollbar,
-                area.inner(Margin {
-                    vertical: 1,
-                    horizontal: 0,
-                }),
-                &mut scrollbar_state,
+        if self.max_len > visible_width {
+            render_horizontal_scrollbar(
+                frame,
+                area,
+                self.max_len,
+                self.scroll_x,
+                bottom_title_width,
             );
         }
+    }
+}
 
-        let show_horizontal_scrollbar = self.max_len > visible_width;
-        if show_horizontal_scrollbar {
-            let mut scrollbar_state = ScrollbarState::default()
-                .content_length(self.max_len)
-                .position(self.scroll_x);
+#[cfg(test)]
+mod tests {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use serde_json::{Map, Value};
 
-            let right_margin = bottom_title_width as u16 + 2;
-            let left_margin = 1;
+    use super::{Msg, OutMsg, ResultsList};
+    use crate::log::Log;
 
-            let scrollbar_area = Rect {
-                x: area.x + left_margin,
-                y: area.y,
-                width: area
-                    .width
-                    .saturating_sub(right_margin)
-                    .saturating_sub(left_margin),
-                height: area.height,
-            };
-
-            let scrollbar = Scrollbar::new(ScrollbarOrientation::HorizontalBottom)
-                .thumb_symbol("🬋")
-                .track_symbol(None)
-                .begin_symbol(None)
-                .end_symbol(None);
-
-            frame.render_stateful_widget(scrollbar, scrollbar_area, &mut scrollbar_state);
-        }
+    fn make_log(key: &str) -> Log {
+        let mut map = Map::new();
+        map.insert(key.to_string(), Value::String("v".to_string()));
+        let len = serde_json::to_string(&map).unwrap_or_default().len();
+        Log { parsed: map, len }
     }
 
-    fn handle_focus_event(&mut self, focus: bool) -> Action {
-        self.focused = focus;
-        Action::Redraw
+    fn key(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::empty())
     }
 
-    fn handle_key_event(&mut self, key: KeyEvent) -> Action {
-        use KeyCode::*;
+    fn two_item_list() -> ResultsList {
+        let mut rl = ResultsList::default();
+        rl.update(Msg::PushLog(make_log("a")));
+        rl.update(Msg::PushLog(make_log("b")));
+        rl
+    }
 
-        let is_ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+    #[test]
+    fn push_first_emits_selected_then_none() {
+        let mut rl = ResultsList::default();
+        assert!(matches!(
+            rl.update(Msg::PushLog(make_log("a"))),
+            Some(OutMsg::SelectedLog(_))
+        ));
+        assert!(rl.update(Msg::PushLog(make_log("b"))).is_none());
+    }
 
-        match key.code {
-            Up | Char('k') if self.selected > 0 => {
-                self.selected -= 1;
-                return Action::PreviewLog(self.selected_log().clone());
-            }
-            Down | Char('j') if self.selected < self.logs.len().saturating_sub(1) => {
-                self.selected += 1;
-                return Action::PreviewLog(self.selected_log().clone());
-            }
-            PageUp | Char('u') if is_ctrl => {
-                self.selected = self.selected.saturating_sub(self.height / 2);
-                return Action::PreviewLog(self.selected_log().clone());
-            }
-            PageDown | Char('d') if is_ctrl => {
-                self.selected =
-                    (self.selected + self.height / 2).min(self.logs.len().saturating_sub(1));
-                return Action::PreviewLog(self.selected_log().clone());
-            }
-            Left | Char('h') => {
-                self.scroll_x = self.scroll_x.saturating_sub(5);
-            }
-            Right | Char('l') => {
-                self.scroll_x = self.scroll_x.saturating_add(5);
-            }
-            Home | Char('^') => {
-                self.scroll_x = 0;
-            }
-            End | Char('$') if self.selected < self.logs.len().saturating_sub(1) => {
-                self.scroll_x = self.logs_lens[self.selected].saturating_sub(self.width);
-            }
-            _ => return Action::None,
-        }
+    #[test]
+    fn clear_resets() {
+        let mut rl = two_item_list();
+        rl.update(Msg::Clear);
+        assert!(rl.is_empty());
+    }
 
-        Action::Redraw
+    #[test]
+    fn navigation_emits_on_move_none_at_bounds() {
+        let mut rl = two_item_list();
+        assert!(matches!(
+            rl.update(Msg::Key(key(KeyCode::Down))),
+            Some(OutMsg::SelectedLog(_))
+        ));
+        assert!(rl.update(Msg::Key(key(KeyCode::Down))).is_none());
+        assert!(matches!(
+            rl.update(Msg::Key(key(KeyCode::Up))),
+            Some(OutMsg::SelectedLog(_))
+        ));
+        assert!(rl.update(Msg::Key(key(KeyCode::Up))).is_none());
     }
 }

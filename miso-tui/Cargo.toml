@@ -13,3 +13,6 @@ ratatui.workspace = true
 reqwest.workspace = true
 serde_json.workspace = true
 simd-json.workspace = true
+
+[dev-dependencies]
+test-case.workspace = true
