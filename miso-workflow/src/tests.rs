@@ -900,53 +900,33 @@ async fn sort_nulls_order() -> Result<()> {
 }
 
 #[tokio::test]
-async fn sort_bool() -> Result<()> {
-    check(
-        r#"test.c | sort by x"#,
-        r#"[{"x": true}, {"x": false}, {"x": true}]"#,
-        r#"[{"x": false}, {"x": true}, {"x": true}]"#,
-    )
-    .await
-}
-
-#[tokio::test]
-async fn sort_string() -> Result<()> {
-    check(
-        r#"test.c | sort by x"#,
-        r#"[{"x": "zebra"}, {"x": "apple"}, {"x": "banana"}]"#,
-        r#"[{"x": "apple"}, {"x": "banana"}, {"x": "zebra"}]"#,
-    )
-    .await
-}
-
-#[tokio::test]
-async fn sort_float() -> Result<()> {
-    check(
-        r#"test.c | sort by x"#,
-        r#"[{"x": 3.14}, {"x": 1.41}, {"x": 2.72}]"#,
-        r#"[{"x": 1.41}, {"x": 2.72}, {"x": 3.14}]"#,
-    )
-    .await
-}
-
-#[tokio::test]
-async fn sort_array() -> Result<()> {
-    check(
-        r#"test.c | sort by x"#,
-        r#"[{"x": [3, 2, 1]}, {"x": [1]}, {"x": [2, 1]}]"#,
-        r#"[{"x": [1]}, {"x": [2, 1]}, {"x": [3, 2, 1]}]"#,
-    )
-    .await
-}
-
-#[tokio::test]
-async fn sort_object() -> Result<()> {
-    check(
-        r#"test.c | sort by x"#,
-        r#"[{"x": {"z": 1}}, {"x": {"a": 1}}, {"x": {"m": 1}}]"#,
-        r#"[{"x": {"a": 1}}, {"x": {"m": 1}}, {"x": {"z": 1}}]"#,
-    )
-    .await
+#[test_case(
+    r#"[{"x": true}, {"x": false}, {"x": true}]"#,
+    r#"[{"x": false}, {"x": true}, {"x": true}]"#
+    ; "bool"
+)]
+#[test_case(
+    r#"[{"x": "zebra"}, {"x": "apple"}, {"x": "banana"}]"#,
+    r#"[{"x": "apple"}, {"x": "banana"}, {"x": "zebra"}]"#
+    ; "string"
+)]
+#[test_case(
+    r#"[{"x": 3.14}, {"x": 1.41}, {"x": 2.72}]"#,
+    r#"[{"x": 1.41}, {"x": 2.72}, {"x": 3.14}]"#
+    ; "float"
+)]
+#[test_case(
+    r#"[{"x": [3, 2, 1]}, {"x": [1]}, {"x": [2, 1]}]"#,
+    r#"[{"x": [1]}, {"x": [2, 1]}, {"x": [3, 2, 1]}]"#
+    ; "array"
+)]
+#[test_case(
+    r#"[{"x": {"z": 1}}, {"x": {"a": 1}}, {"x": {"m": 1}}]"#,
+    r#"[{"x": {"a": 1}}, {"x": {"m": 1}}, {"x": {"z": 1}}]"#
+    ; "object"
+)]
+async fn sort_by_type(input: &str, expected: &str) -> Result<()> {
+    check(r#"test.c | sort by x"#, input, expected).await
 }
 
 #[tokio::test]
