@@ -1,116 +1,35 @@
 use logos::Logos;
+use test_case::test_case;
 use time::Duration;
 
 use crate::lexer::{StringValue, Token};
 
-#[test]
-fn test_basic_string_literals() {
-    let mut lex = Token::lexer(r#""hello world""#);
-    assert_eq!(
-        lex.next(),
-        Some(Ok(Token::String(StringValue::Text(
-            "hello world".to_string()
-        ))))
-    );
+#[test_case(r#""hello world""#, StringValue::Text("hello world".to_string()) ; "double_quote")]
+#[test_case("'hello world'", StringValue::Text("hello world".to_string()) ; "single_quote")]
+#[test_case(r#"h"hello""#, StringValue::Bytes("hello".to_string()) ; "hex_double_quote_lower")]
+#[test_case(r#"H"world""#, StringValue::Bytes("world".to_string()) ; "hex_double_quote_upper")]
+#[test_case("h'test'", StringValue::Bytes("test".to_string()) ; "hex_single_quote_lower")]
+#[test_case("H'TEST'", StringValue::Bytes("TEST".to_string()) ; "hex_single_quote_upper")]
+#[test_case(r#""""#, StringValue::Text("".to_string()) ; "empty_double_quote")]
+#[test_case("''", StringValue::Text("".to_string()) ; "empty_single_quote")]
+#[test_case(r#"h"""#, StringValue::Bytes("".to_string()) ; "empty_hex")]
+fn test_string_literals(input: &str, expected: StringValue) {
+    let mut lex = Token::lexer(input);
+    assert_eq!(lex.next(), Some(Ok(Token::String(expected))));
     assert_eq!(lex.next(), None);
 }
 
-#[test]
-fn test_single_quote_string_literals() {
-    let mut lex = Token::lexer("'hello world'");
+#[test_case(r#""Hello\nWorld""#, "Hello\nWorld" ; "newline")]
+#[test_case(r#""Tab\there""#, "Tab\there" ; "tab")]
+#[test_case(r#""Quote: \"Hello\"""#, "Quote: \"Hello\"" ; "escaped_quote")]
+#[test_case(r#""Backslash: \\""#, "Backslash: \\" ; "backslash")]
+fn test_escape_sequences(input: &str, expected: &str) {
+    let mut lex = Token::lexer(input);
     assert_eq!(
         lex.next(),
-        Some(Ok(Token::String(StringValue::Text(
-            "hello world".to_string()
-        ))))
+        Some(Ok(Token::String(StringValue::Text(expected.to_string()))))
     );
     assert_eq!(lex.next(), None);
-}
-
-#[test]
-fn test_hex_string_literals() {
-    let mut lex = Token::lexer(r#"h"hello""#);
-    assert_eq!(
-        lex.next(),
-        Some(Ok(Token::String(StringValue::Bytes("hello".to_string()))))
-    );
-
-    let mut lex = Token::lexer(r#"H"world""#);
-    assert_eq!(
-        lex.next(),
-        Some(Ok(Token::String(StringValue::Bytes("world".to_string()))))
-    );
-}
-
-#[test]
-fn test_hex_single_quote_string_literals() {
-    let mut lex = Token::lexer("h'test'");
-    assert_eq!(
-        lex.next(),
-        Some(Ok(Token::String(StringValue::Bytes("test".to_string()))))
-    );
-
-    let mut lex = Token::lexer("H'TEST'");
-    assert_eq!(
-        lex.next(),
-        Some(Ok(Token::String(StringValue::Bytes("TEST".to_string()))))
-    );
-}
-
-#[test]
-fn test_empty_strings() {
-    let mut lex = Token::lexer(r#""""#);
-    assert_eq!(
-        lex.next(),
-        Some(Ok(Token::String(StringValue::Text("".to_string()))))
-    );
-
-    let mut lex = Token::lexer("''");
-    assert_eq!(
-        lex.next(),
-        Some(Ok(Token::String(StringValue::Text("".to_string()))))
-    );
-
-    let mut lex = Token::lexer(r#"h"""#);
-    assert_eq!(
-        lex.next(),
-        Some(Ok(Token::String(StringValue::Bytes("".to_string()))))
-    );
-}
-
-#[test]
-fn test_escape_sequences() {
-    let mut lex = Token::lexer(r#""Hello\nWorld""#);
-    assert_eq!(
-        lex.next(),
-        Some(Ok(Token::String(StringValue::Text(
-            "Hello\nWorld".to_string()
-        ))))
-    );
-
-    let mut lex = Token::lexer(r#""Tab\there""#);
-    assert_eq!(
-        lex.next(),
-        Some(Ok(Token::String(StringValue::Text(
-            "Tab\there".to_string()
-        ))))
-    );
-
-    let mut lex = Token::lexer(r#""Quote: \"Hello\"""#);
-    assert_eq!(
-        lex.next(),
-        Some(Ok(Token::String(StringValue::Text(
-            "Quote: \"Hello\"".to_string()
-        ))))
-    );
-
-    let mut lex = Token::lexer(r#""Backslash: \\""#);
-    assert_eq!(
-        lex.next(),
-        Some(Ok(Token::String(StringValue::Text(
-            "Backslash: \\".to_string()
-        ))))
-    );
 }
 
 #[test]
@@ -138,164 +57,66 @@ fn test_all_basic_escape_sequences() {
     }
 }
 
-#[test]
-fn test_hex_escape_sequences() {
-    // \x followed by 2 hex digits
-    let mut lex = Token::lexer(r#""\x41""#);
+#[test_case(r#""\x41""#, "A" ; "hex_41")]
+#[test_case(r#""\x7A""#, "z" ; "hex_7a")]
+#[test_case(r#""\x4""#, "\\x4" ; "hex_invalid_too_short")]
+#[test_case(r#""\xGG""#, "\\xGG" ; "hex_invalid_non_hex")]
+fn test_hex_escape_sequences(input: &str, expected: &str) {
+    let mut lex = Token::lexer(input);
     assert_eq!(
         lex.next(),
-        Some(Ok(Token::String(StringValue::Text("A".to_string()))))
+        Some(Ok(Token::String(StringValue::Text(expected.to_string()))))
     );
-
-    let mut lex = Token::lexer(r#""\x7A""#);
-    assert_eq!(
-        lex.next(),
-        Some(Ok(Token::String(StringValue::Text("z".to_string()))))
-    );
-
-    // Invalid hex escape (not enough digits)
-    let mut lex = Token::lexer(r#""\x4""#);
-    assert_eq!(
-        lex.next(),
-        Some(Ok(Token::String(StringValue::Text("\\x4".to_string()))))
-    );
-
-    // Invalid hex escape (non-hex character)
-    let mut lex = Token::lexer(r#""\xGG""#);
-    assert_eq!(
-        lex.next(),
-        Some(Ok(Token::String(StringValue::Text("\\xGG".to_string()))))
-    );
+    assert_eq!(lex.next(), None);
 }
 
-#[test]
-fn test_unicode_escape_sequences() {
-    // \u followed by 4 hex digits
-    let mut lex = Token::lexer(r#""\u0041""#);
+#[test_case(r#""\u0041""#, "A" ; "u_lowercase_A")]
+#[test_case(r#""\U00000041""#, "A" ; "U_uppercase_A")]
+#[test_case(r#""\u263A""#, "☺" ; "u_smiley")]
+#[test_case(r#""\u41""#, "\\u41" ; "u4_invalid_too_short")]
+#[test_case(r#""\U0041""#, "\\U0041" ; "u8_invalid_too_short")]
+fn test_unicode_escape_sequences(input: &str, expected: &str) {
+    let mut lex = Token::lexer(input);
     assert_eq!(
         lex.next(),
-        Some(Ok(Token::String(StringValue::Text("A".to_string()))))
+        Some(Ok(Token::String(StringValue::Text(expected.to_string()))))
     );
-
-    // \U followed by 8 hex digits
-    let mut lex = Token::lexer(r#""\U00000041""#);
-    assert_eq!(
-        lex.next(),
-        Some(Ok(Token::String(StringValue::Text("A".to_string()))))
-    );
-
-    // Unicode character (smiley face)
-    let mut lex = Token::lexer(r#""\u263A""#);
-    assert_eq!(
-        lex.next(),
-        Some(Ok(Token::String(StringValue::Text("☺".to_string()))))
-    );
-
-    // Invalid unicode (not enough digits for \u)
-    let mut lex = Token::lexer(r#""\u41""#);
-    assert_eq!(
-        lex.next(),
-        Some(Ok(Token::String(StringValue::Text("\\u41".to_string()))))
-    );
-
-    // Invalid unicode (not enough digits for \U)
-    let mut lex = Token::lexer(r#""\U0041""#);
-    assert_eq!(
-        lex.next(),
-        Some(Ok(Token::String(StringValue::Text("\\U0041".to_string()))))
-    );
+    assert_eq!(lex.next(), None);
 }
 
-#[test]
-fn test_octal_escape_sequences() {
-    // Single octal digit
-    let mut lex = Token::lexer(r#""\7""#);
+#[test_case(r#""\7""#, "\x07" ; "single_digit")]
+#[test_case(r#""\77""#, "?" ; "two_digits")]
+#[test_case(r#""\101""#, "A" ; "three_digits")]
+#[test_case(r#""\8""#, "\\8" ; "invalid_digit_gt_7")]
+#[test_case(r#""\78""#, "\x078" ; "trailing_non_octal")]
+fn test_octal_escape_sequences(input: &str, expected: &str) {
+    let mut lex = Token::lexer(input);
     assert_eq!(
         lex.next(),
-        Some(Ok(Token::String(StringValue::Text("\x07".to_string()))))
+        Some(Ok(Token::String(StringValue::Text(expected.to_string()))))
     );
-
-    // Two octal digits
-    let mut lex = Token::lexer(r#""\77""#);
-    assert_eq!(
-        lex.next(),
-        Some(Ok(Token::String(StringValue::Text("?".to_string()))))
-    );
-
-    // Three octal digits
-    let mut lex = Token::lexer(r#""\101""#);
-    assert_eq!(
-        lex.next(),
-        Some(Ok(Token::String(StringValue::Text("A".to_string()))))
-    );
-
-    // Invalid octal (digit > 7)
-    let mut lex = Token::lexer(r#""\8""#);
-    assert_eq!(
-        lex.next(),
-        Some(Ok(Token::String(StringValue::Text("\\8".to_string()))))
-    );
-
-    // Octal with following non-octal digit
-    let mut lex = Token::lexer(r#""\78""#);
-    assert_eq!(
-        lex.next(),
-        Some(Ok(Token::String(StringValue::Text("\x078".to_string()))))
-    );
+    assert_eq!(lex.next(), None);
 }
 
-#[test]
-fn test_unknown_escape_sequences() {
-    let mut lex = Token::lexer(r#""\q""#);
+#[test_case(r#""\q""#, "\\q" ; "unknown_q")]
+#[test_case(r#""\z""#, "\\z" ; "unknown_z")]
+#[test_case(r#""hello\""#, "hello\\" ; "trailing_backslash")]
+fn test_unknown_and_edge_escape_sequences(input: &str, expected: &str) {
+    let mut lex = Token::lexer(input);
     assert_eq!(
         lex.next(),
-        Some(Ok(Token::String(StringValue::Text("\\q".to_string()))))
+        Some(Ok(Token::String(StringValue::Text(expected.to_string()))))
     );
-
-    let mut lex = Token::lexer(r#""\z""#);
-    assert_eq!(
-        lex.next(),
-        Some(Ok(Token::String(StringValue::Text("\\z".to_string()))))
-    );
+    assert_eq!(lex.next(), None);
 }
 
-#[test]
-fn test_trailing_backslash() {
-    let mut lex = Token::lexer(r#""hello\""#);
-    assert_eq!(
-        lex.next(),
-        Some(Ok(Token::String(StringValue::Text("hello\\".to_string()))))
-    );
-}
-
-#[test]
-fn test_raw_strings() {
-    // Basic raw string
-    let mut lex = Token::lexer(r#"@"hello world""#);
-    assert_eq!(
-        lex.next(),
-        Some(Ok(Token::String(StringValue::Text(
-            "hello world".to_string()
-        ))))
-    );
-
-    // Raw string with single quotes
-    let mut lex = Token::lexer("@'hello world'");
-    assert_eq!(
-        lex.next(),
-        Some(Ok(Token::String(StringValue::Text(
-            "hello world".to_string()
-        ))))
-    );
-
-    // Raw string with escaped sequences (should not be processed)
-    let mut lex = Token::lexer(r#"@"hello\nworld""#);
-    assert_eq!(
-        lex.next(),
-        Some(Ok(Token::String(StringValue::Text(
-            "hello\\nworld".to_string()
-        ))))
-    );
+#[test_case(r#"@"hello world""#, StringValue::Text("hello world".to_string()) ; "raw_double_quote")]
+#[test_case("@'hello world'", StringValue::Text("hello world".to_string()) ; "raw_single_quote")]
+#[test_case(r#"@"hello\nworld""#, StringValue::Text("hello\\nworld".to_string()) ; "raw_no_escape_processing")]
+fn test_raw_strings(input: &str, expected: StringValue) {
+    let mut lex = Token::lexer(input);
+    assert_eq!(lex.next(), Some(Ok(Token::String(expected))));
+    assert_eq!(lex.next(), None);
 }
 
 #[test]
@@ -319,102 +140,25 @@ fn test_raw_string_quote_escaping() {
     );
 }
 
-#[test]
-fn test_hex_raw_strings() {
-    let mut lex = Token::lexer(r#"h@"hello""#);
-    assert_eq!(
-        lex.next(),
-        Some(Ok(Token::String(StringValue::Bytes("hello".to_string()))))
-    );
-
-    let mut lex = Token::lexer("H@'world'");
-    assert_eq!(
-        lex.next(),
-        Some(Ok(Token::String(StringValue::Bytes("world".to_string()))))
-    );
+#[test_case(r#"h@"hello""#, StringValue::Bytes("hello".to_string()) ; "hex_raw_double_lower")]
+#[test_case("H@'world'", StringValue::Bytes("world".to_string()) ; "hex_raw_single_upper")]
+fn test_hex_raw_strings(input: &str, expected: StringValue) {
+    let mut lex = Token::lexer(input);
+    assert_eq!(lex.next(), Some(Ok(Token::String(expected))));
+    assert_eq!(lex.next(), None);
 }
 
-#[test]
-fn test_multiline_backtick_strings() {
-    let input = "```hello\nworld```";
+#[test_case("```hello\nworld```", StringValue::Text("hello\nworld".to_string()) ; "backtick")]
+#[test_case("h```hex\ncontent```", StringValue::Bytes("hex\ncontent".to_string()) ; "backtick_hex")]
+#[test_case("~~~hello\nworld~~~", StringValue::Text("hello\nworld".to_string()) ; "tilde")]
+#[test_case("H~~~HEX\nCONTENT~~~", StringValue::Bytes("HEX\nCONTENT".to_string()) ; "tilde_hex")]
+#[test_case("```hello\nworld", StringValue::Text("hello\nworld".to_string()) ; "backtick_no_end")]
+#[test_case("~~~incomplete", StringValue::Text("incomplete".to_string()) ; "tilde_no_end")]
+#[test_case("``````", StringValue::Text("".to_string()) ; "backtick_empty")]
+#[test_case("~~~~~~", StringValue::Text("".to_string()) ; "tilde_empty")]
+fn test_multiline_strings(input: &str, expected: StringValue) {
     let mut lex = Token::lexer(input);
-    assert_eq!(
-        lex.next(),
-        Some(Ok(Token::String(StringValue::Text(
-            "hello\nworld".to_string()
-        ))))
-    );
-
-    // With hex prefix
-    let input = "h```hex\ncontent```";
-    let mut lex = Token::lexer(input);
-    assert_eq!(
-        lex.next(),
-        Some(Ok(Token::String(StringValue::Bytes(
-            "hex\ncontent".to_string()
-        ))))
-    );
-}
-
-#[test]
-fn test_multiline_tilde_strings() {
-    let input = "~~~hello\nworld~~~";
-    let mut lex = Token::lexer(input);
-    assert_eq!(
-        lex.next(),
-        Some(Ok(Token::String(StringValue::Text(
-            "hello\nworld".to_string()
-        ))))
-    );
-
-    // With hex prefix
-    let input = "H~~~HEX\nCONTENT~~~";
-    let mut lex = Token::lexer(input);
-    assert_eq!(
-        lex.next(),
-        Some(Ok(Token::String(StringValue::Bytes(
-            "HEX\nCONTENT".to_string()
-        ))))
-    );
-}
-
-#[test]
-fn test_multiline_without_ending_delimiter() {
-    // Should consume rest of input if delimiter not found
-    let input = "```hello\nworld";
-    let mut lex = Token::lexer(input);
-    assert_eq!(
-        lex.next(),
-        Some(Ok(Token::String(StringValue::Text(
-            "hello\nworld".to_string()
-        ))))
-    );
-
-    let input = "~~~incomplete";
-    let mut lex = Token::lexer(input);
-    assert_eq!(
-        lex.next(),
-        Some(Ok(Token::String(StringValue::Text(
-            "incomplete".to_string()
-        ))))
-    );
-}
-
-#[test]
-fn test_multiline_empty() {
-    let input = "``````";
-    let mut lex = Token::lexer(input);
-    assert_eq!(
-        lex.next(),
-        Some(Ok(Token::String(StringValue::Text("".to_string()))))
-    );
-
-    let input = "~~~~~~";
-    let mut lex = Token::lexer(input);
-    assert_eq!(
-        lex.next(),
-        Some(Ok(Token::String(StringValue::Text("".to_string()))))
-    );
+    assert_eq!(lex.next(), Some(Ok(Token::String(expected))));
 }
 
 #[test]
@@ -525,130 +269,51 @@ fn test_multiline_with_delimiter_in_content() {
     );
 }
 
-#[test]
-fn test_scientific_notation_integer_base() {
-    let mut lex = Token::lexer("123e4");
-    assert_eq!(lex.next(), Some(Ok(Token::Float(123e4))));
-    assert_eq!(lex.next(), None);
-
-    let mut lex = Token::lexer("456E10");
-    assert_eq!(lex.next(), Some(Ok(Token::Float(456E10))));
-    assert_eq!(lex.next(), None);
-
-    let mut lex = Token::lexer("789e-3");
-    assert_eq!(lex.next(), Some(Ok(Token::Float(789e-3))));
-    assert_eq!(lex.next(), None);
-
-    let mut lex = Token::lexer("42E+5");
-    assert_eq!(lex.next(), Some(Ok(Token::Float(42E+5))));
-    assert_eq!(lex.next(), None);
-}
-
-#[test]
-fn test_scientific_notation_decimal_base() {
-    let mut lex = Token::lexer("123.456e4");
-    assert_eq!(lex.next(), Some(Ok(Token::Float(123.456e4))));
-    assert_eq!(lex.next(), None);
-
-    let mut lex = Token::lexer("0.5E-10");
-    assert_eq!(lex.next(), Some(Ok(Token::Float(0.5E-10))));
-    assert_eq!(lex.next(), None);
-
-    let mut lex = Token::lexer("99.99e+2");
-    assert_eq!(lex.next(), Some(Ok(Token::Float(99.99e+2))));
-    assert_eq!(lex.next(), None);
-
-    // Test with trailing decimal point
-    let mut lex = Token::lexer("123.e5");
-    assert_eq!(lex.next(), Some(Ok(Token::Float(123.0e5))));
+#[test_case("123e4", 123e4 ; "sci_int_lower_e")]
+#[test_case("456E10", 456E10 ; "sci_int_upper_e")]
+#[test_case("789e-3", 789e-3 ; "sci_int_neg_exp")]
+#[test_case("42E+5", 42E+5 ; "sci_int_pos_exp")]
+#[test_case("123.456e4", 123.456e4 ; "sci_dec_lower_e")]
+#[test_case("0.5E-10", 0.5E-10 ; "sci_dec_neg_exp")]
+#[test_case("99.99e+2", 99.99e+2 ; "sci_dec_pos_exp")]
+#[test_case("123.e5", 123.0e5 ; "sci_trailing_dot")]
+#[test_case("123.456", 123.456 ; "decimal")]
+#[test_case("0.5", 0.5 ; "decimal_half")]
+#[test_case("42.0", 42.0 ; "decimal_zero_frac")]
+#[test_case("123.", 123.0 ; "trailing_dot")]
+#[test_case("1e100", 1e100 ; "large_number")]
+#[test_case("1e-100", 1e-100 ; "very_small_number")]
+#[test_case("0.0", 0.0 ; "zero_decimal")]
+#[test_case("0e0", 0.0 ; "zero_sci")]
+fn test_float_tokens(input: &str, expected: f64) {
+    let mut lex = Token::lexer(input);
+    assert_eq!(lex.next(), Some(Ok(Token::Float(expected))));
     assert_eq!(lex.next(), None);
 }
 
-#[test]
-fn test_decimal_floats() {
-    let mut lex = Token::lexer("123.456");
-    assert_eq!(lex.next(), Some(Ok(Token::Float(123.456))));
-    assert_eq!(lex.next(), None);
-
-    let mut lex = Token::lexer("0.5");
-    assert_eq!(lex.next(), Some(Ok(Token::Float(0.5))));
-    assert_eq!(lex.next(), None);
-
-    let mut lex = Token::lexer("42.0");
-    assert_eq!(lex.next(), Some(Ok(Token::Float(42.0))));
-    assert_eq!(lex.next(), None);
-
-    // Test with trailing decimal point (no fractional part)
-    let mut lex = Token::lexer("123.");
-    assert_eq!(lex.next(), Some(Ok(Token::Float(123.0))));
+#[test_case("0x1A", 0x1A ; "hex_lower_x")]
+#[test_case("0X2B", 0x2B ; "hex_upper_x")]
+#[test_case("0xDEADBEEF", 0xDEADBEEF ; "hex_deadbeef")]
+#[test_case("0x0", 0x0 ; "hex_zero")]
+#[test_case("0xfF", 0xFF ; "hex_mixed_case")]
+#[test_case("123", 123 ; "decimal_123")]
+#[test_case("0", 0 ; "decimal_zero")]
+#[test_case("999999", 999999 ; "decimal_large")]
+fn test_integer_tokens(input: &str, expected: i64) {
+    let mut lex = Token::lexer(input);
+    assert_eq!(lex.next(), Some(Ok(Token::Integer(expected))));
     assert_eq!(lex.next(), None);
 }
 
-#[test]
-fn test_hexadecimal_integers() {
-    let mut lex = Token::lexer("0x1A");
-    assert_eq!(lex.next(), Some(Ok(Token::Integer(0x1A))));
-    assert_eq!(lex.next(), None);
-
-    let mut lex = Token::lexer("0X2B");
-    assert_eq!(lex.next(), Some(Ok(Token::Integer(0x2B))));
-    assert_eq!(lex.next(), None);
-
-    let mut lex = Token::lexer("0xDEADBEEF");
-    assert_eq!(lex.next(), Some(Ok(Token::Integer(0xDEADBEEF))));
-    assert_eq!(lex.next(), None);
-
-    let mut lex = Token::lexer("0x0");
-    assert_eq!(lex.next(), Some(Ok(Token::Integer(0x0))));
-    assert_eq!(lex.next(), None);
-
-    let mut lex = Token::lexer("0xfF");
-    assert_eq!(lex.next(), Some(Ok(Token::Integer(0xFF))));
-    assert_eq!(lex.next(), None);
-}
-
-#[test]
-fn test_decimal_integers() {
-    let mut lex = Token::lexer("123");
-    assert_eq!(lex.next(), Some(Ok(Token::Integer(123))));
-    assert_eq!(lex.next(), None);
-
-    let mut lex = Token::lexer("0");
-    assert_eq!(lex.next(), Some(Ok(Token::Integer(0))));
-    assert_eq!(lex.next(), None);
-
-    let mut lex = Token::lexer("999999");
-    assert_eq!(lex.next(), Some(Ok(Token::Integer(999999))));
-    assert_eq!(lex.next(), None);
-}
-
-#[test]
-fn test_boolean_literals() {
-    // Test lowercase
-    let mut lex = Token::lexer("true");
-    assert_eq!(lex.next(), Some(Ok(Token::Bool(true))));
-    assert_eq!(lex.next(), None);
-
-    let mut lex = Token::lexer("false");
-    assert_eq!(lex.next(), Some(Ok(Token::Bool(false))));
-    assert_eq!(lex.next(), None);
-
-    // Test capitalized
-    let mut lex = Token::lexer("True");
-    assert_eq!(lex.next(), Some(Ok(Token::Bool(true))));
-    assert_eq!(lex.next(), None);
-
-    let mut lex = Token::lexer("False");
-    assert_eq!(lex.next(), Some(Ok(Token::Bool(false))));
-    assert_eq!(lex.next(), None);
-
-    // Test uppercase
-    let mut lex = Token::lexer("TRUE");
-    assert_eq!(lex.next(), Some(Ok(Token::Bool(true))));
-    assert_eq!(lex.next(), None);
-
-    let mut lex = Token::lexer("FALSE");
-    assert_eq!(lex.next(), Some(Ok(Token::Bool(false))));
+#[test_case("true", true ; "lowercase_true")]
+#[test_case("false", false ; "lowercase_false")]
+#[test_case("True", true ; "capitalized_true")]
+#[test_case("False", false ; "capitalized_false")]
+#[test_case("TRUE", true ; "uppercase_true")]
+#[test_case("FALSE", false ; "uppercase_false")]
+fn test_boolean_literals(input: &str, expected: bool) {
+    let mut lex = Token::lexer(input);
+    assert_eq!(lex.next(), Some(Ok(Token::Bool(expected))));
     assert_eq!(lex.next(), None);
 }
 
@@ -667,29 +332,6 @@ fn test_pattern_precedence() {
     // Hex should take precedence over decimal integer
     let mut lex = Token::lexer("0x123");
     assert_eq!(lex.next(), Some(Ok(Token::Integer(0x123))));
-    assert_eq!(lex.next(), None);
-}
-
-#[test]
-fn test_float_edge_cases() {
-    // Large numbers
-    let mut lex = Token::lexer("1e100");
-    assert_eq!(lex.next(), Some(Ok(Token::Float(1e100))));
-    assert_eq!(lex.next(), None);
-
-    // Very small numbers
-    let mut lex = Token::lexer("1e-100");
-    assert_eq!(lex.next(), Some(Ok(Token::Float(1e-100))));
-    assert_eq!(lex.next(), None);
-
-    // Zero with decimal
-    let mut lex = Token::lexer("0.0");
-    assert_eq!(lex.next(), Some(Ok(Token::Float(0.0))));
-    assert_eq!(lex.next(), None);
-
-    // Zero in scientific notation
-    let mut lex = Token::lexer("0e0");
-    assert_eq!(lex.next(), Some(Ok(Token::Float(0.0))));
     assert_eq!(lex.next(), None);
 }
 
@@ -752,107 +394,25 @@ fn test_comments() {
     assert_eq!(lex.next(), Some(Ok(Token::Ident("y".to_string()))));
 }
 
-#[test]
-fn test_basic_timespan_literals() {
-    let mut lex = Token::lexer("5ms");
-    assert_eq!(
-        lex.next(),
-        Some(Ok(Token::Timespan(Duration::milliseconds(5))))
-    );
-    assert_eq!(lex.next(), None);
-
-    let mut lex = Token::lexer("30s");
-    assert_eq!(lex.next(), Some(Ok(Token::Timespan(Duration::seconds(30)))));
-    assert_eq!(lex.next(), None);
-
-    let mut lex = Token::lexer("2.5m");
-    assert_eq!(
-        lex.next(),
-        Some(Ok(Token::Timespan(Duration::seconds_f64(2.5 * 60.0))))
-    );
-    assert_eq!(lex.next(), None);
-}
-
-#[test]
-fn test_full_timespan_units() {
-    let mut lex = Token::lexer("10minutes");
-    assert_eq!(
-        lex.next(),
-        Some(Ok(Token::Timespan(Duration::seconds(10 * 60))))
-    );
-    assert_eq!(lex.next(), None);
-
-    let mut lex = Token::lexer("45seconds");
-    assert_eq!(lex.next(), Some(Ok(Token::Timespan(Duration::seconds(45)))));
-    assert_eq!(lex.next(), None);
-
-    let mut lex = Token::lexer("3hours");
-    assert_eq!(
-        lex.next(),
-        Some(Ok(Token::Timespan(Duration::seconds(3 * 3600))))
-    );
-    assert_eq!(lex.next(), None);
-
-    let mut lex = Token::lexer("1.5days");
-    assert_eq!(
-        lex.next(),
-        Some(Ok(Token::Timespan(Duration::seconds_f64(1.5 * 86400.0))))
-    );
-    assert_eq!(lex.next(), None);
-}
-
-#[test]
-fn test_abbreviated_timespan_units() {
-    let mut lex = Token::lexer("24hrs");
-    assert_eq!(
-        lex.next(),
-        Some(Ok(Token::Timespan(Duration::seconds(24 * 3600))))
-    );
-    assert_eq!(lex.next(), None);
-
-    let mut lex = Token::lexer("1hr");
-    assert_eq!(
-        lex.next(),
-        Some(Ok(Token::Timespan(Duration::seconds(3600))))
-    );
-    assert_eq!(lex.next(), None);
-
-    let mut lex = Token::lexer("15min");
-    assert_eq!(
-        lex.next(),
-        Some(Ok(Token::Timespan(Duration::seconds(15 * 60))))
-    );
-    assert_eq!(lex.next(), None);
-}
-
-#[test]
-fn test_sub_second_timespan_units() {
-    let mut lex = Token::lexer("500milliseconds");
-    assert_eq!(
-        lex.next(),
-        Some(Ok(Token::Timespan(Duration::milliseconds(500))))
-    );
-    assert_eq!(lex.next(), None);
-
-    let mut lex = Token::lexer("1000microseconds");
-    assert_eq!(
-        lex.next(),
-        Some(Ok(Token::Timespan(Duration::microseconds(1000))))
-    );
-    assert_eq!(lex.next(), None);
-
-    let mut lex = Token::lexer("500nanoseconds");
-    assert_eq!(
-        lex.next(),
-        Some(Ok(Token::Timespan(Duration::nanoseconds(500))))
-    );
-    assert_eq!(lex.next(), None);
-
-    let mut lex = Token::lexer("100ticks");
-    assert_eq!(
-        lex.next(),
-        Some(Ok(Token::Timespan(Duration::nanoseconds(100 * 100))))
-    );
+#[test_case("5ms", Duration::milliseconds(5) ; "ms_short")]
+#[test_case("30s", Duration::seconds(30) ; "seconds_short")]
+#[test_case("2.5m", Duration::seconds_f64(2.5 * 60.0) ; "minutes_short_decimal")]
+#[test_case("10minutes", Duration::seconds(10 * 60) ; "minutes_full")]
+#[test_case("45seconds", Duration::seconds(45) ; "seconds_full")]
+#[test_case("3hours", Duration::seconds(3 * 3600) ; "hours_full")]
+#[test_case("1.5days", Duration::seconds_f64(1.5 * 86400.0) ; "days_decimal")]
+#[test_case("24hrs", Duration::seconds(24 * 3600) ; "hrs_abbrev")]
+#[test_case("1hr", Duration::seconds(3600) ; "hr_abbrev")]
+#[test_case("15min", Duration::seconds(15 * 60) ; "min_abbrev")]
+#[test_case("500milliseconds", Duration::milliseconds(500) ; "milliseconds_full")]
+#[test_case("1000microseconds", Duration::microseconds(1000) ; "microseconds_full")]
+#[test_case("500nanoseconds", Duration::nanoseconds(500) ; "nanoseconds_full")]
+#[test_case("100ticks", Duration::nanoseconds(100 * 100) ; "ticks")]
+#[test_case("3.25s", Duration::seconds_f64(3.25) ; "seconds_decimal")]
+#[test_case("0.5hours", Duration::seconds_f64(0.5 * 3600.0) ; "hours_decimal")]
+fn test_timespan_literals(input: &str, expected: Duration) {
+    let mut lex = Token::lexer(input);
+    assert_eq!(lex.next(), Some(Ok(Token::Timespan(expected))));
     assert_eq!(lex.next(), None);
 }
 
@@ -871,22 +431,5 @@ fn test_timespan_vs_ident_priority() {
 
     let mut lex = Token::lexer("123xyz");
     assert_eq!(lex.next(), Some(Ok(Token::Ident("123xyz".to_string()))));
-    assert_eq!(lex.next(), None);
-}
-
-#[test]
-fn test_decimal_timespan_values() {
-    let mut lex = Token::lexer("3.25s");
-    assert_eq!(
-        lex.next(),
-        Some(Ok(Token::Timespan(Duration::seconds_f64(3.25))))
-    );
-    assert_eq!(lex.next(), None);
-
-    let mut lex = Token::lexer("0.5hours");
-    assert_eq!(
-        lex.next(),
-        Some(Ok(Token::Timespan(Duration::seconds_f64(0.5 * 3600.0))))
-    );
     assert_eq!(lex.next(), None);
 }
