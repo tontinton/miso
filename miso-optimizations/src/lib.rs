@@ -22,6 +22,7 @@ use push_into_scan::PushIntoScan;
 use push_join_into_scan::PushJoinIntoScan;
 use push_limit_into_limit::PushLimitIntoLimit;
 use push_limit_into_topn::PushLimitIntoTopN;
+use push_project_into_join::PushProjectIntoJoin;
 use push_steps_into_union::PushStepsIntoUnion;
 use push_union_into_scan::PushUnionIntoScan;
 use remove_no_op_filter::RemoveNoOpFilter;
@@ -55,6 +56,7 @@ mod push_into_scan;
 mod push_join_into_scan;
 mod push_limit_into_limit;
 mod push_limit_into_topn;
+mod push_project_into_join;
 mod push_steps_into_union;
 mod push_union_into_scan;
 mod remove_no_op_filter;
@@ -181,6 +183,7 @@ impl Optimizer {
             vec![
                 opt!(ReorderFilterBeforeSort),
                 opt!(PushFilterIntoJoin),
+                opt!(PushProjectIntoJoin),
                 opt!(MergeConsecutiveExtends),
                 opt!(FoldRenameIntoProject),
                 opt!(MergeConsecutiveProjects),
