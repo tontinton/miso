@@ -243,8 +243,8 @@ async fn check_multi_connectors(
     expected: &str,
     should_cancel: bool,
     apply_filter_tx: Option<std::sync::mpsc::Sender<Expr>>,
-    run_only_once: bool,
     workflow_limits: WorkflowLimits,
+    max_dynamic_filter_distinct_values: Option<u64>,
 ) -> Result<()> {
     let expected_logs = {
         let mut v: Vec<_> = serde_json::from_str::<Vec<Value>>(expected)
@@ -291,7 +291,10 @@ async fn check_multi_connectors(
     let steps = to_workflow_steps(&connectors, &views, parse(query).expect("parse query"))
         .expect("workflow steps to compile");
 
-    let optimizer = Optimizer::default();
+    let optimizer = match max_dynamic_filter_distinct_values {
+        Some(max) => Optimizer::with_dynamic_filtering(max),
+        None => Optimizer::default(),
+    };
 
     let steps_cloned = steps.clone();
     let optimized_steps = spawn_blocking(move || optimizer.optimize(steps_cloned)).await?;
@@ -306,6 +309,7 @@ async fn check_multi_connectors(
         .and_then(|test_run_str| test_run_str.parse().ok())
         .unwrap_or(1);
 
+    let run_only_once = apply_filter_tx.is_some();
     if run_only_once || test_runs == 1 {
         assert_workflows(
             no_optimizations_workflow,
@@ -339,8 +343,8 @@ async fn check_multi_collection(
     expect: &str,
     cancel: Option<bool>,
     apply_filter_tx: Option<std::sync::mpsc::Sender<Expr>>,
-    run_only_once: Option<bool>,
     workflow_limits: Option<WorkflowLimits>,
+    max_dynamic_filter_distinct_values: Option<u64>,
 ) -> Result<()> {
     check_multi_connectors(
         query,
@@ -349,8 +353,8 @@ async fn check_multi_collection(
         expect,
         cancel.unwrap_or(false),
         apply_filter_tx,
-        run_only_once.unwrap_or(false),
         workflow_limits.unwrap_or_default(),
+        max_dynamic_filter_distinct_values,
     )
     .await
 }
@@ -1140,6 +1144,42 @@ async fn project_summarize_bin() -> Result<()> {
     .await
 }
 
+fn assert_dynamic_filter(
+    rx: std::sync::mpsc::Receiver<Expr>,
+    expected_values: Vec<Value>,
+    expect_not: bool,
+) {
+    let ast = rx.recv().expect("recv() apply dynamic filter");
+
+    let (field_box, mut actual_vec) = match (expect_not, ast) {
+        (true, Expr::Not(inner)) => match *inner {
+            Expr::In(f, v) => (f, v),
+            other => panic!("Expected Expr::Not(Expr::In(...)), but inner was: {other:?}"),
+        },
+        (false, Expr::In(f, v)) => (f, v),
+        (true, other) => panic!("Expected Expr::Not(...), but got: {other:?}"),
+        (false, other) => panic!("Expected Expr::In(...), but got: {other:?}"),
+    };
+
+    assert_eq!(field_box, Box::new(Expr::Field(field_unwrap!("id"))));
+
+    let cmp = |a: &Expr, b: &Expr| -> Ordering {
+        match (a, b) {
+            (Expr::Literal(a), Expr::Literal(b)) => a.cmp(b),
+            _ => panic!("Unexpected Expr variants: {a:?} vs {b:?}"),
+        }
+    };
+    let mut expected_vec: Vec<Expr> = expected_values.into_iter().map(Expr::Literal).collect();
+    actual_vec.sort_by(cmp);
+    expected_vec.sort_by(cmp);
+    assert_eq!(actual_vec, expected_vec);
+
+    assert!(matches!(
+        rx.try_recv(),
+        Err(std::sync::mpsc::TryRecvError::Empty | std::sync::mpsc::TryRecvError::Disconnected)
+    ));
+}
+
 #[tokio::test]
 #[test_case(1)]
 #[test_case(10)]
@@ -1163,46 +1203,11 @@ async fn join_inner(partitions: usize) -> Result<()> {
             ]"#
         )
         .apply_filter_tx(tx)
-        .run_only_once(true)
         .call()
         .await
         .context("check multi collection")?;
 
-    let ast = rx.recv().context("recv() apply dynamic filter")?;
-    match ast {
-        Expr::In(id_box, mut actual_vec) => {
-            assert_eq!(id_box, Box::new(Expr::Field(field_unwrap!("id"))));
-
-            let mut expected_vec = vec![
-                Expr::Literal(1.into()),
-                Expr::Literal(2.into()),
-                Expr::Literal(3.into()),
-            ];
-
-            let compare_filter_asts = |a: &Expr, b: &Expr| -> Ordering {
-                match (a, b) {
-                    (Expr::Literal(val_a), Expr::Literal(val_b)) => val_a.cmp(val_b),
-                    _ => {
-                        panic!("Unexpected Expr variants in Vec during comparison: {a:?} vs {b:?}")
-                    }
-                }
-            };
-
-            actual_vec.sort_by(compare_filter_asts);
-            expected_vec.sort_by(compare_filter_asts);
-
-            assert_eq!(actual_vec, expected_vec);
-        }
-        _ => {
-            panic!("Expected Expr::In variant, but got: {ast:?}");
-        }
-    }
-
-    assert!(matches!(
-        rx.try_recv(),
-        Err(std::sync::mpsc::TryRecvError::Empty | std::sync::mpsc::TryRecvError::Disconnected)
-    ));
-
+    assert_dynamic_filter(rx, vec![1.into(), 2.into(), 3.into()], false);
     Ok(())
 }
 
@@ -1236,6 +1241,8 @@ async fn join_outer(partitions: usize) -> Result<()> {
 #[test_case(1)]
 #[test_case(10)]
 async fn join_left(partitions: usize) -> Result<()> {
+    let (tx, rx) = std::sync::mpsc::channel();
+
     check_multi_collection()
         .query(
             &format!(r#"test.left | join kind=left hint.partitions={partitions} (test.right) on id"#)
@@ -1251,14 +1258,21 @@ async fn join_left(partitions: usize) -> Result<()> {
                 {"id": 3, "value": "three"}
             ]"#
         )
+        .apply_filter_tx(tx)
         .call()
         .await
+        .context("check multi collection")?;
+
+    assert_dynamic_filter(rx, vec![1.into(), 2.into(), 3.into()], false);
+    Ok(())
 }
 
 #[tokio::test]
 #[test_case(1)]
 #[test_case(10)]
 async fn join_right(partitions: usize) -> Result<()> {
+    let (tx, rx) = std::sync::mpsc::channel();
+
     check_multi_collection()
         .query(
             &format!(r#"test.left | join kind=right hint.partitions={partitions} (test.right) on id"#)
@@ -1274,8 +1288,75 @@ async fn join_right(partitions: usize) -> Result<()> {
                 {"id": 4, "value": "FOUR"}
             ]"#
         )
+        .apply_filter_tx(tx)
         .call()
         .await
+        .context("check multi collection")?;
+
+    assert_dynamic_filter(rx, vec![1.into(), 2.into(), 4.into()], false);
+    Ok(())
+}
+
+#[tokio::test]
+#[test_case(1)]
+#[test_case(10)]
+async fn join_left_dynamic_filter_not(partitions: usize) -> Result<()> {
+    let (tx, rx) = std::sync::mpsc::channel();
+
+    check_multi_collection()
+        .query(
+            &format!(r#"test.left | join kind=left hint.partitions={partitions} (test.right) on id"#)
+        )
+        .input(btreemap!{
+            "left"  => r#"[{"id": 1, "value": "one"}, {"id": 2, "value": "two"}, {"id": 3, "value": "three"}]"#,
+            "right" => r#"[{"id": 1, "value": "ONE"}, {"id": 2, "value": "TWO"}]"#,
+        })
+        .expect(
+            r#"[
+                {"id": 1, "value": "one"},
+                {"id": 2, "value": "two"},
+                {"id": 3, "value": "three"}
+            ]"#
+        )
+        .apply_filter_tx(tx)
+        .max_dynamic_filter_distinct_values(3)
+        .call()
+        .await
+        .context("check multi collection")?;
+
+    assert_dynamic_filter(rx, vec![1.into(), 2.into()], true);
+    Ok(())
+}
+
+#[tokio::test]
+#[test_case(1)]
+#[test_case(10)]
+async fn join_right_dynamic_filter_not(partitions: usize) -> Result<()> {
+    let (tx, rx) = std::sync::mpsc::channel();
+
+    check_multi_collection()
+        .query(
+            &format!(r#"test.left | join kind=right hint.partitions={partitions} (test.right) on id"#)
+        )
+        .input(btreemap!{
+            "left"  => r#"[{"id": 1, "value": "one"}, {"id": 2, "value": "TWO"}]"#,
+            "right" => r#"[{"id": 1, "value": "ONE"}, {"id": 2, "value": "two"}, {"id": 3, "value": "three"}]"#,
+        })
+        .expect(
+            r#"[
+                {"id": 1, "value": "ONE"},
+                {"id": 2, "value": "two"},
+                {"id": 3, "value": "three"}
+            ]"#
+        )
+        .apply_filter_tx(tx)
+        .max_dynamic_filter_distinct_values(3)
+        .call()
+        .await
+        .context("check multi collection")?;
+
+    assert_dynamic_filter(rx, vec![1.into(), 2.into()], true);
+    Ok(())
 }
 
 #[tokio::test]
