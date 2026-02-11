@@ -19,6 +19,7 @@ Miso is a query engine over semi-structured (JSON) logs that processes KQL (Kust
 - Be mindful of allocations in hot paths
 - Prefer structured logging
 - Provide helpful error messages
+- Use #[test_case] when writing tests, and use snake_case for naming the tests
 
 ## Running / Testing
 
