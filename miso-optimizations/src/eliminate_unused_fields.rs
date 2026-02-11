@@ -55,7 +55,7 @@ fn transform_steps(steps: &[WorkflowStep]) -> Option<Vec<WorkflowStep>> {
     None
 }
 
-fn create_identity_project(fields: BTreeSet<Field>) -> WorkflowStep {
+pub(crate) fn create_identity_project(fields: BTreeSet<Field>) -> WorkflowStep {
     WorkflowStep::Project(
         fields
             .into_iter()
@@ -70,7 +70,7 @@ fn create_identity_project(fields: BTreeSet<Field>) -> WorkflowStep {
     )
 }
 
-fn compute_required_before_step(
+pub(crate) fn compute_required_before_step(
     step: &WorkflowStep,
     mut after: BTreeSet<Field>,
 ) -> BTreeSet<Field> {

@@ -6,6 +6,7 @@ use miso_workflow_types::{
     expr::Expr,
     field::Field,
     field_unwrap,
+    join::JoinType,
     project::ProjectField,
     sort::{NullsOrder, Sort, SortOrder},
     summarize::{Aggregation, ByField, Summarize},
@@ -136,4 +137,25 @@ pub fn summarize_by(fields: &[&str]) -> S {
             })
             .collect(),
     })
+}
+
+pub fn join(type_: JoinType, left_key: &str, right_key: &str, right_steps: Vec<S>) -> S {
+    use miso_workflow::Workflow;
+    use miso_workflow_types::join::Join;
+    S::Join(
+        Join {
+            on: (field(left_key), field(right_key)),
+            type_,
+            partitions: 1,
+        },
+        Workflow::new(right_steps),
+    )
+}
+
+pub fn right_project(fields: &[&str]) -> Vec<S> {
+    vec![S::Project(fields.iter().map(|f| noop_project(f)).collect())]
+}
+
+pub fn project(fields: &[&str]) -> S {
+    S::Project(fields.iter().map(|f| noop_project(f)).collect())
 }

@@ -118,7 +118,7 @@ fn flatten_and_conditions(expr: Expr) -> Vec<Expr> {
     }
 }
 
-fn right_workflow_fields(steps: &[WorkflowStep]) -> Option<HashSet<Field>> {
+pub(crate) fn right_workflow_fields(steps: &[WorkflowStep]) -> Option<HashSet<Field>> {
     match steps.last()? {
         WorkflowStep::Project(fields) => Some(fields.iter().map(|pf| pf.to.clone()).collect()),
         WorkflowStep::Summarize(summarize) => {
@@ -143,33 +143,10 @@ fn classify_condition(condition: &Expr, right_fields: &HashSet<Field>) -> Condit
 
 #[cfg(test)]
 mod tests {
-    use miso_workflow::Workflow;
-    use miso_workflow_types::join::{Join, JoinType};
+    use miso_workflow_types::join::JoinType;
 
     use super::*;
-    use crate::test_utils::{and, eq, field, field_expr, gt, lit, noop_project, summarize_by};
-
-    fn join(
-        type_: JoinType,
-        left_key: &str,
-        right_key: &str,
-        right_steps: Vec<WorkflowStep>,
-    ) -> WorkflowStep {
-        WorkflowStep::Join(
-            Join {
-                on: (field(left_key), field(right_key)),
-                type_,
-                partitions: 1,
-            },
-            Workflow::new(right_steps),
-        )
-    }
-
-    fn right_project(fields: &[&str]) -> Vec<WorkflowStep> {
-        vec![WorkflowStep::Project(
-            fields.iter().map(|f| noop_project(f)).collect(),
-        )]
-    }
+    use crate::test_utils::{and, eq, field_expr, gt, join, lit, right_project, summarize_by};
 
     fn apply(steps: &[WorkflowStep]) -> OptimizationResult {
         let opt = PushFilterIntoJoin;
