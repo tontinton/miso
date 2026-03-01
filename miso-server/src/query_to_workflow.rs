@@ -86,37 +86,29 @@ fn to_workflow_steps_inner(
                 connector: connector_name,
                 collection: collection_name,
             }) => {
-                let Some(connector_state) = connectors.get(&connector_name).cloned() else {
-                    return Err(HttpError::from_string(
-                        StatusCode::NOT_FOUND,
-                        format!("connector '{connector_name}' not found"),
-                    ));
-                };
-
-                info!(?collection_name, "Getting collection info");
-                let Some(collection) = connector_state.connector.get_collection(&collection_name)
-                else {
-                    info!(?collection_name, "Collection doesn't exist");
-                    return Err(HttpError::from_string(
-                        StatusCode::NOT_FOUND,
-                        format!("collection '{collection_name}' not found"),
-                    ));
-                };
-
-                steps.push(WorkflowStep::Scan(
-                    Scan::new(
-                        connector_state,
-                        connector_name,
-                        collection_name,
-                        collection.static_fields,
-                    )
-                    .map_err(|e| {
+                steps.push(WorkflowStep::Scan(create_scan(
+                    connectors,
+                    &connector_name,
+                    &collection_name,
+                )?));
+            }
+            QueryStep::Scan(ScanKind::Raw {
+                connector: connector_name,
+                collection: collection_name,
+                query: raw_query,
+            }) => {
+                let mut scan = create_scan(connectors, &connector_name, &collection_name)?;
+                let raw_handle = scan
+                    .connector
+                    .raw_query(&collection_name, &raw_query, &*scan.handle)
+                    .ok_or_else(|| {
                         HttpError::from_string(
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            format!("failed to create connector from scan step: {e}"),
+                            StatusCode::BAD_REQUEST,
+                            format!("connector '{connector_name}' does not support raw queries"),
                         )
-                    })?,
-                ));
+                    })?;
+                scan.handle = raw_handle.into();
+                steps.push(WorkflowStep::Scan(scan));
             }
             _ if steps.is_empty() => {
                 return Err(HttpError::from_string(
@@ -203,6 +195,41 @@ fn to_workflow_steps_inner(
     }
 
     Ok(steps)
+}
+
+fn create_scan(
+    connectors: &ConnectorsMap,
+    connector_name: &str,
+    collection_name: &str,
+) -> Result<Scan, HttpError> {
+    let Some(connector_state) = connectors.get(connector_name).cloned() else {
+        return Err(HttpError::from_string(
+            StatusCode::NOT_FOUND,
+            format!("connector '{connector_name}' not found"),
+        ));
+    };
+
+    info!(?collection_name, "Getting collection info");
+    let Some(collection) = connector_state.connector.get_collection(collection_name) else {
+        info!(?collection_name, "Collection doesn't exist");
+        return Err(HttpError::from_string(
+            StatusCode::NOT_FOUND,
+            format!("collection '{collection_name}' not found"),
+        ));
+    };
+
+    Scan::new(
+        connector_state,
+        connector_name.to_string(),
+        collection_name.to_string(),
+        collection.static_fields,
+    )
+    .map_err(|e| {
+        HttpError::from_string(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("failed to create connector from scan step: {e}"),
+        )
+    })
 }
 
 fn create_sink(

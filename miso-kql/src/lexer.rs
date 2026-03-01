@@ -180,6 +180,8 @@ pub enum Token {
     Iff,
     #[token("extract")]
     Extract,
+    #[token("raw")]
+    Raw,
 
     #[token(",")]
     Comma,

@@ -219,6 +219,7 @@ where
         Token::Case => "case".to_string(),
         Token::Iff => "iff".to_string(),
         Token::Extract => "extract".to_string(),
+        Token::Raw => "raw".to_string(),
     }
 }
 
@@ -1291,6 +1292,14 @@ impl KqlParser {
                 .labelled("let")
                 .boxed();
 
+            let string_literal = select! {
+                Token::String(StringValue::Text(s)) => s,
+            };
+
+            let raw_suffix = just(Token::Dot)
+                .ignore_then(just(Token::Raw))
+                .ignore_then(string_literal.delimited_by(just(Token::LParen), just(Token::RParen)));
+
             let scan_step = ident
                 .clone()
                 .then(
@@ -1302,13 +1311,19 @@ impl KqlParser {
                         )))
                         .or_not(),
                 )
-                .map(|(connector, collection)| {
-                    QueryStep::Scan(match collection {
-                        Some(collection) => ScanKind::Collection {
+                .then(raw_suffix.or_not())
+                .map(|((connector, collection), raw_query)| {
+                    QueryStep::Scan(match (collection, raw_query) {
+                        (Some(collection), Some(query)) => ScanKind::Raw {
+                            connector,
+                            collection,
+                            query,
+                        },
+                        (Some(collection), None) => ScanKind::Collection {
                             connector,
                             collection,
                         },
-                        None => ScanKind::Var(connector),
+                        (None, _) => ScanKind::Var(connector),
                     })
                 })
                 .labelled("scan")
