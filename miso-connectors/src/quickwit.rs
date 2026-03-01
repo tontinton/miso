@@ -93,6 +93,7 @@ struct QuickwitHandle {
     limit: Option<u64>,
     count: bool,
     collections: Vec<String>,
+    raw_query: Option<Value>,
 }
 
 #[typetag::serde]
@@ -163,11 +164,21 @@ impl QuickwitHandle {
         handle.collections.push(collection.to_string());
         handle
     }
+
+    fn with_raw_query(&self, query: Value) -> QuickwitHandle {
+        let mut handle = self.clone();
+        handle.raw_query = Some(query);
+        handle
+    }
 }
 
 impl fmt::Display for QuickwitHandle {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut items = Vec::new();
+
+        if let Some(raw) = &self.raw_query {
+            items.push(format!("raw_query={raw}"));
+        }
 
         if self.count {
             items.push("count".to_string());
@@ -1159,41 +1170,43 @@ impl Connector for QuickwitConnector {
         collections.dedup();
         let collections = collections.join(",");
 
-        let mut query_map = Map::new();
-
-        if !handle.queries.is_empty() {
-            query_map.insert(
-                "query",
-                json!({
-                    "bool": {
-                        "must": handle.queries.clone(),
-                    }
-                }),
-            );
-        }
-
-        if let Some(sorts) = &handle.sorts {
-            query_map.insert("sort", sorts.clone());
-        }
-
-        let is_aggregation_query = if let Some(aggs) = &handle.aggs {
-            query_map.insert("size", json!(0));
-            for (key, value) in aggs.as_object().unwrap() {
-                query_map.insert(key, value.clone());
-            }
-            true
+        let query = if let Some(raw) = &handle.raw_query {
+            Some(raw.clone())
         } else {
-            if let Some(limit) = limit {
+            let mut query_map = Map::new();
+
+            if !handle.queries.is_empty() {
+                query_map.insert(
+                    "query",
+                    json!({
+                        "bool": {
+                            "must": handle.queries.clone(),
+                        }
+                    }),
+                );
+            }
+
+            if let Some(sorts) = &handle.sorts {
+                query_map.insert("sort", sorts.clone());
+            }
+
+            if let Some(aggs) = &handle.aggs {
+                query_map.insert("size", json!(0));
+                for (key, value) in aggs.as_object().unwrap() {
+                    query_map.insert(key, value.clone());
+                }
+            } else if let Some(limit) = limit {
                 query_map.insert("size", limit.into());
             }
-            false
+
+            if !query_map.is_empty() {
+                Some(json!(query_map))
+            } else {
+                None
+            }
         };
 
-        let query = if !query_map.is_empty() {
-            Some(json!(query_map))
-        } else {
-            None
-        };
+        let is_aggregation_query = handle.aggs.is_some();
 
         info!(
             count = handle.count,
@@ -1254,7 +1267,7 @@ impl Connector for QuickwitConnector {
 
     fn apply_filter(&self, ast: &Expr, handle: &dyn QueryHandle) -> Option<Box<dyn QueryHandle>> {
         let handle = downcast_unwrap!(handle, QuickwitHandle);
-        if handle.sorts.is_some() || !handle.group_by.is_empty() {
+        if handle.raw_query.is_some() || handle.sorts.is_some() || !handle.group_by.is_empty() {
             // Cannot filter over top-n / group by in Quickwit.
             return None;
         }
@@ -1267,7 +1280,7 @@ impl Connector for QuickwitConnector {
         handle: &dyn QueryHandle,
     ) -> Option<Box<dyn QueryHandle>> {
         let handle = downcast_unwrap!(handle, QuickwitHandle);
-        if handle.count || !handle.group_by.is_empty() {
+        if handle.raw_query.is_some() || handle.count || !handle.group_by.is_empty() {
             return None;
         }
 
@@ -1286,6 +1299,9 @@ impl Connector for QuickwitConnector {
 
     fn apply_limit(&self, mut max: u64, handle: &dyn QueryHandle) -> Option<Box<dyn QueryHandle>> {
         let handle = downcast_unwrap!(handle, QuickwitHandle);
+        if handle.raw_query.is_some() {
+            return None;
+        }
         if let Some(limit) = handle.limit
             && limit < max
         {
@@ -1301,7 +1317,7 @@ impl Connector for QuickwitConnector {
         handle: &dyn QueryHandle,
     ) -> Option<Box<dyn QueryHandle>> {
         let handle = downcast_unwrap!(handle, QuickwitHandle);
-        if handle.sorts.is_some() {
+        if handle.raw_query.is_some() || handle.sorts.is_some() {
             // Cannot top-n over top-n in Quickwit.
             return None;
         }
@@ -1337,7 +1353,7 @@ impl Connector for QuickwitConnector {
 
     fn apply_count(&self, handle: &dyn QueryHandle) -> Option<Box<dyn QueryHandle>> {
         let handle = downcast_unwrap!(handle, QuickwitHandle);
-        if !handle.group_by.is_empty() {
+        if handle.raw_query.is_some() || !handle.group_by.is_empty() {
             // Quickwit count query returns number of items instead of number of unique groups.
             // This is fine, as usually aggregation requests return few results, we can count
             // them ourselves.
@@ -1352,7 +1368,11 @@ impl Connector for QuickwitConnector {
         handle: &dyn QueryHandle,
     ) -> Option<Box<dyn QueryHandle>> {
         let handle = downcast_unwrap!(handle, QuickwitHandle);
-        if handle.limit.is_some() || handle.sorts.is_some() || !handle.group_by.is_empty() {
+        if handle.raw_query.is_some()
+            || handle.limit.is_some()
+            || handle.sorts.is_some()
+            || !handle.group_by.is_empty()
+        {
             // Quickwit's query (like Elasticsearch's) is not pipelined, most similar to SQL.
             // When you request it to both sort (or limit) and aggregate, it will always first
             // aggregate and then sort (or limit), no way to control the order of these 2 AFAIK.
@@ -1498,6 +1518,9 @@ impl Connector for QuickwitConnector {
         union_handle: &dyn QueryHandle,
     ) -> Option<Box<dyn QueryHandle>> {
         let handle = downcast_unwrap!(handle, QuickwitHandle);
+        if handle.raw_query.is_some() {
+            return None;
+        }
         let union_handle = union_handle.as_any().downcast_ref::<QuickwitHandle>()?;
 
         if handle != union_handle {
@@ -1524,6 +1547,17 @@ impl Connector for QuickwitConnector {
     #[instrument(skip(self), name = "Quickwit close")]
     async fn close(&self) {
         self.interval_task.shutdown().await;
+    }
+
+    fn raw_query(
+        &self,
+        _collection: &str,
+        query: &str,
+        handle: &dyn QueryHandle,
+    ) -> Option<Box<dyn QueryHandle>> {
+        let handle = downcast_unwrap!(handle, QuickwitHandle);
+        let parsed: Value = serde_json::from_str(query).ok()?;
+        Some(Box::new(handle.with_raw_query(parsed)))
     }
 }
 
