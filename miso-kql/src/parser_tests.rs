@@ -1292,6 +1292,39 @@ fn test_parse_extract_with_field_arguments() {
 }
 
 #[test]
+fn test_raw_scan() {
+    let query = "connector.table.raw(\"{\\\"query\\\": {\\\"match_all\\\": {}}}\")";
+    let result = parse_unwrap!(query);
+
+    assert_eq!(result.len(), 1);
+    match &result[0] {
+        QueryStep::Scan(ScanKind::Raw {
+            connector,
+            collection,
+            query,
+        }) => {
+            assert_eq!(connector, "connector");
+            assert_eq!(collection, "table");
+            assert_eq!(query, r#"{"query": {"match_all": {}}}"#);
+        }
+        _ => panic!("Expected Raw scan step"),
+    }
+}
+
+#[test]
+fn test_raw_as_field_name() {
+    let query = r#"connector.table | where raw == "foo""#;
+    let result = parse_unwrap!(query);
+
+    assert_eq!(result.len(), 2);
+    assert!(matches!(
+        result[0],
+        QueryStep::Scan(ScanKind::Collection { .. })
+    ));
+    assert!(!matches!(result[0], QueryStep::Scan(ScanKind::Raw { .. })));
+}
+
+#[test]
 fn test_parse_extract_in_filter() {
     let query = r#"connector.table | where extract("(\\d+)", 1, message) == "123""#;
     let result = parse_unwrap!(query);

@@ -317,5 +317,14 @@ pub trait Connector: Debug + Send + Sync {
         None
     }
 
+    fn raw_query(
+        &self,
+        _collection: &str,
+        _query: &str,
+        _handle: &dyn QueryHandle,
+    ) -> Option<Box<dyn QueryHandle>> {
+        None
+    }
+
     async fn close(&self);
 }

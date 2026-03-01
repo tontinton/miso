@@ -39,4 +39,9 @@ pub enum ScanKind {
         connector: String,
         collection: String,
     },
+    Raw {
+        connector: String,
+        collection: String,
+        query: String,
+    },
 }
