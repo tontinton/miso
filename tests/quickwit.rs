@@ -26,6 +26,7 @@ use tracing::info;
 
 use common::init_test_tracing;
 use common::predicate_pushdown::{run_tests, TestConnector, INDEXES, TESTS};
+use common::test_cases::{Expected, ExpectedResults, TestCase};
 
 const QUICKWIT_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
 
@@ -343,5 +344,51 @@ async fn quickwit_predicate_pushdown() -> Result<()> {
         }
     };
     let connectors = Arc::new(setup(url).await?);
-    run_tests(TestConnector::Quickwit, connectors, &[TESTS]).await
+    run_tests(
+        TestConnector::Quickwit,
+        connectors,
+        &[TESTS, QUICKWIT_RAW_QUERY_TESTS],
+    )
+    .await
 }
+
+const QUICKWIT_RAW_QUERY_TESTS: &[TestCase] = &[
+    TestCase {
+        query: r##"test.stack.raw("{\"query\":{\"match_all\":{}}}")"##,
+        expected: Expected::Default(r##"test.stack.raw("{\"query\":{\"match_all\":{}}}")"##),
+        results: ExpectedResults::Count(10),
+        name: "raw_match_all",
+    },
+    TestCase {
+        query: r##"test.stack.raw("{\"query\":{\"term\":{\"user\":\"9\"}}}")"##,
+        expected: Expected::Default(
+            r##"test.stack.raw("{\"query\":{\"term\":{\"user\":\"9\"}}}")"##,
+        ),
+        results: ExpectedResults::Count(3),
+        name: "raw_term_filter",
+    },
+    TestCase {
+        query: r##"test.stack.raw("{\"query\":{\"match_all\":{}}}") | where questionId > 10"##,
+        expected: Expected::Default(
+            r##"test.stack.raw("{\"query\":{\"match_all\":{}}}") | where questionId > 10"##,
+        ),
+        results: ExpectedResults::Count(6),
+        name: "raw_with_pipeline_filter_no_pushdown",
+    },
+    TestCase {
+        query: r##"test.stack.raw("{\"query\":{\"match_all\":{}}}") | take 3"##,
+        expected: Expected::Default(
+            r##"test.stack.raw("{\"query\":{\"match_all\":{}}}") | take 3"##,
+        ),
+        results: ExpectedResults::Count(3),
+        name: "raw_with_pipeline_limit_no_pushdown",
+    },
+    TestCase {
+        query: r##"test.stack.raw("{\"query\":{\"match_all\":{}}}") | count"##,
+        expected: Expected::Default(
+            r##"test.stack.raw("{\"query\":{\"match_all\":{}}}") | count"##,
+        ),
+        results: ExpectedResults::Logs(r#"[{"Count": 10}]"#),
+        name: "raw_with_pipeline_count_no_pushdown",
+    },
+];
