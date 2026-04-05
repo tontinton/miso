@@ -147,3 +147,11 @@ harness = false
 name = "sort"
 harness = false
 
+[[bench]]
+name = "filter"
+harness = false
+
+[[bench]]
+name = "filter_profile"
+harness = false
+
